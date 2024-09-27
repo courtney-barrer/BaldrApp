@@ -6,7 +6,7 @@ from poppy.poppy_core import PlaneType
 from poppy.zernike import zernike
 import astropy.units as u
 
-
+st.write("Starting app...")
 
 # Thin lens functions and system
 class lens:
@@ -75,6 +75,8 @@ class PhaseMask(poppy.AnalyticOpticalElement):
 # Sidebar for user inputs
 st.sidebar.title("Zernike Wavefront Sensor Inputs")
 
+st.write("Reading in user variables..") # for logging
+
 # Initialize session_state
 if "submitted" not in st.session_state:
     st.session_state.submitted = False
@@ -112,10 +114,12 @@ include_cold_stop = st.sidebar.checkbox("Include Cold Stop", value=True)
 # Submit button
 # Update button
 if st.sidebar.button("Update"):
+    st.write("changing session state..")
     st.session_state.submitted = True
 
 # Only generate plot if Update button is clicked
 if st.session_state.submitted:
+    st.write("updating to plot output intensity (after submit)..")
     # Hardcoded values
     npix = 256
     D = 12e-3  # Pupil diameter in meters
@@ -207,6 +211,7 @@ if st.session_state.submitted:
     # Get intensity at the detector
     intensity = bin_image(abs(wf.amplitude)**2, bin_size=16)
 
+    st.write("Plotting..")
     # Display intensity image
     plt.figure()
     plt.imshow(intensity, cmap='inferno')
@@ -214,56 +219,4 @@ if st.session_state.submitted:
     plt.title("Intensity at the Detector")
     st.pyplot(plt)
 
-
-"""
-Zernike Wavefront Sensor Optical System Simulation
-
-This Streamlit app simulates a Zernike Wavefront Sensor (WFS) optical system using Fresnel diffraction propagation. 
-Users can interactively adjust system parameters (e.g., wavelength, Zernike mode, optical element offsets) 
-and visualize the intensity distribution at the detector.
-
-Key Features:
-1. User Inputs via Sidebar:
-    - Wavelength: Controls the light wavelength in micrometers.
-    - Zernike Aberration: Users define Zernike mode and coefficient to simulate optical aberrations.
-    - Phasemask Properties: Diameter, phase shift, on-axis/off-axis transmission coefficients.
-    - Optical Element Offsets: Users can shift positions of elements like phase mask, lenses, and cold stop.
-    - Element Inclusion: Toggle the inclusion/exclusion of key components (phase mask, cold stop).
-
-2. System Propagation and Plot:
-    - Calculates wavefront propagation through a multi-element optical system (lenses, phase mask, cold stop).
-    - Applies Zernike aberrations to simulate their effect on intensity measured at the detector.
-    - Visualizes the intensity distribution at the detector using a heatmap.
-
-3. Update Button:
-    - Plot updates only when the "Update" button is pressed, making the app more efficient.
-    - Input values are stored in `st.session_state` to prevent unnecessary re-runs.
-
-4. Plotting the Results:
-    - The app bins and displays the resulting intensity distribution at the detector.
-    - A heatmap shows how system parameters affect the output.
-
-Design Choices:
-1. User Interface: 
-    - Input parameters are placed in a sidebar to keep the main view clean and focused on the plot.
-    - Users have control over wavelength, aberrations, and optical elements, making the app versatile and interactive.
-
-2. Efficient Updates:
-    - `st.session_state` is used to track user inputs and prevent unnecessary updates.
-    - The "Update" button ensures the app recalculates only when the user requests it.
-
-3. Modeling Optical System Components:
-    - Fresnel diffraction propagation is used to model the interaction of light with optical elements.
-    - Zernike Aberrations are applied to simulate specific distortions in the wavefront.
-    - Users can toggle the inclusion of elements to explore their effect on system performance.
-
-4. Flexibility and Customization:
-    - Parameterized inputs allow for simulation of different optical systems, making the app suitable for various use cases.
-
-Use Cases:
-- Optical System Design: Explore how components affect the Zernike Wavefront Sensor's performance.
-- Education: Useful for learning about wavefront aberrations, adaptive optics, and diffraction effects.
-- Performance Optimization: Engineers can simulate and optimize configurations for wavefront sensors and adaptive optics systems.
-
-"""
 
