@@ -1,11 +1,10 @@
 import numpy as np
 import matplotlib.pyplot as plt
 from types import SimpleNamespace
+import datetime 
 
-import utilities as util 
+import utilities as util
 import DM_basis as gen_basis
-
-
 
 
 # PID and leaky integrator copied from /Users/bencb/Documents/asgard-alignment/playground/open_loop_tests_HO.py
@@ -71,30 +70,36 @@ class PIDController:
 
         return self.output
 
+    def set_all_gains_to_zero(self):
+        self.kp = np.zeros( len(self.kp ))
+        self.ki = np.zeros( len(self.ki ))
+        self.kd = np.zeros( len(self.kd ))
+        
     def reset(self):
         self.integrals.fill(0.0)
         self.prev_errors.fill(0.0)
+        self.output.fill(0.0)
         
         
 
 class LeakyIntegrator:
-    def __init__(self, rho=None, lower_limit=None, upper_limit=None, kp=None):
+    def __init__(self, ki=None, lower_limit=None, upper_limit=None, kp=None):
         # If no arguments are passed, initialize with default values
-        if rho is None:
-            self.rho = []
+        if ki is None:
+            self.ki = []
             self.lower_limit = []
             self.upper_limit = []
             self.kp = []
         else:
-            if len(rho) == 0:
-                raise ValueError("Rho vector cannot be empty.")
-            if len(lower_limit) != len(rho) or len(upper_limit) != len(rho):
-                raise ValueError("Lower and upper limit vectors must match rho vector size.")
-            if kp is None or len(kp) != len(rho):
-                raise ValueError("kp vector must be the same size as rho vector.")
+            if len(ki) == 0:
+                raise ValueError("ki vector cannot be empty.")
+            if len(lower_limit) != len(ki) or len(upper_limit) != len(ki):
+                raise ValueError("Lower and upper limit vectors must match ki vector size.")
+            if kp is None or len(kp) != len(ki):
+                raise ValueError("kp vector must be the same size as ki vector.")
 
-            self.rho = np.array(rho)
-            self.output = np.zeros(len(rho))
+            self.ki = np.array(ki)
+            self.output = np.zeros(len(ki))
             self.lower_limit = np.array(lower_limit)
             self.upper_limit = np.array(upper_limit)
             self.kp = np.array(kp)  # kp is a vector now
@@ -103,14 +108,14 @@ class LeakyIntegrator:
         input_vector = np.array(input_vector)
 
         # Error checks
-        if len(input_vector) != len(self.rho):
-            raise ValueError("Input vector size must match rho vector size.")
+        if len(input_vector) != len(self.ki):
+            raise ValueError("Input vector size must match ki vector size.")
 
-        size = len(self.rho)
+        size = len(self.ki)
         error_message = ""
 
-        if len(self.rho) != size:
-            error_message += "rho "
+        if len(self.ki) != size:
+            error_message += "ki "
         if len(self.lower_limit) != size:
             error_message += "lower_limit "
         if len(self.upper_limit) != size:
@@ -126,15 +131,59 @@ class LeakyIntegrator:
             self.output = np.zeros(size)
 
         # Process with the kp vector
-        self.output = self.rho * self.output + self.kp * input_vector
+        self.output = self.ki * self.output + self.kp * input_vector
         self.output = np.clip(self.output, self.lower_limit, self.upper_limit)
 
         return self.output
 
+
+    def set_all_gains_to_zero(self):
+        self.ki = np.zeros( len(self.ki ))
+        self.kp = np.zeros( len(self.kp ))
+        
+        
     def reset(self):
-        self.output = np.zeros(len(self.rho))
+        self.output = np.zeros(len(self.ki))
 
         
+
+def reset_telemetry( zwfs_ns ):
+    zwfs_ns.telem = SimpleNamespace(**init_telem_dict())
+    return( zwfs_ns )
+    
+
+def reset_ctrl( zwfs_ns ):
+    zwfs_ns.ctrl.TT_ctrl.reset()
+    zwfs_ns.ctrl.HO_ctrl.reset()
+
+    zwfs_ns.telem = init_telem_dict()
+
+
+
+
+def init_telem_dict(): 
+    
+    telemetry_dict = {
+        "i_list" : [],
+        "s_list" : [],
+        "e_TT_list" : [],
+        "u_TT_list" : [],
+        "c_TT_list" : [],
+        "e_HO_list" : [],
+        "u_HO_list" : [],
+        "c_HO_list" : [],
+        "atm_disturb_list" : [],
+        "dm_disturb_list" : [],
+        "rmse_list" : [],
+        "flux_outside_pupil_list" : [],
+        "residual_list" : [],
+        "field_phase" : [],
+        "strehl": []
+    }
+    return telemetry_dict
+
+
+
 
 
 
@@ -784,9 +833,36 @@ def test_propagation( zwfs_ns ):
     return phi, phi_internal, N0, I0, Intensity 
 
 
+def average_subarrays(array, block_size):
+    """
+    Averages non-overlapping sub-arrays of a given 2D NumPy array.
+    
+    Parameters:
+    array (numpy.ndarray): Input 2D array of shape (N, M).
+    block_size (tuple): Size of the sub-array blocks (height, width).
+    
+    Returns:
+    numpy.ndarray: 2D array containing the averaged values of the sub-arrays.
+    """
+    # Check if the array dimensions are divisible by the block size
+    if array.shape[0] % block_size[0] != 0 or array.shape[1] % block_size[1] != 0:
+        raise ValueError("Array dimensions must be divisible by the block size.")
+    
+    # Reshape the array to isolate the sub-arrays
+    reshaped = array.reshape(array.shape[0] // block_size[0], block_size[0], 
+                             array.shape[1] // block_size[1], block_size[1])
+    
+    # Compute the mean of the sub-arrays
+    averaged_subarrays = reshaped.mean(axis=(1, 3))
+    
+    return averaged_subarrays
+
+    
+    
 def get_I0(  opd_input,  amp_input , opd_internal,  zwfs_ns , detector=None):
     # get intensity with the phase mask in the beam
     # forces dm to be in the current flat configuration (zwfs_ns.dm.dm_flat )
+    # FOR NOW detector = None or a tuple representing the binning to perform on intensity in wavespace. add noise etc . Later consider claass for this
     opd_current_dm = get_dm_displacement( command_vector = zwfs_ns.dm.dm_flat  , gain=zwfs_ns.dm.opd_per_cmd, \
         sigma= zwfs_ns.grid.dm_coord.act_sigma_wavesp, X=zwfs_ns.grid.wave_coord.X, Y=zwfs_ns.grid.wave_coord.Y,\
             x0=zwfs_ns.grid.dm_coord.act_x0_list_wavesp, y0=zwfs_ns.grid.dm_coord.act_y0_list_wavesp )
@@ -796,25 +872,26 @@ def get_I0(  opd_input,  amp_input , opd_internal,  zwfs_ns , detector=None):
     Intensity = get_pupil_intensity( phi = phi, theta = zwfs_ns.optics.theta, phasemask=zwfs_ns.grid.phasemask_mask, amp=amp_input )
 
     if detector is not None:
-        print( 'we should do binning, add noise etc')
+        Intensity = average_subarrays(array=Intensity, block_size = detector)
+        
 
     return Intensity
 
 def get_N0( opd_input,  amp_input ,  opd_internal,  zwfs_ns , detector=None):
     # get intensity with the phase mask out of the beam (here we jiust put theta = 0)
     # forces dm to be in the current flat configuration (zwfs_ns.dm.dm_flat )
+    # FOR NOW detector = None or a tuple representing the binning to perform on intensity in wavespace. add noise etc 
     opd_current_dm = get_dm_displacement( command_vector= zwfs_ns.dm.dm_flat   , gain=zwfs_ns.dm.opd_per_cmd, \
         sigma= zwfs_ns.grid.dm_coord.act_sigma_wavesp, X=zwfs_ns.grid.wave_coord.X, Y=zwfs_ns.grid.wave_coord.Y,\
             x0=zwfs_ns.grid.dm_coord.act_x0_list_wavesp, y0=zwfs_ns.grid.dm_coord.act_y0_list_wavesp )
     
     phi = zwfs_ns.grid.pupil_mask  *  2*np.pi / zwfs_ns.optics.wvl0 * ( opd_input + opd_internal + opd_current_dm  )
 
-    amp = zwfs_ns.grid.pupil_mask * amp_input 
     
-    Intensity = get_pupil_intensity( phi = phi, theta = 0, phasemask=zwfs_ns.grid.phasemask_mask, amp=amp )
+    Intensity = get_pupil_intensity( phi = phi, theta = 0, phasemask=zwfs_ns.grid.phasemask_mask, amp=amp_input )
 
     if detector is not None:
-        print( 'we should do binning, add noise etc')
+        Intensity = average_subarrays(array=Intensity, block_size = detector)
 
     return Intensity
 
@@ -822,18 +899,17 @@ def get_N0( opd_input,  amp_input ,  opd_internal,  zwfs_ns , detector=None):
 def get_frame( opd_input,  amp_input ,  opd_internal,  zwfs_ns , detector=None):
     # get intensity with the phase mask in the beam
     # and dm shaped to the current command ( zwfs_ns.dm.current_cmd ) 
+    # FOR NOW detector = None or a tuple representing the binning to perform on intensity in wavespace. add noise etc 
     opd_current_dm = get_dm_displacement( command_vector= zwfs_ns.dm.current_cmd   , gain=zwfs_ns.dm.opd_per_cmd, \
         sigma= zwfs_ns.grid.dm_coord.act_sigma_wavesp, X=zwfs_ns.grid.wave_coord.X, Y=zwfs_ns.grid.wave_coord.Y,\
             x0=zwfs_ns.grid.dm_coord.act_x0_list_wavesp, y0=zwfs_ns.grid.dm_coord.act_y0_list_wavesp )
     
     phi = zwfs_ns.grid.pupil_mask  *  2*np.pi / zwfs_ns.optics.wvl0 * ( opd_input + opd_internal + opd_current_dm  )
-
-    amp = zwfs_ns.grid.pupil_mask * amp_input 
     
-    Intensity = get_pupil_intensity( phi = phi, theta = zwfs_ns.optics.theta, phasemask=zwfs_ns.grid.phasemask_mask, amp=amp )
+    Intensity = get_pupil_intensity( phi = phi, theta = zwfs_ns.optics.theta, phasemask=zwfs_ns.grid.phasemask_mask, amp=amp_input )
 
     if detector is not None:
-        print( 'we should do binning, add noise etc')
+        Intensity = average_subarrays(array=Intensity, block_size = detector)
 
     return Intensity
 
@@ -841,10 +917,13 @@ def get_frame( opd_input,  amp_input ,  opd_internal,  zwfs_ns , detector=None):
 def classify_pupil_regions( opd_input,  amp_input ,  opd_internal,  zwfs_ns , detector=None):
     # adds to zwfs_ns 
     # inside pupil 
+
+    # We intentionally put detector as None here to keep intensities in wave space
+    # we do the math here and then bin after if user selects detector is not None    
+    N0 = get_N0( opd_input,  amp_input ,  opd_internal,  zwfs_ns , detector=None)
+    I0 = get_I0( opd_input,  amp_input ,  opd_internal,  zwfs_ns , detector=None)
     
-    N0 = get_N0( opd_input,  amp_input ,  opd_internal,  zwfs_ns , detector=detector)
-    I0 = get_I0( opd_input,  amp_input ,  opd_internal,  zwfs_ns , detector=detector)
-    
+         
     pupil_filt = zwfs_ns.grid.pupil_mask > 0.5
     
     outside_filt = zwfs_ns.grid.pupil_mask < 0.5
@@ -853,6 +932,16 @@ def classify_pupil_regions( opd_input,  amp_input ,  opd_internal,  zwfs_ns , de
     
     outer_strehl_filt = ( I0 - N0 >   4.5 * np.median(I0) ) * outside_filt
     
+    if detector is not None:
+        pupil_filt = average_subarrays(array= pupil_filt, block_size=detector) > 0
+        
+        outside_filt = average_subarrays(array= outside_filt, block_size=detector) > 0
+        
+        secondary_strehl_filt = average_subarrays( secondary_strehl_filt ,block_size=detector) > 0
+        
+        outer_strehl_filt = average_subarrays( outer_strehl_filt ,block_size=detector) > 0
+
+
     region_classification_dict = {
         "pupil_filt":pupil_filt,
         "outside_filt":outside_filt,
@@ -878,7 +967,8 @@ def process_zwfs_signal( I, I0, pupil_filt ):
     Returns:
         _type_: _description_
     """
-    return I.reshape(-1)/np.mean( I.reshape(-1)[pupil_filt.reshape(-1)] / np.mean( I ) -  I0.reshape(-1)[pupil_filt.reshape(-1)] / np.mean( I0 ) )
+    s = ( I / np.mean( I ) -  I0 / np.mean( I0 ) )[pupil_filt] 
+    return s.reshape(-1) 
 
 
     
@@ -889,13 +979,19 @@ def build_IM( zwfs_ns ,  calibration_opd_input, calibration_amp_input ,  opd_int
 
     IM=[] # init our raw interaction matrix 
 
+    I0_list = []
+    for _ in range(imgs_to_mean) :
+        I0_list .append( get_I0( opd_input  =calibration_opd_input,    amp_input = calibration_amp_input  ,  opd_internal= opd_internal,  zwfs_ns=zwfs_ns , detector=detector )  )
+    I0 = np.mean( I0_list ,axis =0 )
+    
+    N0_list = []
+    for _ in range(imgs_to_mean) :
+        N0_list .append( get_N0( opd_input  =calibration_opd_input,    amp_input = calibration_amp_input  ,  opd_internal= opd_internal,  zwfs_ns=zwfs_ns , detector=detector )  )
+    N0 = np.mean( N0_list ,axis =0 )
+    
     if poke_method=='single_sided_poke': # just poke one side  
                 
-        I0_list = []
-        for _ in range(imgs_to_mean) :
-            I0_list .append( get_I0( opd_input  =calibration_opd_input,    amp_input = calibration_amp_input  ,  opd_internal= opd_internal,  zwfs_ns=zwfs_ns , detector=detector )  )
-        I0 = np.mean( I0_list ,axis =0 )
-        
+
         for i,m in enumerate(modal_basis):
             print(f'executing cmd {i}/{len(modal_basis)}')       
                 
@@ -949,8 +1045,303 @@ def build_IM( zwfs_ns ,  calibration_opd_input, calibration_amp_input ,  opd_int
     # convert to array 
     IM = np.array( IM )  
     
-    return IM 
+    reco_dict = {
+        "I0":I0,
+        "N0":N0,
+        "M2C_0":modal_basis,
+        "basis_name":basis,
+        "poke_amp":poke_amp,
+        "poke_method":poke_method,
+        "IM":IM,
+    }
+    
+    reco_ns = SimpleNamespace(**reco_dict)
+    
+    zwfs_ns.reco = reco_ns
+    
+    return zwfs_ns
 
+
+
+def plot_eigenmodes( zwfs_ns , save_path = None ):
+    
+    tstamp = datetime.datetime.now().strftime("%d-%m-%YT%H.%M.%S")
+
+    U,S,Vt = np.linalg.svd( zwfs_ns.reco.IM, full_matrices=True)
+
+    #singular values
+    plt.figure() 
+    plt.semilogy(S) #/np.max(S))
+    #plt.axvline( np.pi * (10/2)**2, color='k', ls=':', label='number of actuators in pupil')
+    plt.legend() 
+    plt.xlabel('mode index')
+    plt.ylabel('singular values')
+
+    if save_path is not None:
+        plt.savefig(save_path +  f'singularvalues_{tstamp}.png', bbox_inches='tight', dpi=200)
+    plt.show()
+    
+    # THE IMAGE MODES 
+    n_row = round( np.sqrt( zwfs_ns.reco.M2C_0.shape[0]) ) - 1
+    fig,ax = plt.subplots(n_row  ,n_row ,figsize=(30,30))
+    plt.subplots_adjust(hspace=0.1,wspace=0.1)
+    for i,axx in enumerate(ax.reshape(-1)):
+        # we filtered circle on grid, so need to put back in grid
+        tmp =  zwfs_ns.pupil_regions.pupil_filt.copy()
+        vtgrid = np.zeros(tmp.shape)
+        vtgrid[tmp] = Vt[i]
+        r1,r2,c1,c2 = 10,-10,10,-10
+        axx.imshow( vtgrid.reshape(zwfs_ns.reco.I0.shape )[r1:r2,c1:c2] ) #cp_x2-cp_x1,cp_y2-cp_y1) )
+        #axx.set_title(f'\n\n\nmode {i}, S={round(S[i]/np.max(S),3)}',fontsize=5)
+        #
+        axx.text( 10,10, f'{i}',color='w',fontsize=4)
+        axx.text( 10,20, f'S={round(S[i]/np.max(S),3)}',color='w',fontsize=4)
+        axx.axis('off')
+        #plt.legend(ax=axx)
+    plt.tight_layout()
+
+    if save_path is not None:
+        plt.savefig(save_path + f'det_eignmodes_{tstamp}.png',bbox_inches='tight',dpi=200)
+    plt.show()
+    
+    # THE DM MODES 
+
+    # NOTE: if not zonal (modal) i might need M2C to get this to dm space 
+    # if zonal M2C is just identity matrix. 
+    fig,ax = plt.subplots(n_row, n_row, figsize=(30,30))
+    plt.subplots_adjust(hspace=0.1,wspace=0.1)
+    for i,axx in enumerate(ax.reshape(-1)):
+        axx.imshow( util.get_DM_command_in_2D( zwfs_ns.reco.M2C_0.T @ U.T[i] ) )
+        #axx.set_title(f'mode {i}, S={round(S[i]/np.max(S),3)}')
+        axx.text( 1,2,f'{i}',color='w',fontsize=6)
+        axx.text( 1,3,f'S={round(S[i]/np.max(S),3)}',color='w',fontsize=6)
+        axx.axis('off')
+        #plt.legend(ax=axx)
+    plt.tight_layout()
+    if save_path is not None:
+        plt.savefig(save_path +  f'dm_eignmodes_{tstamp}.png',bbox_inches='tight',dpi=200)
+    plt.show()
+
+
+def construct_ctrl_matricies_from_IM(zwfs_ns,  method = 'Eigen_TT-HO', Smax = 50, TT_vectors = gen_basis.get_tip_tilt_vectors() ):
+
+
+    M2C_0 = zwfs_ns.reco.M2C_0
+    poke_amp = zwfs_ns.reco.poke_amp 
+    
+    if method == 'Eigen_TT-HO':    
+        U, S, Vt = np.linalg.svd( zwfs_ns.reco.IM, full_matrices=False)
+
+        R  = (Vt.T * [1/ss if i < Smax else 0 for i,ss in enumerate(S)])  @ U.T
+
+        #TT_vectors = gen_basis.get_tip_tilt_vectors()
+
+        TT_space = M2C_0 @ TT_vectors
+            
+        U_TT, S_TT, Vt_TT = np.linalg.svd( TT_space, full_matrices=False)
+
+        I2M_TT = U_TT.T @ R.T 
+
+        M2C_TT = poke_amp * M2C_0.T @ U_TT # since pinned need M2C to go back to 140 dimension vector  
+
+        R_HO = (np.eye(U_TT.shape[0])  - U_TT @ U_TT.T) @ R.T
+
+        # go to Eigenmodes for modal control in higher order reconstructor
+        U_HO, S_HO, Vt_HO = np.linalg.svd( R_HO, full_matrices=False)
+        I2M_HO = Vt_HO  
+        M2C_HO = poke_amp *  M2C_0.T @ (U_HO * S_HO) # since pinned need M2C to go back to 140 dimension vector
+        # plt.plot( M2C_HO @ I2M_HO @ IM[63] ) ; plt.show()
+        reco_dict_current = vars( zwfs_ns.reco )
+        reco_dict_2append = {
+            "U":U,
+            "S":S,
+            "Vt":Vt,
+            "Smax":Smax,
+            "R":R,
+            "U_TT":U_TT,
+            "S_TT":S_TT,
+            "Vt_TT":Vt_TT,
+            "U_HO":U_HO,
+            "S_HO":S_HO,
+            "Vt_HO":Vt_HO,
+            "I2M_TT":I2M_TT,
+            "M2C_TT":M2C_TT,
+            "I2M_HO":I2M_HO,
+            "M2C_HO":M2C_HO
+            }
+        reco_dict = reco_dict_current | reco_dict_2append
+        zwfs_ns.reco = SimpleNamespace( **reco_dict  )# add it to the current reco namespace with 
+        
+    elif method == 'Eigen_HO': # just look at eigen basis in HO - no projection onto TT
+        U, S, Vt = np.linalg.svd( zwfs_ns.reco.IM.T, full_matrices=False)
+
+        R  = (Vt.T * [1/ss if i < Smax else 0 for i,ss in enumerate(S)])  @ U.T
+
+        # 
+        TT_space = M2C_0 @ TT_vectors
+        U_TT, S_TT, Vt_TT = np.linalg.svd( TT_space, full_matrices=False)
+
+        I2M_TT = np.zeros( [2, R.shape[1]] ) # set to zero - we only consider HO in eigenmodes 
+        M2C_TT = TT_vectors
+
+        U_HO , S_HO , Vt_HO = U.copy(), S.copy() , Vt.copy() 
+        I2M_HO =  U.T # R.T
+        M2C_HO = poke_amp *  M2C_0.T @ (Vt.T * [1/ss if i < Smax else 0 for i,ss in enumerate(S)]) 
+        #plt.plot( M2C_HO @ I2M_HO @ IM[63] ) ; plt.show()
+    else:
+        raise TypeError('construct_ctrl_matricies_from_IM method name NOT FOUND!!!!')
+        
+    reco_dict_current = vars( zwfs_ns.reco )
+    reco_dict_2append = {
+        "U":U,
+        "S":S,
+        "Vt":Vt,
+        "Smax":Smax,
+        "R":R,
+        "U_TT":U_TT,
+        "S_TT":S_TT,
+        "Vt_TT":Vt_TT,
+        "U_HO":U_HO,
+        "S_HO":S_HO,
+        "Vt_HO":Vt_HO,
+        "I2M_TT":I2M_TT,
+        "M2C_TT":M2C_TT,
+        "I2M_HO":I2M_HO,
+        "M2C_HO":M2C_HO
+        }
+    reco_dict = reco_dict_current | reco_dict_2append
+    zwfs_ns.reco = SimpleNamespace( **reco_dict  )# add it to the current reco namespace with 
+    
+    return zwfs_ns
+
+
+def add_controllers( zwfs_ns , TT='PID', HO = 'leaky'):
+ 
+    if HO == 'leaky':
+        ki_leak = 0 * np.ones( zwfs_ns.reco.I2M_HO.shape[0] )
+        kp_leak = 0 * np.ones( zwfs_ns.reco.I2M_HO.shape[0] )
+        lower_limit_leak = -100 * np.ones( zwfs_ns.reco.I2M_HO.shape[0] )
+        upper_limit_leak = 100 * np.ones( zwfs_ns.reco.I2M_HO.shape[0] )
+
+        HO_ctrl = LeakyIntegrator(ki=ki_leak, kp=kp_leak, lower_limit=lower_limit_leak, upper_limit=upper_limit_leak )
+    
+    elif HO == 'PID':    
+        kp = 0 * np.ones( zwfs_ns.reco.I2M_HO.shape[0] )
+        ki = 0 * np.ones( zwfs_ns.reco.I2M_HO.shape[0] )
+        kd = 0. * np.ones( zwfs_ns.reco.I2M_HO.shape[0] )
+        setpoint = np.zeros( zwfs_ns.reco.I2M_HO.shape[0] )
+        lower_limit_pid = -100 * np.ones( zwfs_ns.reco.I2M_HO.shape[0] )
+        upper_limit_pid = 100 * np.ones( zwfs_ns.reco.I2M_HO.shape[0] )
+
+        HO_ctrl = PIDController(kp, ki, kd, upper_limit_pid, lower_limit_pid, setpoint)
+
+    if TT == 'leaky':
+        ki = 0 * np.ones( zwfs_ns.reco.I2M_TT.shape[0] )
+        kp_leak = 0 * np.ones( zwfs_ns.reco.I2M_TT.shape[0] )
+        lower_limit_leak = -100 * np.ones( zwfs_ns.reco.I2M_TT.shape[0] )
+        upper_limit_leak = 100 * np.ones( zwfs_ns.reco.I2M_TT.shape[0] )
+
+        TT_ctrl = LeakyIntegrator(ki=ki, kp=kp_leak, lower_limit=lower_limit_leak, upper_limit=upper_limit_leak )
+        
+    elif TT == 'PID':
+        kp = 0 * np.ones( zwfs_ns.reco.I2M_TT.shape[0] )
+        ki = 0 * np.ones( zwfs_ns.reco.I2M_TT.shape[0] )
+        kd = 0. * np.ones( zwfs_ns.reco.I2M_TT.shape[0] )
+        setpoint = np.zeros( zwfs_ns.reco.I2M_TT.shape[0] )
+        lower_limit_pid = -100 * np.ones( zwfs_ns.reco.I2M_TT.shape[0] )
+        upper_limit_pid = 100 * np.ones( zwfs_ns.reco.I2M_TT.shape[0] )
+
+        TT_ctrl = PIDController(kp, ki, kd, upper_limit_pid, lower_limit_pid, setpoint)
+
+    controller_dict = {
+        "TT_ctrl" : TT_ctrl,
+        "HO_ctrl" : HO_ctrl
+    }
+
+    telemetry_dict = init_telem_dict()
+
+    control_ns = SimpleNamespace(**controller_dict)
+    tele_ns = SimpleNamespace(**telemetry_dict)
+
+    zwfs_ns.ctrl = control_ns
+    zwfs_ns.telem = tele_ns
+
+    zwfs_ns.dm.current_cmd = zwfs_ns.dm.dm_flat
+
+    return zwfs_ns
+
+
+def AO_iteration( opd_input, amp_input, opd_internal, I0,  zwfs_ns, dm_disturbance = np.zeros(140), record_telemetry=True, detector=None, obs_intermediate_field=True):
+    # single iteration of AO in closed loop 
+    
+    # propagates opd over DM and get intensity
+
+    if obs_intermediate_field: # we onbserve the actual field (only valid in simulation to test results)
+        # opd in wavespace 
+        opd_current_dm = get_dm_displacement( command_vector= zwfs_ns.dm.current_cmd   , gain=zwfs_ns.dm.opd_per_cmd, \
+            sigma= zwfs_ns.grid.dm_coord.act_sigma_wavesp, X=zwfs_ns.grid.wave_coord.X, Y=zwfs_ns.grid.wave_coord.Y,\
+                x0=zwfs_ns.grid.dm_coord.act_x0_list_wavesp, y0=zwfs_ns.grid.dm_coord.act_y0_list_wavesp )
+        
+        phi = zwfs_ns.grid.pupil_mask  *  2*np.pi / zwfs_ns.optics.wvl0 * ( opd_input + opd_internal + opd_current_dm  )
+        
+        i = get_pupil_intensity( phi = phi, theta = zwfs_ns.optics.theta, phasemask=zwfs_ns.grid.phasemask_mask, amp=amp_input )
+
+        if detector is not None:
+            i = average_subarrays(array=i, block_size = detector)
+        strehl = np.exp( -np.var( phi[ zwfs_ns.grid.pupil_mask > 0]) ) 
+        
+    else: # we just see intensity 
+        i = get_frame(  opd_input  = opd_input ,   amp_input = amp_input,\
+        opd_internal = opd_internal,  zwfs_ns= zwfs_ns , detector= detector )
+
+    sig = process_zwfs_signal( i, I0, zwfs_ns.pupil_regions.pupil_filt ) # I0_theory/ np.mean(I0_theory) #
+
+    e_TT = zwfs_ns.reco.I2M_TT @ sig
+
+    u_TT = zwfs_ns.ctrl.TT_ctrl.process( e_TT )
+
+    c_TT = zwfs_ns.reco.M2C_TT @ u_TT 
+
+    e_HO = zwfs_ns.reco.I2M_HO @ sig
+
+    u_HO = zwfs_ns.ctrl.HO_ctrl.process( e_HO )
+
+    c_HO = zwfs_ns.reco.M2C_HO @ u_HO 
+
+    # safety 
+    if np.max( c_TT + c_HO ) > 0.8: 
+        print( ' going badly.. ')
+        
+    # SEND DM COMMAND 
+    zwfs_ns.dm.current_cmd =  zwfs_ns.dm.dm_flat +  dm_disturbance - c_HO - c_TT
+
+    # only measure residual in the registered pupil on DM 
+    residual =  (dm_disturbance - c_HO - c_TT)
+    rmse = np.nanstd( residual )
+     
+
+    # telemetry 
+    if record_telemetry :
+        zwfs_ns.telem.i_list.append( i )
+        zwfs_ns.telem.s_list.append( sig )
+        zwfs_ns.telem.e_TT_list.append( e_TT )
+        zwfs_ns.telem.u_TT_list.append( u_TT )
+        zwfs_ns.telem.c_TT_list.append( c_TT )
+
+        zwfs_ns.telem.e_HO_list.append( e_HO )
+        zwfs_ns.telem.u_HO_list.append( u_HO )
+        zwfs_ns.telem.c_HO_list.append( c_HO )
+
+        #atm_disturb_list.append( scrn.scrn )
+        zwfs_ns.telem.dm_disturb_list.append( dm_disturbance )
+
+        zwfs_ns.telem.residual_list.append( residual )
+        zwfs_ns.telem.rmse_list.append( rmse )
+        
+        if obs_intermediate_field:
+            zwfs_ns.telem.field_phase.append( phi )
+            zwfs_ns.telem.strehl.append( strehl )
+            
 
 
 

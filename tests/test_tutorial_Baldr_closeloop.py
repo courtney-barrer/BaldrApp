@@ -3,17 +3,22 @@ import numpy as np
 import matplotlib.pyplot as plt
 from types import SimpleNamespace
 import importlib 
+from matplotlib.gridspec import GridSpec
+from mpl_toolkits.axes_grid1 import make_axes_locatable
+
 import Baldr_closeloop as bldr
 import DM_basis as gen_basis
 import utilities as util
-# importlib.reload( bldr )
+
+
 
 ################## TEST 0 
 # configure our zwfs 
 grid_dict = {
     "D":1, # diameter of beam 
-    "N" : 64, # number of pixels across pupil
+    "N" : 64, # number of pixels across pupil diameter
     "padding_factor" : 4, # how many pupil diameters fit into grid x axis
+    # TOTAL NUMBER OF PIXELS = padding_factor * N 
     }
 
 optics_dict = {
@@ -36,6 +41,9 @@ grid_ns = SimpleNamespace(**grid_dict)
 optics_ns = SimpleNamespace(**optics_dict)
 dm_ns = SimpleNamespace(**dm_dict)
 
+
+
+
 ################## TEST 1
 # check dm registration on pupil (wavespace)
 zwfs_ns = bldr.init_zwfs(grid_ns, optics_ns, dm_ns)
@@ -54,7 +62,7 @@ plt.show()
 ################## TEST 2
 # check pupil intensities 
 fig,ax = plt.subplots( 1,4 )
-ax[0].imshow( bldr.get_DM_command_in_2D( zwfs_ns.dm.current_cmd ))
+ax[0].imshow( util.get_DM_command_in_2D( zwfs_ns.dm.current_cmd ))
 ax[0].set_title('dm cmd')
 ax[1].set_title('OPD wavespace')
 ax[1].imshow( phi )
@@ -187,61 +195,6 @@ IM_11 = bldr.build_IM( zwfs_ns ,  calibration_opd_input= 0 *zwfs_ns.grid.pupil_m
     opd_internal = opd_internal,  basis = basis, Nmodes =  Nmodes, poke_amp = 0.05, poke_method = 'double_sided_poke',\
         imgs_to_mean = 1, detector=None)
 
-# compare SVDs 
-if 1: 
-    U,S,Vt = np.linalg.svd( IM_00 , full_matrices=True)
-
-    #singular values
-    plt.figure() 
-    plt.semilogy(S) #/np.max(S))
-    #plt.axvline( np.pi * (10/2)**2, color='k', ls=':', label='number of actuators in pupil')
-    plt.legend() 
-    plt.xlabel('mode index')
-    plt.ylabel('singular values')
-
-    #plt.savefig(current_path + f'singularvalues_{tstamp}.png', bbox_inches='tight', dpi=200)
-    plt.show()
-    
-    # THE IMAGE MODES 
-    n_row = round( np.sqrt( Nmodes ) ) - 1
-    fig,ax = plt.subplots(n_row  ,n_row ,figsize=(30,30))
-    plt.subplots_adjust(hspace=0.1,wspace=0.1)
-    for i,axx in enumerate(ax.reshape(-1)):
-        # we filtered circle on grid, so need to put back in grid
-        tmp =  zwfs_ns.pupil_regions.pupil_filt.copy()
-        vtgrid = np.zeros(tmp.shape)
-        vtgrid[tmp] = Vt[i]
-        r1,r2,c1,c2 = 10,-10,10,-10
-        axx.imshow( vtgrid.reshape( zwfs_ns.pupil_regions.pupil_filt.shape )[r1:r2,c1:c2] ) #cp_x2-cp_x1,cp_y2-cp_y1) )
-        #axx.set_title(f'\n\n\nmode {i}, S={round(S[i]/np.max(S),3)}',fontsize=5)
-        #
-        axx.text( 10,10,f'{i}',color='w',fontsize=4)
-        axx.text( 10,20,f'S={round(S[i]/np.max(S),3)}',color='w',fontsize=4)
-        axx.axis('off')
-        #plt.legend(ax=axx)
-    plt.tight_layout()
-
-    #plt.savefig(current_path + f'det_eignmodes_{tstamp}.png',bbox_inches='tight',dpi=200)
-    plt.show()
-    
-    # THE DM MODES 
-
-    # NOTE: if not zonal (modal) i might need M2C to get this to dm space 
-    # if zonal M2C is just identity matrix. 
-    fig,ax = plt.subplots(n_row, n_row, figsize=(30,30))
-    plt.subplots_adjust(hspace=0.1,wspace=0.1)
-    for i,axx in enumerate(ax.reshape(-1)):
-        axx.imshow( util.get_DM_command_in_2D( M2C_0.T @ U.T[i] ) )
-        #axx.set_title(f'mode {i}, S={round(S[i]/np.max(S),3)}')
-        axx.text( 1,2,f'{i}',color='w',fontsize=6)
-        axx.text( 1,3,f'S={round(S[i]/np.max(S),3)}',color='w',fontsize=6)
-        axx.axis('off')
-        #plt.legend(ax=axx)
-    plt.tight_layout()
-    #plt.savefig(current_path + f'dm_eignmodes_{tstamp}.png',bbox_inches='tight',dpi=200)
-    plt.show()
-
-
 
 
 ################## TEST 8
@@ -256,50 +209,428 @@ opd_internal = 10e-9 * zwfs_ns.grid.pupil_mask * np.random.randn( *zwfs_ns.grid.
 
 amp_input = 1e4 * zwfs_ns.grid.pupil_mask
 
-# we must first define our pupil regions before building 
-zwfs_ns = bldr.classify_pupil_regions( opd_input,  amp_input ,  opd_internal,  zwfs_ns , detector=None)
 
-basis_name_list = ['Hadamard', "Zonal", "Zonal_pinned_edges", "Zernike", "Zernike_pinned_edges", "fourier", "fourier_pinned_edges"]
+#basis_name_list = ['Hadamard', "Zonal", "Zonal_pinned_edges", "Zernike", "Zernike_pinned_edges", "fourier", "fourier_pinned_edges"]
 
 # perfect field only with internal opd aberrations 
 # different poke methods 
 Nmodes = 100
 basis = 'Zonal_pinned_edges'
 poke_amp = 0.05
-M2C_0 = gen_basis.construct_command_basis( basis= basis, number_of_modes = Nmodes, without_piston=True).T  
-
-IM_00 = bldr.build_IM( zwfs_ns ,  calibration_opd_input= 0 *zwfs_ns.grid.pupil_mask , calibration_amp_input = amp_input , \
-    opd_internal = opd_internal,  basis = basis, Nmodes =  Nmodes, poke_amp = poke_amp, poke_method = 'double_sided_poke',\
-        imgs_to_mean = 1, detector=None)
-
-
-# -- Build our matricies 
-
-U, S, Vt = np.linalg.svd( IM, full_matrices=False)
-
 Smax = 30
-R  = (Vt.T * [1/ss if i < Smax else 0 for i,ss in enumerate(S)])  @ U.T
+detector = (4,4) # for binning , zwfs_ns.grid.N is #pixels across pupil diameter (64) therefore division 4 = 16 pixels (between CRed2 and Cred1 )
+#M2C_0 = gen_basis.construct_command_basis( basis= basis, number_of_modes = Nmodes, without_piston=True).T  
+
+#I0 = bldr.get_I0(  opd_input  = 0 *zwfs_ns.grid.pupil_mask ,   amp_input = amp_input,\
+#    opd_internal = opd_internal,  zwfs_ns= zwfs_ns , detector=None )
+
+#N0 = bldr.get_N0(  opd_input  = 0 *zwfs_ns.grid.pupil_mask  ,   amp_input = amp_input,\
+#    opd_internal = opd_internal,  zwfs_ns= zwfs_ns , detector=None )
+
+# we must first define our pupil regions before building 
+zwfs_ns = bldr.classify_pupil_regions( opd_input,  amp_input ,  opd_internal,  zwfs_ns , detector= detector) # For now detector is just tuple of pixels to average. useful to know is zwfs_ns.grid.N is number of pixels across pupil. # from this calculate an appropiate binning for detector 
+
+zwfs_ns = bldr.build_IM( zwfs_ns,  calibration_opd_input= 0 *zwfs_ns.grid.pupil_mask , calibration_amp_input = amp_input , \
+    opd_internal = opd_internal,  basis = basis, Nmodes =  Nmodes, poke_amp = poke_amp, poke_method = 'double_sided_poke',\
+        imgs_to_mean = 1, detector=detector )
+
+# look at the eigenmodes in camera, DM and singular values
+bldr.plot_eigenmodes( zwfs_ns , save_path = None )
 
 TT_vectors = gen_basis.get_tip_tilt_vectors()
 
-TT_space = M2C_0 @ TT_vectors
+#zwfs_ns = bldr.construct_ctrl_matricies_from_IM(zwfs_ns,  method = 'Eigen_TT-HO', Smax = 50, TT_vectors = TT_vectors )
+zwfs_ns = bldr.construct_ctrl_matricies_from_IM(zwfs_ns,  method = 'Eigen_TT-HO', Smax = 20, TT_vectors = TT_vectors )
+
+#zwfs_ns = bldr.add_controllers( zwfs_ns, TT = 'PID', HO = 'leaky')
+zwfs_ns = bldr.add_controllers( zwfs_ns, TT = 'PID', HO = 'leaky')
+
+#zwfs_ns = init_CL_simulation( zwfs_ns,  opd_internal, amp_input , basis, Nmodes, poke_amp, Smax )
+            
+dm_disturbance = 0.1 * TT_vectors.T[0]
+#zwfs_ns.dm.current_cmd =  zwfs_ns.dm.dm_flat + disturbance_cmd 
+
+# as example how to reset telemetry
+zwfs_ns.dm.current_cmd = zwfs_ns.dm.dm_flat + dm_disturbance
+zwfs_ns = bldr.reset_telemetry( zwfs_ns )
+zwfs_ns.ctrl.TT_ctrl.reset()
+zwfs_ns.ctrl.HO_ctrl.reset()
+zwfs_ns.ctrl.TT_ctrl.set_all_gains_to_zero()
+zwfs_ns.ctrl.HO_ctrl.set_all_gains_to_zero()
+
+close_after = 20
+for i in range(100):
+    print(f'iteration {i}')
+    if i > close_after : 
+        #zwfs_ns.ctrl.HO_ctrl.ki = 0.2 * np.ones( len(zwfs_ns.ctrl.HO_ctrl.ki) )
+        #zwfs_ns.ctrl.HO_ctrl.kp = 1 * np.ones( len(zwfs_ns.ctrl.HO_ctrl.kp) )
+
+        zwfs_ns.ctrl.TT_ctrl.kp = 1 * np.ones( len(zwfs_ns.ctrl.TT_ctrl.kp) )
+        zwfs_ns.ctrl.TT_ctrl.ki = 0.8 * np.ones( len(zwfs_ns.ctrl.TT_ctrl.ki) )
+        
+    bldr.AO_iteration( opd_input, amp_input, opd_internal, zwfs_ns.reco.I0,  zwfs_ns, dm_disturbance, record_telemetry=True ,detector=detector)
+
+# Generate some data
+
+
+i = len(zwfs_ns.telem.rmse_list) - 1
+plt.ioff() 
+        
+#for i in range(10):
+im_dm_dist = util.get_DM_command_in_2D( zwfs_ns.telem.dm_disturb_list[i] )
+im_phase = zwfs_ns.telem.field_phase[i]
+im_int = zwfs_ns.telem.i_list[i]
+im_cmd = util.get_DM_command_in_2D( np.array(zwfs_ns.telem.c_TT_list[i]) + np.array(zwfs_ns.telem.c_HO_list[i])  ) 
+
+
+#line_x = np.linspace(0, i, i)
+line_eHO = zwfs_ns.telem.e_HO_list[:i]
+line_eTT = zwfs_ns.telem.e_TT_list[:i]
+line_S = zwfs_ns.telem.strehl[:i]
+line_rmse = zwfs_ns.telem.rmse_list[:i]
+
+# Define plot data
+image_list = [im_dm_dist, im_phase, im_int, im_cmd]
+image_title_list = ['DM disturbance', 'input phase', 'intensity', 'reco. command']
+image_colorbar_list = ['DM units', 'radians', 'adu', 'DM units']
+
+plot_list = [ line_eHO, line_eTT, line_S, line_rmse ] 
+plot_ylabel_list = ['e_HO', 'e_TT', 'Strehl', 'rmse']
+plot_xlabel_list = ['iteration' for _ in plot_list]
+plot_title_list = ['' for _ in plot_list]
+
+#vlims = [(0, 1), (0, 1), (0, 1)]  # Set vmin and vmax for each image
+
+util.create_telem_mosaic(image_list, image_title_list, image_colorbar_list, 
+                plot_list, plot_title_list, plot_xlabel_list, plot_ylabel_list)
+
+
+
+
+
+
+
+
+
+
+
+
+
+import sys
+from PyQt5 import QtWidgets, QtCore
+import pyqtgraph as pg
+
+
+class AOControlApp(QtWidgets.QWidget):
+    def __init__(self):
+        super().__init__()
+
+        # Layout
+        self.layout = QtWidgets.QVBoxLayout()
+
+        # Buttons
+        self.run_button = QtWidgets.QPushButton("Run")
+        self.pause_button = QtWidgets.QPushButton("Pause")
+        self.zero_gains_button = QtWidgets.QPushButton("Set Gains to Zero")
+        self.reset_button = QtWidgets.QPushButton("reset")
+        
+        # Connect buttons to functions
+        self.run_button.clicked.connect(self.run_loop)
+        self.pause_button.clicked.connect(self.pause_loop)
+        self.zero_gains_button.clicked.connect(self.set_gains_to_zero)
+        self.reset_button.clicked.connect(self.reset)
+
+        # Text input for user
+        self.input_label = QtWidgets.QLabel("User Input:")
+        self.text_input = QtWidgets.QLineEdit()
+        self.text_input.returnPressed.connect(self.check_input)
+
+        # Add buttons and input to layout
+        self.layout.addWidget(self.run_button)
+        self.layout.addWidget(self.pause_button)
+        self.layout.addWidget(self.zero_gains_button)
+        self.layout.addWidget(self.reset)
+        self.layout.addWidget(self.input_label)
+        self.layout.addWidget(self.text_input)
+
+        # PyQtGraph plots
+        self.plot_widget = pg.GraphicsLayoutWidget()
+        self.layout.addWidget(self.plot_widget)
+
+        # Create Image and Line plots in PyQtGraph
+        self.image_plots = []
+        for i in range(4):
+            img_view = self.plot_widget.addPlot(row=0, col=i)
+            img_item = pg.ImageItem()
+            img_view.addItem(img_item)
+            self.image_plots.append(img_item)
+
+        self.line_plots = []
+        for i in range(4):
+            line_plot = self.plot_widget.addPlot(row=1 + (i // 2), col=(i % 2) * 2, colspan=2)
+            self.line_plots.append(line_plot.plot())
+
+        # Add the layout to the widget
+        self.setLayout(self.layout)
+
+        # Timer for running the AO_iteration in a loop
+        self.timer = QtCore.QTimer()
+        self.timer.timeout.connect(self.run_AO_iteration)
+        self.loop_running = False
+
+    def run_loop(self):
+        if not self.loop_running:
+            self.loop_running = True
+            self.timer.start(100)  # Adjust time in ms if needed
+
+    def pause_loop(self):
+        self.loop_running = False
+        self.timer.stop()
+
+    def set_gains_to_zero(self):
+        self.pause_loop()
+        zwfs_ns.ctrl.TT_ctrl.set_all_gains_to_zero()
+        zwfs_ns.ctrl.HO_ctrl.set_all_gains_to_zero()
+        self.run_loop()
+
+    def reset(self):
+        self.pause_loop()
+        zwfs_ns = bldr.reset_telemetry( zwfs_ns )
+        zwfs_ns.ctrl.TT_ctrl.reset()
+        zwfs_ns.ctrl.HO_ctrl.reset()
+        
+    def check_input(self):
+        user_input = self.text_input.text()
+        self.pause_loop()
+        # Placeholder: Add conditions for user input processing
+        print(f"User input: {user_input}")  # Replace with actual processing logic
+        
+        if 'kpHO*=' in user_input:
+            factor = float( user_input.split('=')[-1] )
+            zwfs_ns.ctrl.HO_ctrl.kp *= factor
+        if 'kpTT*=' in user_input:
+            factor = float( user_input.split('=')[-1] )
+            zwfs_ns.ctrl.TT_ctrl.kp *= factor
+        if 'kiHO*=' in user_input:
+            factor = float( user_input.split('=')[-1] )
+            zwfs_ns.ctrl.HO_ctrl.ki *= factor
+        if 'kiTT*=' in user_input:
+            factor = float( user_input.split('=')[-1] )
+            zwfs_ns.ctrl.TT_ctrl.ki *= factor
+
+            
+        self.run_loop()
+
+    def run_AO_iteration(self):
+        # Call the AO iteration function from your module
+        bldr.AO_iteration( opd_input, amp_input, opd_internal, zwfs_ns.reco.I0,  zwfs_ns, dm_disturbance, record_telemetry=True ,detector=detector)
+
+
+        # Retrieve telemetry data
+        im_dm_dist = util.get_DM_command_in_2D(zwfs_ns.telem.dm_disturb_list[-1])
+        im_phase = zwfs_ns.telem.field_phase[-1]
+        im_int = zwfs_ns.telem.i_list[-1]
+        im_cmd = util.get_DM_command_in_2D(np.array(zwfs_ns.telem.c_TT_list[-1]) + np.array(zwfs_ns.telem.c_HO_list[-1]))
+
+        # Update images in the PyQtGraph interface
+        self.image_plots[0].setImage(im_dm_dist)
+        self.image_plots[1].setImage(im_phase)
+        self.image_plots[2].setImage(im_int)
+        self.image_plots[3].setImage(im_cmd)
+
+        # Update line plots
+        # Check if line data exists
+        if len(zwfs_ns.telem.e_HO_list) > 0:
+            self.line_plots[0].setData(zwfs_ns.telem.e_HO_list)
+            self.line_plots[0].getViewBox().autoRange()  # Force autoscaling of the plot
+
+        if len(zwfs_ns.telem.e_TT_list) > 0:
+            self.line_plots[1].setData(zwfs_ns.telem.e_TT_list)
+            self.line_plots[1].getViewBox().autoRange()
+
+        if len(zwfs_ns.telem.strehl) > 0:
+            self.line_plots[2].setData(zwfs_ns.telem.strehl)
+            self.line_plots[2].getViewBox().autoRange()
+
+        if len(zwfs_ns.telem.rmse_list) > 0:
+            self.line_plots[3].setData(zwfs_ns.telem.rmse_list)
+            self.line_plots[3].getViewBox().autoRange()
+
+
+if __name__ == "__main__":
     
-U_TT, S_TT, Vt_TT = np.linalg.svd( TT_space, full_matrices=False)
+    zwfs_ns = bldr.reset_telemetry( zwfs_ns )
+    zwfs_ns.ctrl.TT_ctrl.reset()
+    zwfs_ns.ctrl.HO_ctrl.reset()
+    zwfs_ns.ctrl.TT_ctrl.set_all_gains_to_zero()
+    zwfs_ns.ctrl.HO_ctrl.set_all_gains_to_zero()
 
-I2M_TT = U_TT.T @ R.T 
+    zwfs_ns.ctrl.HO_ctrl.ki = 0.2 * np.ones( len(zwfs_ns.ctrl.HO_ctrl.ki) )
+    zwfs_ns.ctrl.HO_ctrl.kp = 1 * np.ones( len(zwfs_ns.ctrl.HO_ctrl.kp) )
 
-M2C_TT = poke_amp * M2C_0.T @ U_TT # since pinned need M2C to go back to 140 dimension vector  
-
-R_HO = (np.eye(U_TT.shape[0])  - U_TT @ U_TT.T) @ R.T
-
-# go to Eigenmodes for modal control in higher order reconstructor
-U_HO, S_HO, Vt_HO = np.linalg.svd( R_HO, full_matrices=False)
-I2M_HO = Vt_HO  
-M2C_HO = poke_amp *  M2C_0.T @ (U_HO * S_HO) # since pinned need M2C to go back to 140 dimension vector
+    zwfs_ns.ctrl.TT_ctrl.kp = 1 * np.ones( len(zwfs_ns.ctrl.TT_ctrl.kp) )
+    zwfs_ns.ctrl.TT_ctrl.ki = 0.8 * np.ones( len(zwfs_ns.ctrl.TT_ctrl.ki) )
+    
 
 
-plt.figure(); plt.imshow( util.get_DM_command_in_2D( M2C_HO @ I2M_HO @ IM[65] ) ); plt.show()
- 
- tmp.reshape(-1)[zwfs_ns.pupil_regions.pupil_filt.reshape(-1)] =  IM.T[65]
-################## TEST 9 
-#  Reconstruction static 
+    app = QtWidgets.QApplication(sys.argv)
+    window = AOControlApp()
+    window.setWindowTitle("AO Control GUI")
+    window.show()
+    sys.exit(app.exec_())
+
+
+
+
+
+
+
+
+
+
+
+
+"""
+import pyqtgraph as pg
+from pyqtgraph.Qt import QtCore, QtWidgets
+import numpy as np
+import sys
+
+# Data placeholders for demonstration
+dm_disturb_list = [np.random.randn(12, 12) for _ in range(100)]
+i_list = [np.random.rand(64, 64) for _ in range(100)]
+e_TT_list = [np.random.randn(10) for _ in range(100)]
+e_HO_list = [np.random.randn(20) for _ in range(100)]
+rmse_list = np.random.rand(100)
+
+# Create a Qt Application
+app = QtWidgets.QApplication([])
+
+# Create the main window and layout
+main_win = QtWidgets.QWidget()
+main_layout = QtWidgets.QVBoxLayout()
+main_win.setLayout(main_layout)
+
+# Create the pyqtgraph GraphicsLayoutWidget for plots
+plot_win = pg.GraphicsLayoutWidget(show=True, title="Real-Time Plotting with PyQtGraph")
+plot_win.resize(1000, 800)
+plot_win.setWindowTitle('Real-Time ZWFS Control Loops')
+
+main_layout.addWidget(plot_win)
+
+# Create the image plot for DM disturbance
+dm_plot = plot_win.addPlot(title="DM Disturbance")
+dm_img = pg.ImageItem()
+dm_plot.addItem(dm_img)
+
+# Create the image plot for i_list (camera image)
+i_list_plot = plot_win.addPlot(title="Camera Image")
+i_img = pg.ImageItem()
+i_list_plot.addItem(i_img)
+plot_win.nextRow()
+
+# Create the line plot for e_TT signal
+e_TT_plot = plot_win.addPlot(title="Tip/Tilt Error Signal (e_TT)")
+e_TT_curve = e_TT_plot.plot()
+
+# Create the line plot for e_HO signal
+e_HO_plot = plot_win.addPlot(title="Higher Order Error Signal (e_HO)")
+e_HO_curve = e_HO_plot.plot()
+plot_win.nextRow()
+
+# Create the line plot for RMSE
+rmse_plot = plot_win.addPlot(title="RMSE")
+rmse_curve = rmse_plot.plot()
+
+# Now create a horizontal layout for buttons
+button_layout = QtWidgets.QHBoxLayout()
+
+# Run Button
+run_button = QtWidgets.QPushButton('Run')
+button_layout.addWidget(run_button)
+
+# Pause Button
+pause_button = QtWidgets.QPushButton('Pause')
+button_layout.addWidget(pause_button)
+
+# Reset Button
+reset_button = QtWidgets.QPushButton('Reset')
+button_layout.addWidget(reset_button)
+
+# Add the button panel to the main layout
+main_layout.addLayout(button_layout)
+
+# Initialize some settings
+idx = 0
+paused = False  # To handle pause
+
+def update_plots(i):
+    # Update DM disturbance image
+    dm_img.setImage(dm_disturb_list[i])
+
+    # Update i_list (camera image)
+    i_img.setImage(i_list[i])
+
+    # Update e_TT signal (1D)
+    e_TT_curve.setData(e_TT_list[i])
+
+    # Update e_HO signal (1D)
+    e_HO_curve.setData(e_HO_list[i])
+
+    # Update RMSE curve
+    rmse_curve.setData(rmse_list[:i+1])
+
+# Timer to update the plots in real-time
+def update():
+    global idx, paused
+    if paused:
+        return  # Do nothing if paused
+    if idx >= len(i_list):  # Stop when finished
+        return
+    update_plots(idx)
+    idx += 1
+
+# Run button event handler
+def run():
+    global paused
+    paused = False  # Resume the update
+    timer.start(100)
+
+# Pause button event handler
+def pause():
+    global paused
+    paused = True  # Stop the update
+
+# Reset button event handler
+def reset():
+    global idx, paused
+    idx = 0  # Reset index to start over
+    paused = True  # Stop the update
+    update_plots(idx)  # Re-initialize the first frame
+
+# Connect buttons to their functions
+run_button.clicked.connect(run)
+pause_button.clicked.connect(pause)
+reset_button.clicked.connect(reset)
+
+# Start a QTimer to call the update function periodically
+timer = QtCore.QTimer()
+timer.timeout.connect(update)
+timer.start(100)  # Update every 100ms (10 frames per second)
+
+# Show the main window
+main_win.show()
+
+# Start the Qt event loop
+if __name__ == '__main__':
+    if (sys.flags.interactive != 1) or not hasattr(QtCore, 'PYQT_VERSION'):
+        QtWidgets.QApplication.instance().exec_()
+
+"""
+
+
+
+
+
+
+
