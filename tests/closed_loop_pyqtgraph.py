@@ -26,6 +26,7 @@ class AOControlApp(QtWidgets.QWidget):
         self.run_button = QtWidgets.QPushButton("Run")
         self.pause_button = QtWidgets.QPushButton("Pause")
         self.zero_gains_button = QtWidgets.QPushButton("Set Gains to Zero")
+        self.reset_button = QtWidgets.QPushButton("Reset")
         #self.reset_button = QtWidgets.QPushButton("reset")
         
         # Visual "LED" for running state
@@ -37,6 +38,7 @@ class AOControlApp(QtWidgets.QWidget):
         self.run_button.clicked.connect(self.run_loop)
         self.pause_button.clicked.connect(self.pause_loop)
         self.zero_gains_button.clicked.connect(self.set_gains_to_zero)
+        self.reset_button.clicked.connect(self.reset)
         #self.reset_button.clicked.connect(self.reset)
 
         # Text input for user
@@ -48,6 +50,7 @@ class AOControlApp(QtWidgets.QWidget):
         self.layout.addWidget(self.run_button)
         self.layout.addWidget(self.pause_button)
         self.layout.addWidget(self.zero_gains_button)
+        self.layout.addWidget(self.reset_button)
         #self.layout.addWidget(self.reset_button)
         self.layout.addWidget(self.input_label)
         self.layout.addWidget(self.text_input)
@@ -57,19 +60,43 @@ class AOControlApp(QtWidgets.QWidget):
         self.plot_widget = pg.GraphicsLayoutWidget()
         self.layout.addWidget(self.plot_widget)
 
+
+        # Initialize lists for storing PlotDataItems for e_HO_list and e_TT_list
+        self.e_HO_items = []  # List to store PlotDataItems for HO error plots
+        self.e_TT_items = []  # List to store PlotDataItems for TT error plots
+        self.line_plots = []  # List to store PlotItem for the actual plots
+
         # Create Image and Line plots in PyQtGraph
+        image_titles = ["DM Disturbance", "Input Phase", "Intensity", "Reconstructed Command"]
+        image_x_labels = ["X actuator", "X-Axis", "Pixels", "X actuator"]
+        image_y_labels = ["Y actuator", "Y-Axis", "Pixels", "Y actuator"]
+
+
         self.image_plots = []
         for i in range(4):
             img_view = self.plot_widget.addPlot(row=0, col=i)
+            
+            # Set title and labels for each image plot
+            img_view.setTitle(image_titles[i], color='b', size="12pt")  # Set the title
+            img_view.setLabel('left', image_y_labels[i], color='r', size="10pt")  # Set Y-axis label
+            img_view.setLabel('bottom', image_x_labels[i], color='g', size="10pt")  # Set X-axis label
+
             img_item = pg.ImageItem()
             img_view.addItem(img_item)
             self.image_plots.append(img_item)
 
-        self.line_plots = []
+        plot_titles = ["HO Error Plot", "TT Error Plot", "Strehl Ratio", "RMSE"]  # Titles for each plot
+        plot_y_labels = ["HO Error", "TT Error", "Strehl", "RMSE"]  # Y-axis labels
+        plot_x_labels = ["Iterations", "Iterations", "Iterations", "Iterations"]  # X-axis labels
+                
         for i in range(4):
             line_plot = self.plot_widget.addPlot(row=1 + (i // 2), col=(i % 2) * 2, colspan=2)
-            self.line_plots.append(line_plot.plot())
+            self.line_plots.append(line_plot)  # Store the PlotItem, not the result of plot()
+            line_plot.setTitle(plot_titles[i], color='b', size="12pt")
+            line_plot.setLabel('left', plot_y_labels[i], units=None, color='r', size="10pt")
+            line_plot.setLabel('bottom', plot_x_labels[i], units=None, color='g', size="10pt")
 
+        
         # Add the layout to the widget
         self.setLayout(self.layout)
 
@@ -81,10 +108,12 @@ class AOControlApp(QtWidgets.QWidget):
     def run_loop(self):
         if not self.loop_running:
             self.loop_running = True
+            self.update_led(True) 
             self.timer.start(100)  # Adjust time in ms if needed
 
     def pause_loop(self):
         self.loop_running = False
+        self.update_led(False) 
         self.timer.stop()
 
     def set_gains_to_zero(self):
@@ -93,11 +122,19 @@ class AOControlApp(QtWidgets.QWidget):
         zwfs_ns.ctrl.HO_ctrl.set_all_gains_to_zero()
         self.run_loop()
 
-    #def reset(self):
-    #    self.pause_loop()
-    #    zwfs_ns = bldr.reset_telemetry( zwfs_ns )
-    #    zwfs_ns.ctrl.TT_ctrl.reset()
-    #    zwfs_ns.ctrl.HO_ctrl.reset()
+    def reset(self ):
+        self.pause_loop()
+        _ = bldr.reset_telemetry( zwfs_ns )
+        zwfs_ns.ctrl.TT_ctrl.reset()
+        zwfs_ns.ctrl.HO_ctrl.reset()
+        
+        for plot_item in self.line_plots:
+            plot_item.clear()  # This removes all lines from the plot
+    
+        # Clear the stored PlotDataItems (HO and TT errors)
+        self.e_HO_items.clear()
+        self.e_TT_items.clear()
+    
         
     def update_led(self, running):
         """Update the LED color depending on whether the system is running."""
@@ -108,6 +145,7 @@ class AOControlApp(QtWidgets.QWidget):
 
 
     def check_input(self):
+        
         user_input = self.text_input.text()
         self.pause_loop()
         # Placeholder: Add conditions for user input processing
@@ -148,14 +186,14 @@ class AOControlApp(QtWidgets.QWidget):
         self.run_loop()
 
     def run_AO_iteration(self):
+        
         # Call the AO iteration function from your module
         bldr.AO_iteration( opd_input, amp_input, opd_internal, zwfs_ns.reco.I0,  zwfs_ns, dm_disturbance, record_telemetry=True ,detector=detector)
-
 
         # Retrieve telemetry data
         im_dm_dist = util.get_DM_command_in_2D(zwfs_ns.telem.dm_disturb_list[-1])
         im_phase = zwfs_ns.telem.field_phase[-1]
-        im_int = zwfs_ns.telem.i_list[-1]
+        im_int = zwfs_ns.telem.i_list[-1]/np.mean(zwfs_ns.telem.i_list[-1])   - zwfs_ns.reco.I0/np.mean( zwfs_ns.reco.I0 ) #zwfs_ns.telem.i_list[-1]
         im_cmd = util.get_DM_command_in_2D(np.array(zwfs_ns.telem.c_TT_list[-1]) + np.array(zwfs_ns.telem.c_HO_list[-1]))
 
         # Update images in the PyQtGraph interface
@@ -166,23 +204,60 @@ class AOControlApp(QtWidgets.QWidget):
 
         # Update line plots
         # Check if line data exists
-        if len(zwfs_ns.telem.e_HO_list) > 0:
-            self.line_plots[0].setData(zwfs_ns.telem.e_HO_list)
-            self.line_plots[0].getViewBox().autoRange()  # Force autoscaling of the plot
+        """if len(zwfs_ns.telem.e_HO_list) > 0:
+            #self.line_plots[0].clear()
+            self.line_plots[0].getViewBox().clear()
+            for row in np.array( zwfs_ns.telem.e_HO_list ).T:  # Assuming each item is a row (1D array)
+                #self.line_plots[0].setData(row) # Plot each row in blue
+                self.line_plots[0].plot(np.arange(len(row)), row, pen='b')
 
         if len(zwfs_ns.telem.e_TT_list) > 0:
-            self.line_plots[1].setData(zwfs_ns.telem.e_TT_list)
-            self.line_plots[1].getViewBox().autoRange()
+            #self.line_plots[1].clear()
+            self.line_plots[1].getViewBox().clear()
+            for row in np.array( zwfs_ns.telem.e_TT_list ).T:
+                #self.line_plots[1].setData(row) # Plot each row in red
+                self.line_plots[1].plot(np.arange(len(row)), row, pen='b')
+        """        
 
+
+
+        # Plot e_HO_list
+        if len(np.array(zwfs_ns.telem.e_HO_list).T) > 0:
+            for i, row in enumerate(np.array(zwfs_ns.telem.e_HO_list).T):
+                if i < len(self.e_HO_items):
+                    # Update existing plot data
+                    self.e_HO_items[i].setData(np.arange(len(row)), row)
+                else:
+                    # Create new PlotDataItem and store it
+                    plot_item = self.line_plots[0].plot(np.arange(len(row)), row, pen='b')  # Create the line
+                    self.e_HO_items.append(plot_item)  # Store the PlotDataItem
+
+        # Plot e_TT_list
+        if len(np.array(zwfs_ns.telem.e_TT_list).T ) > 0:
+            for i, row in enumerate(np.array(zwfs_ns.telem.e_TT_list).T):
+                if i < len(self.e_TT_items):
+                    # Update existing plot data
+                    self.e_TT_items[i].setData(np.arange(len(row)), row)
+                else:
+                    # Create new PlotDataItem and store it
+                    plot_item = self.line_plots[1].plot(np.arange(len(row)), row, pen='r')  # Create the line
+                    self.e_TT_items.append(plot_item)  # Store the PlotDataItem
+
+
+        # Update 1D telemetry data (strehl and rmse)
         if len(zwfs_ns.telem.strehl) > 0:
-            self.line_plots[2].setData(zwfs_ns.telem.strehl)
-            self.line_plots[2].getViewBox().autoRange()
+            self.line_plots[2].plot(np.arange(len(zwfs_ns.telem.strehl)), zwfs_ns.telem.strehl)
 
         if len(zwfs_ns.telem.rmse_list) > 0:
-            self.line_plots[3].setData(zwfs_ns.telem.rmse_list)
-            self.line_plots[3].getViewBox().autoRange()
+            self.line_plots[3].plot(np.arange(len(zwfs_ns.telem.rmse_list)), zwfs_ns.telem.rmse_list)
+            
+        # if len(zwfs_ns.telem.strehl) > 0:
+        #     self.line_plots[2].setData(zwfs_ns.telem.strehl)
+        #     #self.line_plots[2].getViewBox().autoRange()
 
-
+        # if len(zwfs_ns.telem.rmse_list) > 0:
+        #     self.line_plots[3].setData(zwfs_ns.telem.rmse_list)
+        #     #self.line_plots[3].getViewBox().autoRange()
 
 
 
@@ -231,7 +306,7 @@ amp_input = 1e4 * zwfs_ns.grid.pupil_mask
 # different poke methods 
 Nmodes = 100
 # ['Hadamard', "Zonal", "Zonal_pinned_edges", "Zernike", "Zernike_pinned_edges", "fourier", "fourier_pinned_edges"]
-basis = 'Hadamard' #'Zonal_pinned_edges'
+basis = 'Zonal_pinned_edges' #'fourier_pinned_edges' #'Hadamard' #'Zonal_pinned_edges'
 poke_amp = 0.05
 Smax = 30
 detector = (4,4) # for binning , zwfs_ns.grid.N is #pixels across pupil diameter (64) therefore division 4 = 16 pixels (between CRed2 and Cred1 )
@@ -274,50 +349,51 @@ zwfs_ns.ctrl.HO_ctrl.reset()
 zwfs_ns.ctrl.TT_ctrl.set_all_gains_to_zero()
 zwfs_ns.ctrl.HO_ctrl.set_all_gains_to_zero()
 
-close_after = 20
-for i in range(100):
-    print(f'iteration {i}')
-    if i > close_after : 
-        #zwfs_ns.ctrl.HO_ctrl.ki = 0.2 * np.ones( len(zwfs_ns.ctrl.HO_ctrl.ki) )
-        #zwfs_ns.ctrl.HO_ctrl.kp = 1 * np.ones( len(zwfs_ns.ctrl.HO_ctrl.kp) )
+plot = False
+if plot : 
+    close_after = 20
+    for i in range(100):
+        print(f'iteration {i}')
+        if i > close_after : 
+            #zwfs_ns.ctrl.HO_ctrl.ki = 0.2 * np.ones( len(zwfs_ns.ctrl.HO_ctrl.ki) )
+            #zwfs_ns.ctrl.HO_ctrl.kp = 1 * np.ones( len(zwfs_ns.ctrl.HO_ctrl.kp) )
 
-        zwfs_ns.ctrl.TT_ctrl.kp = 1 * np.ones( len(zwfs_ns.ctrl.TT_ctrl.kp) )
-        zwfs_ns.ctrl.TT_ctrl.ki = 0.8 * np.ones( len(zwfs_ns.ctrl.TT_ctrl.ki) )
-        
-    bldr.AO_iteration( opd_input, amp_input, opd_internal, zwfs_ns.reco.I0,  zwfs_ns, dm_disturbance, record_telemetry=True ,detector=detector)
+            zwfs_ns.ctrl.TT_ctrl.kp = 1 * np.ones( len(zwfs_ns.ctrl.TT_ctrl.kp) )
+            zwfs_ns.ctrl.TT_ctrl.ki = 0.8 * np.ones( len(zwfs_ns.ctrl.TT_ctrl.ki) )
+            
+        bldr.AO_iteration( opd_input, amp_input, opd_internal, zwfs_ns.reco.I0,  zwfs_ns, dm_disturbance, record_telemetry=True ,detector=detector)
 
-# Generate some data
+    # Generate some data
 
-i = len(zwfs_ns.telem.rmse_list) - 1
-plt.ioff() 
-        
-#for i in range(10):
-im_dm_dist = util.get_DM_command_in_2D( zwfs_ns.telem.dm_disturb_list[i] )
-im_phase = zwfs_ns.telem.field_phase[i]
-im_int = zwfs_ns.telem.i_list[i]
-im_cmd = util.get_DM_command_in_2D( np.array(zwfs_ns.telem.c_TT_list[i]) + np.array(zwfs_ns.telem.c_HO_list[i])  ) 
+    i = len(zwfs_ns.telem.rmse_list) - 1
+    plt.ioff() 
+            
+    #for i in range(10):
+    im_dm_dist = util.get_DM_command_in_2D( zwfs_ns.telem.dm_disturb_list[i] )
+    im_phase = zwfs_ns.telem.field_phase[i]
+    im_int = zwfs_ns.telem.i_list[i]
+    im_cmd = util.get_DM_command_in_2D( np.array(zwfs_ns.telem.c_TT_list[i]) + np.array(zwfs_ns.telem.c_HO_list[i])  ) 
 
+    #line_x = np.linspace(0, i, i)
+    line_eHO = zwfs_ns.telem.e_HO_list[:i]
+    line_eTT = zwfs_ns.telem.e_TT_list[:i]
+    line_S = zwfs_ns.telem.strehl[:i]
+    line_rmse = zwfs_ns.telem.rmse_list[:i]
 
-#line_x = np.linspace(0, i, i)
-line_eHO = zwfs_ns.telem.e_HO_list[:i]
-line_eTT = zwfs_ns.telem.e_TT_list[:i]
-line_S = zwfs_ns.telem.strehl[:i]
-line_rmse = zwfs_ns.telem.rmse_list[:i]
+    # Define plot data
+    image_list = [im_dm_dist, im_phase, im_int, im_cmd]
+    image_title_list = ['DM disturbance', 'input phase', 'intensity', 'reco. command']
+    image_colorbar_list = ['DM units', 'radians', 'adu', 'DM units']
 
-# Define plot data
-image_list = [im_dm_dist, im_phase, im_int, im_cmd]
-image_title_list = ['DM disturbance', 'input phase', 'intensity', 'reco. command']
-image_colorbar_list = ['DM units', 'radians', 'adu', 'DM units']
+    plot_list = [ line_eHO, line_eTT, line_S, line_rmse ] 
+    plot_ylabel_list = ['e_HO', 'e_TT', 'Strehl', 'rmse']
+    plot_xlabel_list = ['iteration' for _ in plot_list]
+    plot_title_list = ['' for _ in plot_list]
 
-plot_list = [ line_eHO, line_eTT, line_S, line_rmse ] 
-plot_ylabel_list = ['e_HO', 'e_TT', 'Strehl', 'rmse']
-plot_xlabel_list = ['iteration' for _ in plot_list]
-plot_title_list = ['' for _ in plot_list]
+    #vlims = [(0, 1), (0, 1), (0, 1)]  # Set vmin and vmax for each image
 
-#vlims = [(0, 1), (0, 1), (0, 1)]  # Set vmin and vmax for each image
-
-util.create_telem_mosaic(image_list, image_title_list, image_colorbar_list, 
-                plot_list, plot_title_list, plot_xlabel_list, plot_ylabel_list)
+    util.create_telem_mosaic(image_list, image_title_list, image_colorbar_list, 
+                    plot_list, plot_title_list, plot_xlabel_list, plot_ylabel_list)
 
 
 
@@ -337,15 +413,16 @@ if __name__ == "__main__":
     zwfs_ns.ctrl.TT_ctrl.set_all_gains_to_zero()
     zwfs_ns.ctrl.HO_ctrl.set_all_gains_to_zero()
 
-    zwfs_ns.ctrl.HO_ctrl.ki = 0.2 * np.ones( len(zwfs_ns.ctrl.HO_ctrl.ki) )
-    zwfs_ns.ctrl.HO_ctrl.kp = 1 * np.ones( len(zwfs_ns.ctrl.HO_ctrl.kp) )
+    zwfs_ns.ctrl.HO_ctrl.ki = 0 * np.ones( len(zwfs_ns.ctrl.HO_ctrl.ki) )
+    zwfs_ns.ctrl.HO_ctrl.kp = 0 * np.ones( len(zwfs_ns.ctrl.HO_ctrl.kp) )
 
     zwfs_ns.ctrl.TT_ctrl.kp = 1 * np.ones( len(zwfs_ns.ctrl.TT_ctrl.kp) )
-    zwfs_ns.ctrl.TT_ctrl.ki = 0.8 * np.ones( len(zwfs_ns.ctrl.TT_ctrl.ki) )
+    zwfs_ns.ctrl.TT_ctrl.ki = 0.5 * np.ones( len(zwfs_ns.ctrl.TT_ctrl.ki) )
     
 
 
     app = QtWidgets.QApplication(sys.argv)
+    
     window = AOControlApp()
     window.setWindowTitle("AO Control GUI")
     window.show()
