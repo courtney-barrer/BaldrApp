@@ -11,54 +11,134 @@ import DM_basis as gen_basis
 import utilities as util
 
 import sys
-from PyQt5 import QtWidgets, QtCore
+from PyQt5 import QtWidgets, QtCore,  QtGui
 import pyqtgraph as pg
+import traceback
 
+# Create a class to redirect stdout to the QTextEdit widget
+
+# Create a class to redirect stdout to the QTextEdit widget
+class OutputRedirector:
+    def __init__(self, text_edit):
+        self.text_edit = text_edit
+
+    def write(self, text):
+        """Write the output to the QTextEdit widget."""
+        self.text_edit.append(text)
+
+    def flush(self):
+        """Required for file-like object interface, can be left empty."""
+        pass
 
 class AOControlApp(QtWidgets.QWidget):
     def __init__(self):
         super().__init__()
 
-        # Layout
-        self.layout = QtWidgets.QVBoxLayout()
+        # Main layout (QGridLayout) for the entire window
+        self.layout = QtWidgets.QGridLayout()
+
+        # Initialize command history and index
+        self.command_history = []  # List to store the history of commands
+        self.history_index = -1    # Index to track the current position in the history
 
         # Buttons
         self.run_button = QtWidgets.QPushButton("Run")
         self.pause_button = QtWidgets.QPushButton("Pause")
         self.zero_gains_button = QtWidgets.QPushButton("Set Gains to Zero")
         self.reset_button = QtWidgets.QPushButton("Reset")
-        #self.reset_button = QtWidgets.QPushButton("reset")
-        
-        # Visual "LED" for running state
-        self.status_led = QtWidgets.QLabel()
-        self.status_led.setFixedSize(20, 20)
-        self.update_led(False)  # Initialize as "not running" (False)
+        self.save_button = QtWidgets.QPushButton("Save Telemetry")
+
+        # Make buttons smaller
+        button_size = QtCore.QSize(120, 30)  # Set the button size
+        self.run_button.setFixedSize(button_size)
+        self.pause_button.setFixedSize(button_size)
+        self.zero_gains_button.setFixedSize(button_size)
+        self.reset_button.setFixedSize(button_size)
+        self.save_button.setFixedSize(button_size)
 
         # Connect buttons to functions
         self.run_button.clicked.connect(self.run_loop)
         self.pause_button.clicked.connect(self.pause_loop)
         self.zero_gains_button.clicked.connect(self.set_gains_to_zero)
         self.reset_button.clicked.connect(self.reset)
-        #self.reset_button.clicked.connect(self.reset)
+        self.save_button.clicked.connect(self.save_telemetry)  # Placeholder function
 
-        # Text input for user
-        self.input_label = QtWidgets.QLabel("User Input:")
-        self.text_input = QtWidgets.QLineEdit()
-        self.text_input.returnPressed.connect(self.check_input)
+        # Visual "LED" for running state
+        self.status_led = QtWidgets.QLabel()
+        self.status_led.setFixedSize(20, 20)
+        self.update_led(False)  # Initialize as "not running" (False)
 
-        # Add buttons and input to layout
-        self.layout.addWidget(self.run_button)
-        self.layout.addWidget(self.pause_button)
-        self.layout.addWidget(self.zero_gains_button)
-        self.layout.addWidget(self.reset_button)
-        #self.layout.addWidget(self.reset_button)
-        self.layout.addWidget(self.input_label)
-        self.layout.addWidget(self.text_input)
-        self.layout.addWidget(self.status_led)  # Add LED to the layout
-        
-        # PyQtGraph plots
+        # Terminal-like prompt setup (left side)
+        self.prompt_history = QtWidgets.QTextEdit()
+        self.prompt_history.setReadOnly(True)  # History is read-only
+        self.prompt_input = QtWidgets.QLineEdit()
+        self.prompt_input.returnPressed.connect(self.handle_command)
+
+        # Redirect print() output to QTextEdit
+        sys.stdout = OutputRedirector(self.prompt_history)  # Redirect stdout
+
+        # PyQtGraph plots (top half)
         self.plot_widget = pg.GraphicsLayoutWidget()
-        self.layout.addWidget(self.plot_widget)
+
+        # Adding the plots above
+        image_titles = ["DM Disturbance", "Input Phase", "Intensity", "Reconstructed Command"]
+        image_x_labels = ["X actuator", "X-Axis", "Pixels", "X actuator"]
+        image_y_labels = ["Y actuator", "Y-Axis", "Pixels", "Y actuator"]
+
+        self.image_plots = []
+        for i in range(4):
+            img_view = self.plot_widget.addPlot(row=0, col=i)
+            img_view.setTitle(image_titles[i], color='b', size="12pt")
+            img_view.setLabel('left', image_y_labels[i], color='r', size="10pt")
+            img_view.setLabel('bottom', image_x_labels[i], color='g', size="10pt")
+
+            img_item = pg.ImageItem()
+            img_view.addItem(img_item)
+            self.image_plots.append(img_item)
+
+        # Adding the buttons in two columns at the bottom right
+        button_layout = QtWidgets.QGridLayout()
+        button_layout.addWidget(self.run_button, 0, 0)
+        button_layout.addWidget(self.pause_button, 0, 1)
+        button_layout.addWidget(self.zero_gains_button, 1, 0)
+        button_layout.addWidget(self.reset_button, 1, 1)
+        button_layout.addWidget(self.save_button, 2, 0, 1, 2)  # Save Telemetry button in 1 column span
+
+        # Command prompt (bottom left)
+        command_layout = QtWidgets.QVBoxLayout()
+        command_layout.addWidget(self.prompt_history)
+        command_layout.addWidget(self.prompt_input)
+
+        # Add widgets to the main layout
+        self.layout.addWidget(self.plot_widget, 0, 0, 1, 2)  # Plots at the top
+        self.layout.addLayout(command_layout, 1, 0)  # Command prompt on the bottom left
+        self.layout.addLayout(button_layout, 1, 1)  # Buttons on the bottom right
+
+        # Add the LED next to the buttons
+        self.layout.addWidget(self.status_led, 2, 1, QtCore.Qt.AlignRight)
+
+        # Set stretch to ensure the top takes most space
+        self.layout.setRowStretch(0, 4)  # The plot area (row 0) takes up more space
+        self.layout.setRowStretch(1, 1)  # The bottom row takes less space
+        self.layout.setColumnStretch(0, 3)  # The command prompt area gets more space
+        self.layout.setColumnStretch(1, 1)  # The button area gets less space
+
+        # Set the layout
+        self.setLayout(self.layout)
+
+        # Initialize a completer (UPDATED SECTION)
+        self.completer = QtWidgets.QCompleter(self)  # Create the completer
+        self.prompt_input.setCompleter(self.completer)  # Set it to work with the input field
+        self.update_completer()  # Initialize completer suggestions
+
+
+        # Connect the returnPressed signal to the command handler
+        self.prompt_input.returnPressed.connect(self.handle_command)
+
+        # Timer for running the AO_iteration in a loop
+        self.timer = QtCore.QTimer()
+        self.timer.timeout.connect(self.run_AO_iteration)
+        self.loop_running = False
 
 
         # Initialize lists for storing PlotDataItems for e_HO_list and e_TT_list
@@ -105,6 +185,21 @@ class AOControlApp(QtWidgets.QWidget):
         self.timer.timeout.connect(self.run_AO_iteration)
         self.loop_running = False
 
+
+    def update_completer(self):
+        """Update the completer suggestions based on current global variables."""
+        # Get the list of global variable names
+        global_vars = list(globals().keys())
+
+        # Create a QCompleter model with global variable names
+        model = QtGui.QStandardItemModel(self.completer)
+        for var in global_vars:
+            item = QtGui.QStandardItem(var)
+            model.appendRow(item)
+
+        # Set the model in the completer
+        self.completer.setModel(model)
+        
     def run_loop(self):
         if not self.loop_running:
             self.loop_running = True
@@ -135,7 +230,7 @@ class AOControlApp(QtWidgets.QWidget):
         self.e_HO_items.clear()
         self.e_TT_items.clear()
     
-        
+ 
     def update_led(self, running):
         """Update the LED color depending on whether the system is running."""
         if running:
@@ -143,47 +238,100 @@ class AOControlApp(QtWidgets.QWidget):
         else:
             self.status_led.setStyleSheet("background-color: red; border-radius: 10px;")
 
+    def save_telemetry(self):
+        # save telelmetry from the simulation 
+        bldr.save_telemetry( zwfs_ns , savename = None)
 
-    def check_input(self):
+
+    def handle_command(self):
+        # Get the user input command
+        command = self.prompt_input.text()
+
+        # Add the command to history and the command list
+        self.command_history.append(command)
+        self.history_index = len(self.command_history)
+
+        # Display the command in the prompt history
+        self.prompt_history.append(f"> {command}")
+
+        try:
+            # Execute the command in the same environment using exec()
+            # Use `globals()` to allow the command to access and modify variables
+            exec(command, globals() ) #, locals())
+            self.prompt_history.append("Command executed.")
+            
+            #if 'dm_disturbance' in command:
+            #    self.prompt_history.append("dm_disturbance updated.")
+                
+                
+        except Exception as e:
+            # Capture and display errors in the prompt history
+            error_msg = traceback.format_exc()  # Get detailed error message
+            self.prompt_history.append(f"Error: {str(e)}\n{error_msg}")
+
+        self.update_completer()
+        # Clear the input field
+        self.prompt_input.clear()
+
+
+
+    def keyPressEvent(self, event):
+        """Handle arrow up/down to navigate through the command history."""
+        if event.key() == QtCore.Qt.Key_Up:
+            # Go up in the history
+            if self.history_index > 0:
+                self.history_index -= 1
+                self.prompt_input.setText(self.command_history[self.history_index])
+        elif event.key() == QtCore.Qt.Key_Down:
+            # Go down in the history
+            if self.history_index < len(self.command_history) - 1:
+                self.history_index += 1
+                self.prompt_input.setText(self.command_history[self.history_index])
+            else:
+                self.history_index = len(self.command_history)
+                self.prompt_input.clear()
+
+
+
+    # def check_input(self):
         
-        user_input = self.text_input.text()
-        self.pause_loop()
-        # Placeholder: Add conditions for user input processing
-        print(f"User input: {user_input}")  # Replace with actual processing logic
+    #     user_input = self.text_input.text()
+    #     # self.pause_loop()
+    #     # Placeholder: Add conditions for user input processing
+    #     print(f"User input: {user_input}")  # Replace with actual processing logic
         
-        if 'kpHO*=' in user_input:
-            factor = float( user_input.split('=')[-1] )
-            zwfs_ns.ctrl.HO_ctrl.kp *= factor
-        if 'kpTT*=' in user_input:
-            factor = float( user_input.split('=')[-1] )
-            zwfs_ns.ctrl.TT_ctrl.kp *= factor
-        if 'kiHO*=' in user_input:
-            factor = float( user_input.split('=')[-1] )
-            zwfs_ns.ctrl.HO_ctrl.ki *= factor
-        if 'kiTT*=' in user_input:
-            factor = float( user_input.split('=')[-1] )
-            zwfs_ns.ctrl.TT_ctrl.ki *= factor
+    #     if 'kpHO*=' in user_input:
+    #         factor = float( user_input.split('=')[-1] )
+    #         zwfs_ns.ctrl.HO_ctrl.kp *= factor
+    #     if 'kpTT*=' in user_input:
+    #         factor = float( user_input.split('=')[-1] )
+    #         zwfs_ns.ctrl.TT_ctrl.kp *= factor
+    #     if 'kiHO*=' in user_input:
+    #         factor = float( user_input.split('=')[-1] )
+    #         zwfs_ns.ctrl.HO_ctrl.ki *= factor
+    #     if 'kiTT*=' in user_input:
+    #         factor = float( user_input.split('=')[-1] )
+    #         zwfs_ns.ctrl.TT_ctrl.ki *= factor
 
         
-        if 'kpHO[' in user_input:
-            index = int( user_input.split('[')[1].split(']')[0] )
-            value = float( user_input.split('=')[-1] )
-            zwfs_ns.ctrl.HO_ctrl.kp[index] = value
-        if 'kpTT[' in user_input:
-            index = int( user_input.split('[')[1].split(']')[0] )
-            value = float( user_input.split('=')[-1] )
-            zwfs_ns.ctrl.TT_ctrl.kp[index] = value
-        if 'kiHO[' in user_input:
-            index = int( user_input.split('[')[1].split(']')[0] )
-            value = float( user_input.split('=')[-1] )
-            zwfs_ns.ctrl.HO_ctrl.ki[index] = value
-        if 'kiTT[' in user_input:
-            index = int( user_input.split('[')[1].split(']')[0] )
-            value = float( user_input.split('=')[-1] )
-            zwfs_ns.ctrl.TT_ctrl.ki[index] = value
-
-                    
-        self.run_loop()
+    #     if 'kpHO[' in user_input:
+    #         index = int( user_input.split('[')[1].split(']')[0] )
+    #         value = float( user_input.split('=')[-1] )
+    #         zwfs_ns.ctrl.HO_ctrl.kp[index] = value
+    #     if 'kpTT[' in user_input:
+    #         index = int( user_input.split('[')[1].split(']')[0] )
+    #         value = float( user_input.split('=')[-1] )
+    #         zwfs_ns.ctrl.TT_ctrl.kp[index] = value
+    #     if 'kiHO[' in user_input:
+    #         index = int( user_input.split('[')[1].split(']')[0] )
+    #         value = float( user_input.split('=')[-1] )
+    #         zwfs_ns.ctrl.HO_ctrl.ki[index] = value
+    #     if 'kiTT[' in user_input:
+    #         index = int( user_input.split('[')[1].split(']')[0] )
+    #         value = float( user_input.split('=')[-1] )
+    #         zwfs_ns.ctrl.TT_ctrl.ki[index] = value
+           
+        #self.run_loop()
 
     def run_AO_iteration(self):
         
@@ -196,6 +344,10 @@ class AOControlApp(QtWidgets.QWidget):
         im_int = zwfs_ns.telem.i_list[-1]/np.mean(zwfs_ns.telem.i_list[-1])   - zwfs_ns.reco.I0/np.mean( zwfs_ns.reco.I0 ) #zwfs_ns.telem.i_list[-1]
         im_cmd = util.get_DM_command_in_2D(np.array(zwfs_ns.telem.c_TT_list[-1]) + np.array(zwfs_ns.telem.c_HO_list[-1]))
 
+        # Clear the old image items (and any axes if needed)
+        for i in range(4):
+            self.img_views[i].clear()  # Clear the entire plot view, including axes
+    
         # Update images in the PyQtGraph interface
         self.image_plots[0].setImage(im_dm_dist)
         self.image_plots[1].setImage(im_phase)
@@ -330,15 +482,19 @@ bldr.plot_eigenmodes( zwfs_ns , save_path = None )
 
 TT_vectors = gen_basis.get_tip_tilt_vectors()
 
+HO_dm_disturb = gen_basis.construct_command_basis( 'fourier_pinned_edges')
+
+
 #zwfs_ns = bldr.construct_ctrl_matricies_from_IM(zwfs_ns,  method = 'Eigen_TT-HO', Smax = 50, TT_vectors = TT_vectors )
 zwfs_ns = bldr.construct_ctrl_matricies_from_IM(zwfs_ns,  method = 'Eigen_TT-HO', Smax = 20, TT_vectors = TT_vectors )
 
-#zwfs_ns = bldr.add_controllers( zwfs_ns, TT = 'PID', HO = 'leaky')
+#zwfs_ns = bldr.add_controllers( zwfs_ns, TT = 'PID', HO = 'pid')
 zwfs_ns = bldr.add_controllers( zwfs_ns, TT = 'PID', HO = 'leaky')
 
 #zwfs_ns = init_CL_simulation( zwfs_ns,  opd_internal, amp_input , basis, Nmodes, poke_amp, Smax )
             
 dm_disturbance = 0.1 * TT_vectors.T[0]
+#dm_disturbance = 0.1 * HO_dm_disturb.T[3]
 #zwfs_ns.dm.current_cmd =  zwfs_ns.dm.dm_flat + disturbance_cmd 
 
 # as example how to reset telemetry
@@ -419,11 +575,90 @@ if __name__ == "__main__":
     zwfs_ns.ctrl.TT_ctrl.kp = 1 * np.ones( len(zwfs_ns.ctrl.TT_ctrl.kp) )
     zwfs_ns.ctrl.TT_ctrl.ki = 0.5 * np.ones( len(zwfs_ns.ctrl.TT_ctrl.ki) )
     
+    
+    """
+    # some prompts 
+    # change dm disturbance
+    dm_disturbance = 0.1 * HO_dm_disturb.T[3] + 0.1 * TT_vectors.T[0]
+    # change TT 
+    zwfs_ns.ctrl.TT_ctrl.kp = 1 * np.ones( len(zwfs_ns.ctrl.TT_ctrl.kp) )
+    zwfs_ns.ctrl.TT_ctrl.ki = 0.5 * np.ones( len(zwfs_ns.ctrl.TT_ctrl.kp) )
+    zwfs_ns.ctrl.HO_ctrl.ki[2:6] = 0.5 
+    """
 
-
+    # only execute once in a given session 
     app = QtWidgets.QApplication(sys.argv)
     
     window = AOControlApp()
     window.setWindowTitle("AO Control GUI")
     window.show()
     sys.exit(app.exec_())
+
+
+
+"""        class AOControlApp(QtWidgets.QWidget):
+    def __init__(self):
+        super().__init__()
+
+        # Layout
+        self.layout = QtWidgets.QVBoxLayout()
+
+        # Buttons
+        self.run_button = QtWidgets.QPushButton("Run")
+        self.pause_button = QtWidgets.QPushButton("Pause")
+        self.zero_gains_button = QtWidgets.QPushButton("Set Gains to Zero")
+        self.reset_button = QtWidgets.QPushButton("Reset")
+        #self.reset_button = QtWidgets.QPushButton("reset")
+        
+        # Visual "LED" for running state
+        self.status_led = QtWidgets.QLabel()
+        self.status_led.setFixedSize(20, 20)
+        self.update_led(False)  # Initialize as "not running" (False)
+
+        # Connect buttons to functions
+        self.run_button.clicked.connect(self.run_loop)
+        self.pause_button.clicked.connect(self.pause_loop)
+        self.zero_gains_button.clicked.connect(self.set_gains_to_zero)
+        self.reset_button.clicked.connect(self.reset)
+        #self.reset_button.clicked.connect(self.reset)
+
+        # Text input for user
+        ## older input style
+        #self.input_label = QtWidgets.QLabel("User Input:")
+        #self.text_input = QtWidgets.QLineEdit()
+        #self.text_input.returnPressed.connect(self.check_input)
+        
+        
+        # Terminal-like prompt setup
+        self.prompt_history = QtWidgets.QTextEdit()
+        self.prompt_history.setReadOnly(True)  # History is read-only
+        self.prompt_input = QtWidgets.QLineEdit()
+        self.prompt_input.returnPressed.connect(self.handle_command)
+
+        sys.stdout = OutputRedirector(self.prompt_history)  # Redirect stdout
+
+        # Add prompt history and input to layout
+        self.layout.addWidget(self.prompt_history)
+        self.layout.addWidget(self.prompt_input)
+
+        # Store history of entered commands
+        self.command_history = []
+        self.history_index = -1  # Track the command index
+
+        # Set the layout
+
+        # Add buttons and input to layout
+        self.layout.addWidget(self.run_button)
+        self.layout.addWidget(self.pause_button)
+        self.layout.addWidget(self.zero_gains_button)
+        self.layout.addWidget(self.reset_button)
+        
+        #self.layout.addWidget(self.reset_button)
+        #self.layout.addWidget(self.input_label)
+        #self.layout.addWidget(self.text_input)
+        self.layout.addWidget(self.status_led)  # Add LED to the layout
+        
+        # PyQtGraph plots
+        self.plot_widget = pg.GraphicsLayoutWidget()
+        self.layout.addWidget(self.plot_widget)
+"""

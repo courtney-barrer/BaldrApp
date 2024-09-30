@@ -2,7 +2,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from types import SimpleNamespace
 import datetime 
-
+from astropy.io import fits 
 import utilities as util
 import DM_basis as gen_basis
 
@@ -182,6 +182,33 @@ def init_telem_dict():
     }
     return telemetry_dict
 
+
+def save_telemetry( zwfs_ns , savename = None):
+    
+    tstamp = datetime.datetime.now().strftime("%d-%m-%YT%H.%M.%S")
+
+    telem_dict = vars(zwfs_ns.telem )
+    # Create a list of HDUs (Header Data Units)
+    hdul = fits.HDUList()
+
+    # Add each list to the HDU list as a new extension
+    for list_name, data_list in telem_dict.items():
+        # Convert list to numpy array for FITS compatibility
+        data_array = np.array(data_list, dtype=float)  # Ensure it is a float array or any appropriate type
+
+        # Create a new ImageHDU with the data
+        hdu = fits.ImageHDU(data_array)
+
+        # Set the EXTNAME header to the variable name
+        hdu.header['EXTNAME'] = list_name
+
+        # Append the HDU to the HDU list
+        hdul.append(hdu)
+
+    # Write the HDU list to a FITS file
+    if savename is None:
+        savename = f'~/Downloads/telemetry_simulation_{tstamp}.fits'
+    hdul.writeto( savename, overwrite=True)
 
 
 

@@ -310,10 +310,9 @@ util.create_telem_mosaic(image_list, image_title_list, image_colorbar_list,
 
 
 
-
-
-
-
+#####################
+## REAL TIME SIMULATION APP 
+####################
 
 
 import sys
@@ -349,7 +348,7 @@ class AOControlApp(QtWidgets.QWidget):
         self.layout.addWidget(self.run_button)
         self.layout.addWidget(self.pause_button)
         self.layout.addWidget(self.zero_gains_button)
-        self.layout.addWidget(self.reset)
+        self.layout.addWidget(self.reset_button)
         self.layout.addWidget(self.input_label)
         self.layout.addWidget(self.text_input)
 
@@ -418,7 +417,25 @@ class AOControlApp(QtWidgets.QWidget):
             factor = float( user_input.split('=')[-1] )
             zwfs_ns.ctrl.TT_ctrl.ki *= factor
 
-            
+        
+        if 'kpHO[' in user_input:
+            index = int( user_input.split('[')[1].split(']')[0] )
+            value = float( user_input.split('=')[-1] )
+            zwfs_ns.ctrl.HO_ctrl.kp[index] = value
+        if 'kpTT[' in user_input:
+            index = int( user_input.split('[')[1].split(']')[0] )
+            value = float( user_input.split('=')[-1] )
+            zwfs_ns.ctrl.TT_ctrl.kp[index] = value
+        if 'kiHO[' in user_input:
+            index = int( user_input.split('[')[1].split(']')[0] )
+            value = float( user_input.split('=')[-1] )
+            zwfs_ns.ctrl.HO_ctrl.ki[index] = value
+        if 'kiTT[' in user_input:
+            index = int( user_input.split('[')[1].split(']')[0] )
+            value = float( user_input.split('=')[-1] )
+            zwfs_ns.ctrl.TT_ctrl.ki[index] = value
+
+                    
         self.run_loop()
 
     def run_AO_iteration(self):
