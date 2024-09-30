@@ -5,17 +5,16 @@ from types import SimpleNamespace
 import importlib 
 from matplotlib.gridspec import GridSpec
 from mpl_toolkits.axes_grid1 import make_axes_locatable
-
-import Baldr_closeloop as bldr
-import DM_basis as gen_basis
-import utilities as util
-
+import json
 import sys
 from PyQt5 import QtWidgets, QtCore,  QtGui
 import pyqtgraph as pg
 import traceback
 
-# Create a class to redirect stdout to the QTextEdit widget
+
+import Baldr_closeloop as bldr
+import DM_basis as gen_basis
+import utilities as util
 
 # Create a class to redirect stdout to the QTextEdit widget
 class OutputRedirector:
@@ -47,6 +46,10 @@ class AOControlApp(QtWidgets.QWidget):
         self.zero_gains_button = QtWidgets.QPushButton("Set Gains to Zero")
         self.reset_button = QtWidgets.QPushButton("Reset")
         self.save_button = QtWidgets.QPushButton("Save Telemetry")
+    
+        # Buttons for saving and loading the zwfs_ns state
+        self.save_zwfs_ns_button = QtWidgets.QPushButton("Save config.")
+        self.load_zwfs_ns_button = QtWidgets.QPushButton("Load config.")
 
         # Make buttons smaller
         button_size = QtCore.QSize(120, 30)  # Set the button size
@@ -55,6 +58,8 @@ class AOControlApp(QtWidgets.QWidget):
         self.zero_gains_button.setFixedSize(button_size)
         self.reset_button.setFixedSize(button_size)
         self.save_button.setFixedSize(button_size)
+        self.save_zwfs_ns_button.setFixedSize(button_size)
+        self.load_zwfs_ns_button.setFixedSize(button_size)
 
         # Connect buttons to functions
         self.run_button.clicked.connect(self.run_loop)
@@ -62,6 +67,8 @@ class AOControlApp(QtWidgets.QWidget):
         self.zero_gains_button.clicked.connect(self.set_gains_to_zero)
         self.reset_button.clicked.connect(self.reset)
         self.save_button.clicked.connect(self.save_telemetry)  # Placeholder function
+        self.save_zwfs_ns_button.clicked.connect(self.save_zwfs_ns_to_json)
+        self.load_zwfs_ns_button.clicked.connect(self.load_zwfs_ns_from_json) 
 
         # Visual "LED" for running state
         self.status_led = QtWidgets.QLabel()
@@ -81,21 +88,35 @@ class AOControlApp(QtWidgets.QWidget):
         self.plot_widget = pg.GraphicsLayoutWidget()
 
         # Adding the plots above
-        image_titles = ["DM Disturbance", "Input Phase", "Intensity", "Reconstructed Command"]
-        image_x_labels = ["X actuator", "X-Axis", "Pixels", "X actuator"]
-        image_y_labels = ["Y actuator", "Y-Axis", "Pixels", "Y actuator"]
+        # image_titles = ["DM Disturbance", "Input Phase", "Intensity", "Reconstructed Command"]
+        # image_x_labels = ["X actuator", "X-Axis", "Pixels", "X actuator"]
+        # image_y_labels = ["Y actuator", "Y-Axis", "Pixels", "Y actuator"]
 
-        self.image_plots = []
-        for i in range(4):
-            img_view = self.plot_widget.addPlot(row=0, col=i)
-            img_view.setTitle(image_titles[i], color='b', size="12pt")
-            img_view.setLabel('left', image_y_labels[i], color='r', size="10pt")
-            img_view.setLabel('bottom', image_x_labels[i], color='g', size="10pt")
+        # self.image_plots = []
+        # for i in range(4):
+        #     img_view = self.plot_widget.addPlot(row=0, col=i)
+        #     img_view.setTitle(image_titles[i], color='b', size="12pt")
+        #     img_view.setLabel('left', image_y_labels[i], color='r', size="10pt")
+        #     img_view.setLabel('bottom', image_x_labels[i], color='g', size="10pt")
 
-            img_item = pg.ImageItem()
-            img_view.addItem(img_item)
-            self.image_plots.append(img_item)
+        #     img_item = pg.ImageItem()
+        #     img_view.addItem(img_item)
+        #     self.image_plots.append(img_item)
 
+        # self.image_plots = []
+        # for i in range(4):
+        #     img_view = pg.ViewBox()  # Create a ViewBox instead of addPlot
+        #     self.plot_widget.addItem(img_view, row=0, col=i)  # Add ViewBox to the layout
+            
+        #     # Create a LabelItem for the titles and add to the layout
+        #     title = pg.LabelItem(image_titles[i], size="12pt", color='b')
+        #     self.plot_widget.addItem(title, row=1, col=i)
+            
+        #     # Set labels using LabelItems or other widget elements, since ViewBox does not have labels.
+        #     img_item = pg.ImageItem()
+        #     img_view.addItem(img_item)  # Add the ImageItem to the ViewBox
+        #     self.image_plots.append(img_item)
+            
         # Adding the buttons in two columns at the bottom right
         button_layout = QtWidgets.QGridLayout()
         button_layout.addWidget(self.run_button, 0, 0)
@@ -103,6 +124,9 @@ class AOControlApp(QtWidgets.QWidget):
         button_layout.addWidget(self.zero_gains_button, 1, 0)
         button_layout.addWidget(self.reset_button, 1, 1)
         button_layout.addWidget(self.save_button, 2, 0, 1, 2)  # Save Telemetry button in 1 column span
+        # Adding these buttons to the button layout (assuming it's on the right side)
+        button_layout.addWidget(self.save_zwfs_ns_button, 3, 0, 1, 2)  # Save button in the next row
+        button_layout.addWidget(self.load_zwfs_ns_button, 4, 0, 1, 2)  # Load button in the next row
 
         # Command prompt (bottom left)
         command_layout = QtWidgets.QVBoxLayout()
@@ -148,8 +172,8 @@ class AOControlApp(QtWidgets.QWidget):
 
         # Create Image and Line plots in PyQtGraph
         image_titles = ["DM Disturbance", "Input Phase", "Intensity", "Reconstructed Command"]
-        image_x_labels = ["X actuator", "X-Axis", "Pixels", "X actuator"]
-        image_y_labels = ["Y actuator", "Y-Axis", "Pixels", "Y actuator"]
+        #image_x_labels = ["X actuator", "X-Axis", "Pixels", "X actuator"]
+        #image_y_labels = ["Y actuator", "Y-Axis", "Pixels", "Y actuator"]
 
 
         self.image_plots = []
@@ -158,9 +182,10 @@ class AOControlApp(QtWidgets.QWidget):
             
             # Set title and labels for each image plot
             img_view.setTitle(image_titles[i], color='b', size="12pt")  # Set the title
-            img_view.setLabel('left', image_y_labels[i], color='r', size="10pt")  # Set Y-axis label
-            img_view.setLabel('bottom', image_x_labels[i], color='g', size="10pt")  # Set X-axis label
-
+            #img_view.setLabel('left', image_y_labels[i], color='r', size="10pt")  # Set Y-axis label
+            #img_view.setLabel('bottom', image_x_labels[i], color='g', size="10pt")  # Set X-axis label
+            #title = self.plot_widget.addLabel(image_titles[i], row=0, col=i)  # Title on row 0, image on row 1
+    
             img_item = pg.ImageItem()
             img_view.addItem(img_item)
             self.image_plots.append(img_item)
@@ -200,6 +225,7 @@ class AOControlApp(QtWidgets.QWidget):
         # Set the model in the completer
         self.completer.setModel(model)
         
+
     def run_loop(self):
         if not self.loop_running:
             self.loop_running = True
@@ -240,7 +266,104 @@ class AOControlApp(QtWidgets.QWidget):
 
     def save_telemetry(self):
         # save telelmetry from the simulation 
-        bldr.save_telemetry( zwfs_ns , savename = None)
+        
+        options = QtWidgets.QFileDialog.Options()
+        options |= QtWidgets.QFileDialog.DontUseNativeDialog
+        file_name, _ = QtWidgets.QFileDialog.getSaveFileName(self, "Save zwfs_ns.telem as fits", "", "FITS Files (*.fits);;All Files (*)", options=options)
+        
+        if file_name:
+            
+            bldr.save_telemetry( zwfs_ns , savename = file_name )
+
+
+    def save_zwfs_ns_to_json(self):
+        options = QtWidgets.QFileDialog.Options()
+        options |= QtWidgets.QFileDialog.DontUseNativeDialog
+        file_name, _ = QtWidgets.QFileDialog.getSaveFileName(self, "Save zwfs_ns as JSON", "", "JSON Files (*.json);;All Files (*)", options=options)
+        
+        if file_name:
+            try:
+                serialized_data = serialize_object(zwfs_ns)
+                with open(file_name, 'w') as json_file:
+                    json.dump(serialized_data, json_file, indent=4)
+                print(f"Saved zwfs_ns to {file_name}")
+            except Exception as e:
+                print(f"Error saving zwfs_ns: {str(e)}")
+
+    # def load_zwfs_ns_from_json(self):
+    #     options = QtWidgets.QFileDialog.Options()
+    #     options |= QtWidgets.QFileDialog.DontUseNativeDialog
+    #     file_name, _ = QtWidgets.QFileDialog.getOpenFileName(self, "Load zwfs_ns from JSON", "", "JSON Files (*.json);;All Files (*)", options=options)
+        
+    #     if file_name:
+    #         try:
+    #             with open(file_name, 'r') as json_file:
+    #                 loaded_data = json.load(json_file)
+                
+    #             global zwfs_ns
+    #             zwfs_ns = deserialize_object(loaded_data)
+    #             print(f"Loaded zwfs_ns from {file_name}")
+    #         except Exception as e:
+    #             print(f"Error loading zwfs_ns: {str(e)}")
+
+
+
+
+    def load_zwfs_ns_from_json(self):
+        options = QtWidgets.QFileDialog.Options()
+        options |= QtWidgets.QFileDialog.DontUseNativeDialog
+        file_name, _ = QtWidgets.QFileDialog.getOpenFileName(self, "Load zwfs_ns from JSON", "", "JSON Files (*.json);;All Files (*)", options=options)
+
+        if file_name:
+            try:
+                with open(file_name, 'r') as json_file:
+                    loaded_data = json.load(json_file)
+
+                global zwfs_ns
+                zwfs_ns = deserialize_object(loaded_data)  # Load data into zwfs_ns
+                
+                # reset the telemetry
+                zwfs_ns = bldr.reset_telemetry( zwfs_ns )
+                
+                # Reinitialize zwfs_ns.ctrl.TT_ctrl and zwfs_ns.ctrl.HO_ctrl based on their ctrl_type
+                if zwfs_ns.ctrl.TT_ctrl.ctrl_type == 'PID':
+                    zwfs_ns.ctrl.TT_ctrl = bldr.PIDController(
+                        kp=zwfs_ns.ctrl.TT_ctrl.kp,
+                        ki=zwfs_ns.ctrl.TT_ctrl.ki,
+                        kd=zwfs_ns.ctrl.TT_ctrl.kd,
+                        upper_limit=zwfs_ns.ctrl.TT_ctrl.upper_limit,
+                        lower_limit=zwfs_ns.ctrl.TT_ctrl.lower_limit,
+                        setpoint=zwfs_ns.ctrl.TT_ctrl.setpoint
+                    )
+                elif zwfs_ns.ctrl.TT_ctrl.ctrl_type == 'Leaky':
+                    zwfs_ns.ctrl.TT_ctrl = bldr.LeakyIntegrator(
+                        ki=zwfs_ns.ctrl.TT_ctrl.ki,
+                        lower_limit=zwfs_ns.ctrl.TT_ctrl.lower_limit,
+                        upper_limit=zwfs_ns.ctrl.TT_ctrl.upper_limit,
+                        kp=zwfs_ns.ctrl.TT_ctrl.kp
+                    )
+
+                if zwfs_ns.ctrl.HO_ctrl.ctrl_type == 'PID':
+                    zwfs_ns.ctrl.HO_ctrl = bldr.PIDController(
+                        kp=zwfs_ns.ctrl.HO_ctrl.kp,
+                        ki=zwfs_ns.ctrl.HO_ctrl.ki,
+                        kd=zwfs_ns.ctrl.HO_ctrl.kd,
+                        upper_limit=zwfs_ns.ctrl.HO_ctrl.upper_limit,
+                        lower_limit=zwfs_ns.ctrl.HO_ctrl.lower_limit,
+                        setpoint=zwfs_ns.ctrl.HO_ctrl.setpoint
+                    )
+                elif zwfs_ns.ctrl.HO_ctrl.ctrl_type == 'Leaky':
+                    zwfs_ns.ctrl.HO_ctrl = bldr.LeakyIntegrator(
+                        ki=zwfs_ns.ctrl.HO_ctrl.ki,
+                        lower_limit=zwfs_ns.ctrl.HO_ctrl.lower_limit,
+                        upper_limit=zwfs_ns.ctrl.HO_ctrl.upper_limit,
+                        kp=zwfs_ns.ctrl.HO_ctrl.kp
+                    )
+
+                print(f"Loaded zwfs_ns from {file_name}")
+            except Exception as e:
+                print(f"Error loading zwfs_ns: {str(e)}")
+
 
 
     def handle_command(self):
@@ -335,6 +458,9 @@ class AOControlApp(QtWidgets.QWidget):
 
     def run_AO_iteration(self):
         
+        if dynamic_opd_input:
+            opd_input = update_opd_input( update_function,  )
+         
         # Call the AO iteration function from your module
         bldr.AO_iteration( opd_input, amp_input, opd_internal, zwfs_ns.reco.I0,  zwfs_ns, dm_disturbance, record_telemetry=True ,detector=detector)
 
@@ -344,10 +470,7 @@ class AOControlApp(QtWidgets.QWidget):
         im_int = zwfs_ns.telem.i_list[-1]/np.mean(zwfs_ns.telem.i_list[-1])   - zwfs_ns.reco.I0/np.mean( zwfs_ns.reco.I0 ) #zwfs_ns.telem.i_list[-1]
         im_cmd = util.get_DM_command_in_2D(np.array(zwfs_ns.telem.c_TT_list[-1]) + np.array(zwfs_ns.telem.c_HO_list[-1]))
 
-        # Clear the old image items (and any axes if needed)
-        for i in range(4):
-            self.img_views[i].clear()  # Clear the entire plot view, including axes
-    
+
         # Update images in the PyQtGraph interface
         self.image_plots[0].setImage(im_dm_dist)
         self.image_plots[1].setImage(im_phase)
@@ -413,148 +536,134 @@ class AOControlApp(QtWidgets.QWidget):
 
 
 
-# configure our zwfs 
-grid_dict = {
-    "D":1, # diameter of beam 
-    "N" : 64, # number of pixels across pupil diameter
-    "padding_factor" : 4, # how many pupil diameters fit into grid x axis
-    # TOTAL NUMBER OF PIXELS = padding_factor * N 
-    }
+def serialize_object(obj, path="root"):
+    """
+    Recursively serializes an object, handling SimpleNamespace, custom objects, and
+    ensuring basic Python types (int, float, str, etc.) and NumPy arrays are serialized properly.
+    The 'path' argument helps in identifying the problematic object during debugging.
+    """
+    if isinstance(obj, SimpleNamespace):
+        return {key: serialize_object(value, path=f"{path}.{key}") for key, value in vars(obj).items()}
+    elif isinstance(obj, dict):
+        # Handle invalid keys in the dictionary
+        serialized_dict = {}
+        for key, value in obj.items():
+            if isinstance(key, tuple):
+                # Convert tuple keys to strings
+                key = str(key)
+            if not isinstance(key, (str, int, float, bool, type(None))):
+                print(f"Invalid key type {type(key)} at path: {path} -> Key: {key}")
+                raise TypeError(f"Invalid key type: {type(key)}. Key: {key}, Path: {path}")
+            serialized_dict[key] = serialize_object(value, path=f"{path}.{key}")
+        return serialized_dict
+    elif isinstance(obj, np.ndarray):
+        return obj.tolist()  # Convert NumPy arrays to lists
+    elif isinstance(obj, (list, tuple)):
+        return [serialize_object(item, path=f"{path}[{idx}]") for idx, item in enumerate(obj)]
+    elif isinstance(obj, (int, float, str, bool, type(None))):
+        return obj  # Primitive types are directly serializable
+    elif hasattr(obj, '__dict__'):  # Custom object case, serialize its attributes
+        return {key: serialize_object(value, path=f"{path}.{key}") for key, value in vars(obj).items()}
+    else:
+        return str(obj)  # Convert non-serializable objects to strings
 
-optics_dict = {
-    "wvl0" :1.65e-6, # central wavelength (m) 
-    "F_number": 21.2, # F number on phasemask
-    "mask_diam": 1.06, # diameter of phaseshifting region in diffraction limit units (physical unit is mask_diam * 1.22 * F_number * lambda)
-    "theta": 1.57079, # phaseshift of phasemask 
-}
+def namespace_to_dict(namespace, exclude_keys=None):
+    """
+    Recursively converts a SimpleNamespace (and nested custom objects) to a dictionary.
+    Excludes specific keys during the conversion.
+    
+    Parameters:
+    - namespace: The SimpleNamespace to convert.
+    - exclude_keys: List of keys (strings) to exclude from the conversion.
+    """
+    if exclude_keys is None:
+        exclude_keys = []
+    
+    output_dict = {}
+    for key, value in vars(namespace).items():
+        if key not in exclude_keys:
+            output_dict[key] = serialize_object(value, path=key)
+    
+    return output_dict
 
-dm_dict = {
-    "dm_model":"BMC-multi-3.5",
-    "actuator_coupling_factor":0.7,# std of in actuator spacing of gaussian IF applied to each actuator. (e.g actuator_coupling_factor = 1 implies std of poke is 1 actuator across.)
-    "dm_pitch":1,
-    "dm_aoi":0, # angle of incidence of light on DM 
-    "opd_per_cmd" : 3e-6, # peak opd applied at center of actuator per command unit (normalized between 0-1) 
-    "flat_rmse" : 20e-9 # std (m) of flatness across Flat DM  
-    }
+def save_namespace_as_json(namespace, filename, exclude_keys=None):
+    """
+    Converts a SimpleNamespace to a dictionary and saves it as a JSON file.
+    Excludes specified keys from being serialized.
+    
+    Parameters:
+    - namespace: The SimpleNamespace to convert.
+    - filename: The name of the output JSON file.
+    - exclude_keys: List of keys (strings) to exclude from the conversion.
+    """
+    dict_representation = namespace_to_dict(namespace, exclude_keys)
+    
+    with open(filename, 'w') as json_file:
+        json.dump(dict_representation, json_file, indent=4)
 
-grid_ns = SimpleNamespace(**grid_dict)
-optics_ns = SimpleNamespace(**optics_dict)
-dm_ns = SimpleNamespace(**dm_dict)
+def deserialize_object(obj):
+    """
+    Recursively deserializes a JSON object back into the appropriate types, such as 
+    SimpleNamespace, np.ndarray, and primitive types. Converts lists back to np.array
+    where applicable.
+    """
+    # If the object is a dictionary, check for special cases
+    if isinstance(obj, dict):
+        # Check for any special markers like '__tuple__' or others
+        if "__tuple__" in obj:
+            return tuple(obj["__tuple__"])  # Convert back to a tuple
+        else:
+            # Convert the dict back to a SimpleNamespace or process nested dicts
+            deserialized_dict = {key: deserialize_object(value) for key, value in obj.items()}
+            return SimpleNamespace(**deserialized_dict)
 
+    # If the object is a list, we assume it was originally an np.array
+    elif isinstance(obj, list):
+        return np.array([deserialize_object(item) for item in obj])
 
-# Build IM  and look at Eigenmodes! 
-zwfs_ns = bldr.init_zwfs(grid_ns, optics_ns, dm_ns)
+    # Handle base cases: primitive types
+    elif isinstance(obj, (int, float, str, bool, type(None))):
+        return obj
+    
+    # If none of the above cases match, return the object as is (or raise an error)
+    return obj
 
-opd_input = 0 * zwfs_ns.grid.pupil_mask *  np.random.randn( *zwfs_ns.grid.pupil_mask.shape)
-
-opd_internal = 10e-9 * zwfs_ns.grid.pupil_mask * np.random.randn( *zwfs_ns.grid.pupil_mask.shape)
-
-amp_input = 1e4 * zwfs_ns.grid.pupil_mask
-
-
-#basis_name_list = ['Hadamard', "Zonal", "Zonal_pinned_edges", "Zernike", "Zernike_pinned_edges", "fourier", "fourier_pinned_edges"]
-
-# perfect field only with internal opd aberrations 
-# different poke methods 
-Nmodes = 100
-# ['Hadamard', "Zonal", "Zonal_pinned_edges", "Zernike", "Zernike_pinned_edges", "fourier", "fourier_pinned_edges"]
-basis = 'Zonal_pinned_edges' #'fourier_pinned_edges' #'Hadamard' #'Zonal_pinned_edges'
-poke_amp = 0.05
-Smax = 30
-detector = (4,4) # for binning , zwfs_ns.grid.N is #pixels across pupil diameter (64) therefore division 4 = 16 pixels (between CRed2 and Cred1 )
-#M2C_0 = gen_basis.construct_command_basis( basis= basis, number_of_modes = Nmodes, without_piston=True).T  
-
-#I0 = bldr.get_I0(  opd_input  = 0 *zwfs_ns.grid.pupil_mask ,   amp_input = amp_input,\
-#    opd_internal = opd_internal,  zwfs_ns= zwfs_ns , detector=None )
-
-#N0 = bldr.get_N0(  opd_input  = 0 *zwfs_ns.grid.pupil_mask  ,   amp_input = amp_input,\
-#    opd_internal = opd_internal,  zwfs_ns= zwfs_ns , detector=None )
-
-# we must first define our pupil regions before building 
-zwfs_ns = bldr.classify_pupil_regions( opd_input,  amp_input ,  opd_internal,  zwfs_ns , detector= detector) # For now detector is just tuple of pixels to average. useful to know is zwfs_ns.grid.N is number of pixels across pupil. # from this calculate an appropiate binning for detector 
-
-zwfs_ns = bldr.build_IM( zwfs_ns,  calibration_opd_input= 0 *zwfs_ns.grid.pupil_mask , calibration_amp_input = amp_input , \
-    opd_internal = opd_internal,  basis = basis, Nmodes =  Nmodes, poke_amp = poke_amp, poke_method = 'double_sided_poke',\
-        imgs_to_mean = 1, detector=detector )
-
-# look at the eigenmodes in camera, DM and singular values
-bldr.plot_eigenmodes( zwfs_ns , save_path = None )
-
-TT_vectors = gen_basis.get_tip_tilt_vectors()
-
-HO_dm_disturb = gen_basis.construct_command_basis( 'fourier_pinned_edges')
-
-
-#zwfs_ns = bldr.construct_ctrl_matricies_from_IM(zwfs_ns,  method = 'Eigen_TT-HO', Smax = 50, TT_vectors = TT_vectors )
-zwfs_ns = bldr.construct_ctrl_matricies_from_IM(zwfs_ns,  method = 'Eigen_TT-HO', Smax = 20, TT_vectors = TT_vectors )
-
-#zwfs_ns = bldr.add_controllers( zwfs_ns, TT = 'PID', HO = 'pid')
-zwfs_ns = bldr.add_controllers( zwfs_ns, TT = 'PID', HO = 'leaky')
-
-#zwfs_ns = init_CL_simulation( zwfs_ns,  opd_internal, amp_input , basis, Nmodes, poke_amp, Smax )
-            
-dm_disturbance = 0.1 * TT_vectors.T[0]
-#dm_disturbance = 0.1 * HO_dm_disturb.T[3]
-#zwfs_ns.dm.current_cmd =  zwfs_ns.dm.dm_flat + disturbance_cmd 
-
-# as example how to reset telemetry
-zwfs_ns.dm.current_cmd = zwfs_ns.dm.dm_flat + dm_disturbance
-zwfs_ns = bldr.reset_telemetry( zwfs_ns )
-zwfs_ns.ctrl.TT_ctrl.reset()
-zwfs_ns.ctrl.HO_ctrl.reset()
-zwfs_ns.ctrl.TT_ctrl.set_all_gains_to_zero()
-zwfs_ns.ctrl.HO_ctrl.set_all_gains_to_zero()
-
-plot = False
-if plot : 
-    close_after = 20
-    for i in range(100):
-        print(f'iteration {i}')
-        if i > close_after : 
-            #zwfs_ns.ctrl.HO_ctrl.ki = 0.2 * np.ones( len(zwfs_ns.ctrl.HO_ctrl.ki) )
-            #zwfs_ns.ctrl.HO_ctrl.kp = 1 * np.ones( len(zwfs_ns.ctrl.HO_ctrl.kp) )
-
-            zwfs_ns.ctrl.TT_ctrl.kp = 1 * np.ones( len(zwfs_ns.ctrl.TT_ctrl.kp) )
-            zwfs_ns.ctrl.TT_ctrl.ki = 0.8 * np.ones( len(zwfs_ns.ctrl.TT_ctrl.ki) )
-            
-        bldr.AO_iteration( opd_input, amp_input, opd_internal, zwfs_ns.reco.I0,  zwfs_ns, dm_disturbance, record_telemetry=True ,detector=detector)
-
-    # Generate some data
-
-    i = len(zwfs_ns.telem.rmse_list) - 1
-    plt.ioff() 
-            
-    #for i in range(10):
-    im_dm_dist = util.get_DM_command_in_2D( zwfs_ns.telem.dm_disturb_list[i] )
-    im_phase = zwfs_ns.telem.field_phase[i]
-    im_int = zwfs_ns.telem.i_list[i]
-    im_cmd = util.get_DM_command_in_2D( np.array(zwfs_ns.telem.c_TT_list[i]) + np.array(zwfs_ns.telem.c_HO_list[i])  ) 
-
-    #line_x = np.linspace(0, i, i)
-    line_eHO = zwfs_ns.telem.e_HO_list[:i]
-    line_eTT = zwfs_ns.telem.e_TT_list[:i]
-    line_S = zwfs_ns.telem.strehl[:i]
-    line_rmse = zwfs_ns.telem.rmse_list[:i]
-
-    # Define plot data
-    image_list = [im_dm_dist, im_phase, im_int, im_cmd]
-    image_title_list = ['DM disturbance', 'input phase', 'intensity', 'reco. command']
-    image_colorbar_list = ['DM units', 'radians', 'adu', 'DM units']
-
-    plot_list = [ line_eHO, line_eTT, line_S, line_rmse ] 
-    plot_ylabel_list = ['e_HO', 'e_TT', 'Strehl', 'rmse']
-    plot_xlabel_list = ['iteration' for _ in plot_list]
-    plot_title_list = ['' for _ in plot_list]
-
-    #vlims = [(0, 1), (0, 1), (0, 1)]  # Set vmin and vmax for each image
-
-    util.create_telem_mosaic(image_list, image_title_list, image_colorbar_list, 
-                    plot_list, plot_title_list, plot_xlabel_list, plot_ylabel_list)
+# def deserialize_object(obj, path="root"):
+#     """
+#     Recursively deserialize an object, converting lists back to tuples where needed
+#     and handling SimpleNamespace recreation.
+#     """
+#     if isinstance(obj, dict):
+#         # Detect if it's a SimpleNamespace-equivalent dictionary
+#         if "__tuple__" in obj:
+#             return tuple(deserialize_object(item, path=path) for item in obj["__tuple__"])
+#         else:
+#             # Reconstruct SimpleNamespace if applicable
+#             return SimpleNamespace(**{key: deserialize_object(value, path=f"{path}.{key}") for key, value in obj.items()})
+#     elif isinstance(obj, list):
+#         return [deserialize_object(item, path=f"{path}[{idx}]") for idx, item in enumerate(obj)]
+#     elif isinstance(obj, (int, float, str, bool, type(None))):
+#         return obj  # Primitive types remain unchanged
+#     else:
+#         return obj  # Return as-is if no conversion rule applies
 
 
 
 
+# def load_namespace_from_json(file_path):
+#     """
+#     Load the JSON file and convert it back into a SimpleNamespace object.
+#     """
+#     import json
+#     with open(file_path, 'r') as f:
+#         data = json.load(f)
 
+#     # Convert serialized JSON back into SimpleNamespace objects
+#     return deserialize_object(data)
+
+# Example usage
+#save_namespace_as_json(zwfs_ns, f'/Users/bencb/Downloads/zwfs_ns_config_.json', exclude_keys=['telem'])
+#zwfs_ns2 = load_namespace_from_json('/Users/bencb/Downloads/zwfs_ns_config_.json')
 
 
 #####################
@@ -563,6 +672,90 @@ if plot :
 
 if __name__ == "__main__":
     
+    # configure our zwfs 
+    grid_dict = {
+        "D":1, # diameter of beam 
+        "N" : 64, # number of pixels across pupil diameter
+        "padding_factor" : 4, # how many pupil diameters fit into grid x axis
+        # TOTAL NUMBER OF PIXELS = padding_factor * N 
+        }
+
+    optics_dict = {
+        "wvl0" :1.65e-6, # central wavelength (m) 
+        "F_number": 21.2, # F number on phasemask
+        "mask_diam": 1.06, # diameter of phaseshifting region in diffraction limit units (physical unit is mask_diam * 1.22 * F_number * lambda)
+        "theta": 1.57079, # phaseshift of phasemask 
+    }
+
+    dm_dict = {
+        "dm_model":"BMC-multi-3.5",
+        "actuator_coupling_factor":0.7,# std of in actuator spacing of gaussian IF applied to each actuator. (e.g actuator_coupling_factor = 1 implies std of poke is 1 actuator across.)
+        "dm_pitch":1,
+        "dm_aoi":0, # angle of incidence of light on DM 
+        "opd_per_cmd" : 3e-6, # peak opd applied at center of actuator per command unit (normalized between 0-1) 
+        "flat_rmse" : 20e-9 # std (m) of flatness across Flat DM  
+        }
+
+    grid_ns = SimpleNamespace(**grid_dict)
+    optics_ns = SimpleNamespace(**optics_dict)
+    dm_ns = SimpleNamespace(**dm_dict)
+
+
+    # Build IM  and look at Eigenmodes! 
+    zwfs_ns = bldr.init_zwfs(grid_ns, optics_ns, dm_ns)
+
+    opd_input = 0 * zwfs_ns.grid.pupil_mask *  np.random.randn( *zwfs_ns.grid.pupil_mask.shape)
+
+    opd_internal = 10e-9 * zwfs_ns.grid.pupil_mask * np.random.randn( *zwfs_ns.grid.pupil_mask.shape)
+
+    amp_input = 1e4 * zwfs_ns.grid.pupil_mask
+
+
+    #basis_name_list = ['Hadamard', "Zonal", "Zonal_pinned_edges", "Zernike", "Zernike_pinned_edges", "fourier", "fourier_pinned_edges"]
+
+    # perfect field only with internal opd aberrations 
+    # different poke methods 
+    Nmodes = 100
+    # ['Hadamard', "Zonal", "Zonal_pinned_edges", "Zernike", "Zernike_pinned_edges", "fourier", "fourier_pinned_edges"]
+    basis = 'Zonal_pinned_edges' #'fourier_pinned_edges' #'Hadamard' #'Zonal_pinned_edges'
+    poke_amp = 0.05
+    Smax = 30
+    detector = (4,4) # for binning , zwfs_ns.grid.N is #pixels across pupil diameter (64) therefore division 4 = 16 pixels (between CRed2 and Cred1 )
+    #M2C_0 = gen_basis.construct_command_basis( basis= basis, number_of_modes = Nmodes, without_piston=True).T  
+
+    #I0 = bldr.get_I0(  opd_input  = 0 *zwfs_ns.grid.pupil_mask ,   amp_input = amp_input,\
+    #    opd_internal = opd_internal,  zwfs_ns= zwfs_ns , detector=None )
+
+    #N0 = bldr.get_N0(  opd_input  = 0 *zwfs_ns.grid.pupil_mask  ,   amp_input = amp_input,\
+    #    opd_internal = opd_internal,  zwfs_ns= zwfs_ns , detector=None )
+
+    # we must first define our pupil regions before building 
+    zwfs_ns = bldr.classify_pupil_regions( opd_input,  amp_input ,  opd_internal,  zwfs_ns , detector= detector) # For now detector is just tuple of pixels to average. useful to know is zwfs_ns.grid.N is number of pixels across pupil. # from this calculate an appropiate binning for detector 
+
+    zwfs_ns = bldr.build_IM( zwfs_ns,  calibration_opd_input= 0 *zwfs_ns.grid.pupil_mask , calibration_amp_input = amp_input , \
+        opd_internal = opd_internal,  basis = basis, Nmodes =  Nmodes, poke_amp = poke_amp, poke_method = 'double_sided_poke',\
+            imgs_to_mean = 1, detector=detector )
+
+    # look at the eigenmodes in camera, DM and singular values
+    bldr.plot_eigenmodes( zwfs_ns , save_path = None )
+
+    TT_vectors = gen_basis.get_tip_tilt_vectors()
+
+    HO_dm_disturb = gen_basis.construct_command_basis( 'fourier_pinned_edges')
+
+
+    #zwfs_ns = bldr.construct_ctrl_matricies_from_IM(zwfs_ns,  method = 'Eigen_TT-HO', Smax = 50, TT_vectors = TT_vectors )
+    zwfs_ns = bldr.construct_ctrl_matricies_from_IM(zwfs_ns,  method = 'Eigen_TT-HO', Smax = 20, TT_vectors = TT_vectors )
+
+    #zwfs_ns = bldr.add_controllers( zwfs_ns, TT = 'PID', HO = 'pid')
+    zwfs_ns = bldr.add_controllers( zwfs_ns, TT = 'PID', HO = 'leaky')
+
+    #zwfs_ns = init_CL_simulation( zwfs_ns,  opd_internal, amp_input , basis, Nmodes, poke_amp, Smax )
+                
+    dm_disturbance = 0.1 * TT_vectors.T[0]
+    #dm_disturbance = 0.1 * HO_dm_disturb.T[3]
+    #zwfs_ns.dm.current_cmd =  zwfs_ns.dm.dm_flat + disturbance_cmd 
+
     zwfs_ns = bldr.reset_telemetry( zwfs_ns )
     zwfs_ns.ctrl.TT_ctrl.reset()
     zwfs_ns.ctrl.HO_ctrl.reset()

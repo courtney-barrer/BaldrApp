@@ -29,7 +29,8 @@ class PIDController:
         self.lower_limit = np.array(lower_limit)
         self.upper_limit = np.array(upper_limit)
         self.setpoint = np.array(setpoint)
-
+        self.ctrl_type = 'PID'
+        
         size = len(self.kp)
         self.output = np.zeros(size)
         self.integrals = np.zeros(size)
@@ -103,7 +104,7 @@ class LeakyIntegrator:
             self.lower_limit = np.array(lower_limit)
             self.upper_limit = np.array(upper_limit)
             self.kp = np.array(kp)  # kp is a vector now
-
+        self.ctrl_type = 'Leaky'
     def process(self, input_vector):
         input_vector = np.array(input_vector)
 
