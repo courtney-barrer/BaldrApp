@@ -459,7 +459,8 @@ class AOControlApp(QtWidgets.QWidget):
     def run_AO_iteration(self):
         
         if dynamic_opd_input:
-            opd_input = update_opd_input( update_function,  )
+            opd_input = update_opd_input( scrn, scaling_factor=1 )
+         
          
         # Call the AO iteration function from your module
         bldr.AO_iteration( opd_input, amp_input, opd_internal, zwfs_ns.reco.I0,  zwfs_ns, dm_disturbance, record_telemetry=True ,detector=detector)
@@ -536,6 +537,12 @@ class AOControlApp(QtWidgets.QWidget):
 
 
 
+def update_opd_input(scrn, scaling_factor = 1):
+    # update rolling phase screen if dynamic_opd_input 
+    scrn.add_row()
+    opd_input = scaling_factor * zwfs_ns.optics.wvl0 / (2*np.pi) * zwfs_ns.grid.pupil_mask * scrn.scrn
+    return opd_input 
+    
 def serialize_object(obj, path="root"):
     """
     Recursively serializes an object, handling SimpleNamespace, custom objects, and
@@ -751,8 +758,13 @@ if __name__ == "__main__":
     zwfs_ns = bldr.add_controllers( zwfs_ns, TT = 'PID', HO = 'leaky')
 
     #zwfs_ns = init_CL_simulation( zwfs_ns,  opd_internal, amp_input , basis, Nmodes, poke_amp, Smax )
-                
+    
+                    
     dm_disturbance = 0.1 * TT_vectors.T[0]
+    
+    scrn = aotools.infinitephasescreen.PhaseScreenVonKarman(nx_size= zwfs_ns.grid.N * zwfs_ns.grid.padding_factor, pixel_scale= zwfs_ns.grid.D / zwfs_ns.grid.N ,r0=0.1,L0=12)
+    dynamic_opd_input = True
+    
     #dm_disturbance = 0.1 * HO_dm_disturb.T[3]
     #zwfs_ns.dm.current_cmd =  zwfs_ns.dm.dm_flat + disturbance_cmd 
 
@@ -777,6 +789,8 @@ if __name__ == "__main__":
     zwfs_ns.ctrl.TT_ctrl.kp = 1 * np.ones( len(zwfs_ns.ctrl.TT_ctrl.kp) )
     zwfs_ns.ctrl.TT_ctrl.ki = 0.5 * np.ones( len(zwfs_ns.ctrl.TT_ctrl.kp) )
     zwfs_ns.ctrl.HO_ctrl.ki[2:6] = 0.5 
+    
+    dynamic_opd_input = True
     """
 
     # only execute once in a given session 
