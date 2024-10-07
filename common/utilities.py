@@ -155,3 +155,47 @@ def plot_eigenmodes( zwfs_ns , save_path = None ):
     if save_path is not None:
         plt.savefig(save_path +  f'dm_eignmodes_{tstamp}.png',bbox_inches='tight',dpi=200)
     plt.show()
+
+
+
+
+def create_phase_screen_cmd_for_DM(scrn,  scaling_factor=0.1, drop_indicies = None, plot_cmd=False):
+    """
+    aggregate a scrn (aotools.infinitephasescreen object) onto a DM command space. phase screen is normalized by
+    between +-0.5 and then scaled by scaling_factor. Final DM command values should
+    always be between -0.5,0.5 (this should be added to a flat reference so flat reference + phase screen should always be bounded between 0-1). phase screens are usually a NxN matrix, while DM is MxM with some missing pixels (e.g. 
+    corners). drop_indicies is a list of indicies in the flat MxM DM array that should not be included in the command space. 
+    """
+
+    #print('----------\ncheck phase screen size is multiple of DM\n--------')
+    
+    Nx_act = 12 #number of actuators across DM diameter
+    
+    scrn_array = ( scrn.scrn - np.min(scrn.scrn) ) / (np.max(scrn.scrn) - np.min(scrn.scrn)) - 0.5 # normalize phase screen between -0.5 - 0.5 
+    
+    size_factor = int(scrn_array.shape[0] / Nx_act) # how much bigger phase screen is to DM shape in x axis. Note this should be an integer!!
+    
+    # reshape screen so that axis 1,3 correspond to values that should be aggregated 
+    scrn_to_aggregate = scrn_array.reshape(scrn_array.shape[0]//size_factor, size_factor, scrn_array.shape[1]//size_factor, size_factor)
+    
+    # now aggreagate and apply the scaling factor 
+    scrn_on_DM = scaling_factor * np.mean( scrn_to_aggregate, axis=(1,3) ).reshape(-1) 
+
+    #If DM is missing corners etc we set these to nan and drop them before sending the DM command vector
+    #dm_cmd =  scrn_on_DM.to_list()
+    if drop_indicies is not None:
+        for i in drop_indicies:
+            scrn_on_DM[i]=np.nan
+             
+    if plot_cmd: #can be used as a check that the command looks right!
+        fig,ax = plt.subplots(1,2,figsize=(12,6))
+        im0 = ax[0].imshow( scrn_on_DM.reshape([Nx_act,Nx_act]) )
+        ax[0].set_title('DM command (averaging offset)')
+        im1 = ax[1].imshow(scrn.scrn)
+        ax[1].set_title('original phase screen')
+        plt.colorbar(im0, ax=ax[0])
+        plt.colorbar(im1, ax=ax[1]) 
+        plt.show() 
+
+    dm_cmd =  list( scrn_on_DM[np.isfinite(scrn_on_DM)] ) #drop non-finite values which should be nan values created from drop_indicies array
+    return(dm_cmd) 

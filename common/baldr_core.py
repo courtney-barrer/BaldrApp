@@ -942,21 +942,23 @@ def get_frame( opd_input,  amp_input ,  opd_internal,  zwfs_ns , detector=None):
     return Intensity
 
 
-def classify_pupil_regions( opd_input,  amp_input ,  opd_internal,  zwfs_ns , detector=None):
+def classify_pupil_regions( opd_input,  amp_input ,  opd_internal,  zwfs_ns , detector=None, pupil_diameter_scaling = 1.0, pupil_offset = (0,0)):
+    # very basic pupil classification
     # adds to zwfs_ns 
     # inside pupil 
-
+    
     # We intentionally put detector as None here to keep intensities in wave space
     # we do the math here and then bin after if user selects detector is not None    
     N0 = get_N0( opd_input,  amp_input ,  opd_internal,  zwfs_ns , detector=None)
     I0 = get_I0( opd_input,  amp_input ,  opd_internal,  zwfs_ns , detector=None)
     
-         
-    pupil_filt = zwfs_ns.grid.pupil_mask > 0.5
+    # currently we don't use N0 to classify, just use known pupil diameter 
+    #pupil_filt = zwfs_ns.grid.pupil_mask > 0.5
+    pupil_filt = (zwfs_ns.grid.wave_coord.X - pupil_offset[0])**2 + (zwfs_ns.grid.wave_coord.Y - pupil_offset[1])**2 <= pupil_diameter_scaling * (zwfs_ns.grid.D/2)**2
+
+    outside_filt = ~pupil_filt 
     
-    outside_filt = zwfs_ns.grid.pupil_mask < 0.5
-    
-    secondary_strehl_filt = zwfs_ns.grid.wave_coord.X**2 + zwfs_ns.grid.wave_coord.Y**2 < (zwfs_ns.grid.D/10)**2
+    secondary_strehl_filt = (zwfs_ns.grid.wave_coord.X - pupil_offset[0])**2 + (zwfs_ns.grid.wave_coord.Y - pupil_offset[1])**2 < (zwfs_ns.grid.D/10)**2
     
     outer_strehl_filt = ( I0 - N0 >   4.5 * np.median(I0) ) * outside_filt
     
@@ -981,6 +983,7 @@ def classify_pupil_regions( opd_input,  amp_input ,  opd_internal,  zwfs_ns , de
     zwfs_ns.pupil_regions = regions_ns
     
     return( zwfs_ns )
+
 
 def process_zwfs_signal( I, I0, pupil_filt ): 
     """_summary_
@@ -1091,14 +1094,14 @@ def build_IM( zwfs_ns ,  calibration_opd_input, calibration_amp_input ,  opd_int
 
 
 
-def plot_eigenmodes( zwfs_ns , save_path = None ):
+def plot_eigenmodes( zwfs_ns , save_path = None, descr_label=None ):
     
     tstamp = datetime.datetime.now().strftime("%d-%m-%YT%H.%M.%S")
 
     U,S,Vt = np.linalg.svd( zwfs_ns.reco.IM, full_matrices=True)
 
     #singular values
-    plt.figure() 
+    plt.figure(1) 
     plt.semilogy(S) #/np.max(S))
     #plt.axvline( np.pi * (10/2)**2, color='k', ls=':', label='number of actuators in pupil')
     plt.legend() 
@@ -1106,12 +1109,12 @@ def plot_eigenmodes( zwfs_ns , save_path = None ):
     plt.ylabel('singular values')
 
     if save_path is not None:
-        plt.savefig(save_path +  f'singularvalues_{tstamp}.png', bbox_inches='tight', dpi=200)
-    plt.show()
+        plt.savefig(save_path +  f'singularvalues_{descr_label}_{tstamp}.png', bbox_inches='tight', dpi=200)
+    #plt.show()
     
     # THE IMAGE MODES 
     n_row = round( np.sqrt( zwfs_ns.reco.M2C_0.shape[0]) ) - 1
-    fig,ax = plt.subplots(n_row  ,n_row ,figsize=(30,30))
+    fig ,ax = plt.subplots(n_row  ,n_row ,figsize=(30,30))
     plt.subplots_adjust(hspace=0.1,wspace=0.1)
     for i,axx in enumerate(ax.reshape(-1)):
         # we filtered circle on grid, so need to put back in grid
@@ -1129,8 +1132,8 @@ def plot_eigenmodes( zwfs_ns , save_path = None ):
     plt.tight_layout()
 
     if save_path is not None:
-        plt.savefig(save_path + f'det_eignmodes_{tstamp}.png',bbox_inches='tight',dpi=200)
-    plt.show()
+        plt.savefig(save_path + f'det_eignmodes_{descr_label}_{tstamp}.png',bbox_inches='tight',dpi=200)
+    #plt.show()
     
     # THE DM MODES 
 
@@ -1147,8 +1150,8 @@ def plot_eigenmodes( zwfs_ns , save_path = None ):
         #plt.legend(ax=axx)
     plt.tight_layout()
     if save_path is not None:
-        plt.savefig(save_path +  f'dm_eignmodes_{tstamp}.png',bbox_inches='tight',dpi=200)
-    plt.show()
+        plt.savefig(save_path +  f'dm_eignmodes_{descr_label}_{tstamp}.png',bbox_inches='tight',dpi=200)
+    #plt.show()
 
 
 def construct_ctrl_matricies_from_IM(zwfs_ns,  method = 'Eigen_TT-HO', Smax = 50, TT_vectors = gen_basis.get_tip_tilt_vectors() ):

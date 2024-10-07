@@ -7,7 +7,8 @@ from astropy.io import fits
 import os 
 import json
 import datetime 
-from scipy.interpolate import griddata
+#from scipy.interpolate import griddata
+from scipy.ndimage import map_coordinates
 
 # Function to get indices for the inner square on DM, accounting for missing corners
 def get_inner_square_indices(outer_size, inner_offset, without_outer_corners=True):
@@ -522,29 +523,47 @@ def convert_to_serializable(obj):
         return obj  # Base case: return the object itself if it doesn't need conversion
 
 
+# def interpolate_pixel_intensities(image, pixel_coords):
+#     """
+#     Interpolates pixel intensities from an image onto the specified actuator pixel coordinates.
+    
+#     Args:
+#         image: 2D array of pixel intensities (image).
+#         pixel_coords: 2D array of actuator coordinates in pixel space (from transform_dict['actuator_coord_list_pixel_space']).
+        
+#     Returns:
+#         Interpolated intensities at the given actuator pixel coordinates.
+#     """
+#     # Create a grid of original pixel coordinates
+#     y, x = np.mgrid[0:image.shape[0], 0:image.shape[1]]
+    
+#     # Flatten the image and grid for interpolation
+#     points = np.vstack((x.ravel(), y.ravel())).T  # Original pixel coordinates
+#     values = image.ravel()  # Corresponding pixel values
+    
+#     # Interpolate the pixel values at the actuator pixel coordinates
+#     interpolated_intensities = griddata(points, values, pixel_coords, method='cubic')
+    
+#     return interpolated_intensities
+# # below is faster
 def interpolate_pixel_intensities(image, pixel_coords):
     """
-    Interpolates pixel intensities from an image onto the specified actuator pixel coordinates.
-    
+    Fast interpolation using scipy's map_coordinates, which is highly optimized for 2D grids.
+
     Args:
         image: 2D array of pixel intensities (image).
-        pixel_coords: 2D array of actuator coordinates in pixel space (from transform_dict['actuator_coord_list_pixel_space']).
+        pixel_coords: 2D array of actuator coordinates in pixel space.
         
     Returns:
         Interpolated intensities at the given actuator pixel coordinates.
     """
-    # Create a grid of original pixel coordinates
-    y, x = np.mgrid[0:image.shape[0], 0:image.shape[1]]
-    
-    # Flatten the image and grid for interpolation
-    points = np.vstack((x.ravel(), y.ravel())).T  # Original pixel coordinates
-    values = image.ravel()  # Corresponding pixel values
-    
-    # Interpolate the pixel values at the actuator pixel coordinates
-    interpolated_intensities = griddata(points, values, pixel_coords, method='cubic')
+    # pixel_coords needs to be in the format [y_coords, x_coords] for map_coordinates
+    pixel_coords = np.array(pixel_coords).T  # Transpose to match map_coordinates format
+
+    # Perform the interpolation using map_coordinates (linear interpolation by default)
+    interpolated_intensities = map_coordinates(image, pixel_coords, order=1, mode='nearest')
     
     return interpolated_intensities
-
 
 
 def calibrate_transform_between_DM_and_image( dm_4_corners, img_4_corners , debug = False, fig_path= None ):
@@ -631,8 +650,9 @@ def calibrate_transform_between_DM_and_image( dm_4_corners, img_4_corners , debu
         tmp =np.zeros(140)
         tmp[np.array(dm_4_corners)] = 1
         plt.imshow( get_DM_command_in_2D( tmp ) )
-        savefig = fig_path + 'DM_corner_poke_in_DM_space.png'
-        fig.savefig(savefig, dpi=300, bbox_inches = 'tight' )
+        if fig_path is not None:
+            savefig = fig_path + 'DM_corner_poke_in_DM_space.png'
+            fig.savefig(savefig, dpi=300, bbox_inches = 'tight' )
 
 
         # Show the actuator registration in Pixel space 
@@ -654,8 +674,9 @@ def calibrate_transform_between_DM_and_image( dm_4_corners, img_4_corners , debu
         plt.plot(  [bottom_left[0],top_right[0]],  [bottom_left[1],top_right[1]] , 'r', lw=1)
         plt.plot( intersection[0], intersection[1], 'x' ,color='white', lw = 5 )
         plt.legend()
-        savefig = fig_path + 'DM_registration_in_pixel_space.png'
-        plt.savefig(savefig, dpi=300, bbox_inches = 'tight' )
+        if fig_path is not None:
+            savefig = fig_path + 'DM_registration_in_pixel_space.png'
+            plt.savefig(savefig, dpi=300, bbox_inches = 'tight' )
         plt.show()
 
         

@@ -7,14 +7,55 @@ from matplotlib.gridspec import GridSpec
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 import json
 import sys
+import os 
+import aotools
 from PyQt5 import QtWidgets, QtCore,  QtGui
 import pyqtgraph as pg
 import traceback
 
 
-import Baldr_closeloop as bldr
-import DM_basis as gen_basis
-import utilities as util
+def add_project_root_to_sys_path(project_root_name="BaldrApp"):
+    """
+    Adds the project root directory to sys.path to allow importing from shared modules.
+    
+    Args:
+        project_root_name (str): The name of the project root directory.
+    """
+    try:
+        # Attempt to use __file__ to get the current script's directory
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+    except NameError:
+        # Fallback to current working directory (useful in interactive environments)
+        current_dir = os.getcwd()
+
+    # Traverse up the directory tree to find the project root
+    project_root = current_dir
+    while True:
+        if os.path.basename(project_root) == project_root_name:
+            break
+        new_project_root = os.path.dirname(project_root)
+        if new_project_root == project_root:
+            # Reached the filesystem root without finding the project root
+            project_root = None
+            break
+        project_root = new_project_root
+
+    if project_root and project_root not in sys.path:
+        sys.path.append(project_root)
+        print(f"Added '{project_root}' to sys.path")
+    elif project_root is None:
+        print(f"Error: '{project_root_name}' directory not found in the directory hierarchy.")
+    else:
+        print(f"'{project_root}' is already in sys.path")
+
+# Call the function to add the project root
+add_project_root_to_sys_path()
+
+from common import baldr_core as bldr
+from common import DM_basis as gen_basis
+from common import utilities as util
+
+
 
 # Create a class to redirect stdout to the QTextEdit widget
 class OutputRedirector:
@@ -758,8 +799,7 @@ if __name__ == "__main__":
     zwfs_ns = bldr.add_controllers( zwfs_ns, TT = 'PID', HO = 'leaky')
 
     #zwfs_ns = init_CL_simulation( zwfs_ns,  opd_internal, amp_input , basis, Nmodes, poke_amp, Smax )
-    
-                    
+      
     dm_disturbance = 0.1 * TT_vectors.T[0]
     
     scrn = aotools.infinitephasescreen.PhaseScreenVonKarman(nx_size= zwfs_ns.grid.N * zwfs_ns.grid.padding_factor, pixel_scale= zwfs_ns.grid.D / zwfs_ns.grid.N ,r0=0.1,L0=12)
