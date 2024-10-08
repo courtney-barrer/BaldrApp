@@ -7,7 +7,7 @@ from astropy.io import fits
 import os 
 import json
 import datetime 
-#from scipy.interpolate import griddata
+from scipy.interpolate import griddata
 from scipy.ndimage import map_coordinates
 
 # Function to get indices for the inner square on DM, accounting for missing corners
@@ -265,16 +265,39 @@ def find_intersection(x1, y1, x2, y2, x3, y3, x4, y4):
     return x_intersect, y_intersect
 
 
-def sort_corners(corners):
-    sorted_corners = sorted(corners, key=lambda p: (p[0], p[1]))
+# def sort_corners(corners):
+#     # THIS FUNCTION FAILS WHEN CORNERS ARE HORIZONTALLY OR VERTICALLY ALIGNED 
+#     sorted_corners = sorted(corners, key=lambda p: (p[0], p[1]))
 
-    # Separate them into logical quadrilateral corners
-    top_left = sorted_corners[0]
-    top_right = sorted_corners[1] if sorted_corners[1][1] > sorted_corners[0][1] else sorted_corners[2]
-    bottom_left = sorted_corners[2] if sorted_corners[1][1] > sorted_corners[0][1] else sorted_corners[1]
-    bottom_right = sorted_corners[3]
+#     # Separate them into logical quadrilateral corners
+#     top_left = sorted_corners[0]
+#     top_right = sorted_corners[1] if sorted_corners[1][1] > sorted_corners[0][1] else sorted_corners[2]
+#     bottom_left = sorted_corners[2] if sorted_corners[1][1] > sorted_corners[0][1] else sorted_corners[1]
+#     bottom_right = sorted_corners[3]
     
-    return(top_left, top_right,  bottom_left , bottom_right )
+#     return(top_left, top_right,  bottom_left , bottom_right )
+
+def sort_corners(corners):
+    # Convert the corners to a numpy array
+    corners = np.array(corners)
+
+    # Calculate the centroid (geometric center) of the four points
+    centroid = np.mean(corners, axis=0)
+
+    # Sort the points based on their angle with respect to the centroid
+    def angle_from_centroid(point):
+        return np.arctan2(point[1] - centroid[1], point[0] - centroid[0])
+
+    sorted_corners = sorted(corners, key=angle_from_centroid)
+
+    # Assign corners: the sorting will order the points in a consistent counter-clockwise order
+    # Now label them accordingly
+    top_left = sorted_corners[3]
+    top_right = sorted_corners[2]
+    bottom_right = sorted_corners[1]
+    bottom_left = sorted_corners[0]
+
+    return top_left, top_right, bottom_left, bottom_right
 
 # Main function to compute the intersection of diagonals of a quadrilateral
 def find_quadrilateral_diagonal_intersection(corners ):
@@ -308,14 +331,15 @@ def find_quadrilateral_diagonal_intersection(corners ):
 # Plotting function to visualize the quadrilateral and diagonals
 def plot_quadrilateral_with_diagonals(corners, intersection):
     # Unpack the corners
-    sorted_corners = sorted(corners, key=lambda p: (p[0], p[1]))
+    #sorted_corners = sorted(corners, key=lambda p: (p[0], p[1]))
 
     # Separate them into logical quadrilateral corners
-    top_left = sorted_corners[0]
-    top_right = sorted_corners[1] if sorted_corners[1][1] > sorted_corners[0][1] else sorted_corners[2]
-    bottom_left = sorted_corners[2] if sorted_corners[1][1] > sorted_corners[0][1] else sorted_corners[1]
-    bottom_right = sorted_corners[3]
+    #top_left = sorted_corners[0]
+    #top_right = sorted_corners[1] if sorted_corners[1][1] > sorted_corners[0][1] else sorted_corners[2]
+    #bottom_left = sorted_corners[2] if sorted_corners[1][1] > sorted_corners[0][1] else sorted_corners[1]
+    #bottom_right = sorted_corners[3]
 
+    top_left, top_right,  bottom_left , bottom_right  = sort_corners(corners) 
     # Plot the quadrilateral
     plt.figure(figsize=(6, 6))
     
@@ -523,47 +547,47 @@ def convert_to_serializable(obj):
         return obj  # Base case: return the object itself if it doesn't need conversion
 
 
-# def interpolate_pixel_intensities(image, pixel_coords):
-#     """
-#     Interpolates pixel intensities from an image onto the specified actuator pixel coordinates.
-    
-#     Args:
-#         image: 2D array of pixel intensities (image).
-#         pixel_coords: 2D array of actuator coordinates in pixel space (from transform_dict['actuator_coord_list_pixel_space']).
-        
-#     Returns:
-#         Interpolated intensities at the given actuator pixel coordinates.
-#     """
-#     # Create a grid of original pixel coordinates
-#     y, x = np.mgrid[0:image.shape[0], 0:image.shape[1]]
-    
-#     # Flatten the image and grid for interpolation
-#     points = np.vstack((x.ravel(), y.ravel())).T  # Original pixel coordinates
-#     values = image.ravel()  # Corresponding pixel values
-    
-#     # Interpolate the pixel values at the actuator pixel coordinates
-#     interpolated_intensities = griddata(points, values, pixel_coords, method='cubic')
-    
-#     return interpolated_intensities
-# # below is faster
 def interpolate_pixel_intensities(image, pixel_coords):
     """
-    Fast interpolation using scipy's map_coordinates, which is highly optimized for 2D grids.
-
+    Interpolates pixel intensities from an image onto the specified actuator pixel coordinates.
+    
     Args:
         image: 2D array of pixel intensities (image).
-        pixel_coords: 2D array of actuator coordinates in pixel space.
+        pixel_coords: 2D array of actuator coordinates in pixel space (from transform_dict['actuator_coord_list_pixel_space']).
         
     Returns:
         Interpolated intensities at the given actuator pixel coordinates.
     """
-    # pixel_coords needs to be in the format [y_coords, x_coords] for map_coordinates
-    pixel_coords = np.array(pixel_coords).T  # Transpose to match map_coordinates format
-
-    # Perform the interpolation using map_coordinates (linear interpolation by default)
-    interpolated_intensities = map_coordinates(image, pixel_coords, order=1, mode='nearest')
+    # Create a grid of original pixel coordinates
+    y, x = np.mgrid[0:image.shape[0], 0:image.shape[1]]
+    
+    # Flatten the image and grid for interpolation
+    points = np.vstack((x.ravel(), y.ravel())).T  # Original pixel coordinates
+    values = image.ravel()  # Corresponding pixel values
+    
+    # Interpolate the pixel values at the actuator pixel coordinates
+    interpolated_intensities = griddata(points, values, pixel_coords, method='cubic')
     
     return interpolated_intensities
+# # below is faster
+# def interpolate_pixel_intensities(image, pixel_coords):
+#     """
+#     Fast interpolation using scipy's map_coordinates, which is highly optimized for 2D grids.
+
+#     Args:
+#         image: 2D array of pixel intensities (image).
+#         pixel_coords: 2D array of actuator coordinates in pixel space.
+        
+#     Returns:
+#         Interpolated intensities at the given actuator pixel coordinates.
+#     """
+#     # pixel_coords needs to be in the format [y_coords, x_coords] for map_coordinates
+#     pixel_coords = np.array(pixel_coords).T  # Transpose to match map_coordinates format
+
+#     # Perform the interpolation using map_coordinates (linear interpolation by default)
+#     interpolated_intensities = map_coordinates(image, pixel_coords, order=1, mode='nearest')
+    
+#     return interpolated_intensities
 
 
 def calibrate_transform_between_DM_and_image( dm_4_corners, img_4_corners , debug = False, fig_path= None ):

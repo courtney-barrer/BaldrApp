@@ -8,7 +8,7 @@ from mpl_toolkits.axes_grid1 import make_axes_locatable
 import json
 import sys
 import os 
-import aotools
+#import aotools - removed dependancy: use common/phasescreens.py instead
 from PyQt5 import QtWidgets, QtCore,  QtGui
 import pyqtgraph as pg
 import traceback
@@ -54,7 +54,7 @@ add_project_root_to_sys_path()
 from common import baldr_core as bldr
 from common import DM_basis as gen_basis
 from common import utilities as util
-
+from common import phasescreens
 
 
 # Create a class to redirect stdout to the QTextEdit widget
@@ -802,7 +802,8 @@ if __name__ == "__main__":
       
     dm_disturbance = 0.1 * TT_vectors.T[0]
     
-    scrn = aotools.infinitephasescreen.PhaseScreenVonKarman(nx_size= zwfs_ns.grid.N * zwfs_ns.grid.padding_factor, pixel_scale= zwfs_ns.grid.D / zwfs_ns.grid.N ,r0=0.1,L0=12)
+    #scrn = aotools.infinitephasescreen.PhaseScreenVonKarman(nx_size= zwfs_ns.grid.N * zwfs_ns.grid.padding_factor, pixel_scale= zwfs_ns.grid.D / zwfs_ns.grid.N ,r0=0.1,L0=12)
+    scrn = phasescreens.PhaseScreenVonKarman(nx_size= zwfs_ns.grid.N * zwfs_ns.grid.padding_factor, pixel_scale= zwfs_ns.grid.D / zwfs_ns.grid.N ,r0=0.1,L0=12)
     dynamic_opd_input = True
     
     #dm_disturbance = 0.1 * HO_dm_disturb.T[3]

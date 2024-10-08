@@ -62,7 +62,7 @@ from common import baldr_core as bldr
 from common import DM_basis as gen_basis
 from common import utilities as util
 from common import DM_registration as DM_reg
-#from common import phasescreens
+from common import phasescreens
 
 """ 
 1) how square vs circular and different radii pupil region classification affects eigenvectors 
@@ -155,7 +155,7 @@ for i in corner_indicies:
 # dm_4_corners should be an array of length 4 corresponding to the actuator index in the (flattened) DM command space
 # img_4_corners should be an array of length 4xNxM where NxM are the image dimensions.
 # !!! It is very important that img_4_corners are registered in the same order as dm_4_corners !!!
-transform_dict = DM_reg.calibrate_transform_between_DM_and_image( dm_4_corners, img_4_corners , debug=True, fig_path = None)
+transform_dict = DM_reg.calibrate_transform_between_DM_and_image( dm_4_corners, img_4_corners, debug=True, fig_path = None )
 
 
 fig = plt.figure(3)
@@ -170,6 +170,12 @@ plt.scatter(transform_dict['actuator_coord_list_pixel_space'][:, 0],\
 
 plt.legend() 
 plt.show() 
+
+
+
+
+
+
 
 ### 
 # Build control model  
@@ -193,7 +199,7 @@ N0_before = bldr.get_N0( cal_opd_input , cal_amp_input, cal_opd_internal, zwfs_n
 
 dm_I0_before = DM_reg.interpolate_pixel_intensities(image = I0_before, pixel_coords = transform_dict['actuator_coord_list_pixel_space'])
 dm_N0_before = DM_reg.interpolate_pixel_intensities(image = N0_before, pixel_coords = transform_dict['actuator_coord_list_pixel_space'])
-training_data = {'I0':I0_before, 'dm_I0':dm_I0_before , 'dm_N0':dm_N0_before , 'N0':N0_before, 'dm_flat':zwfs_ns.dm.dm_flat, 'dm_cmd':[], 'i':[], 'interp_i':[]} 
+training_data = {'I0':I0_before, 'dm_I0':dm_I0_before , 'dm_N0':dm_N0_before , 'N0':N0_before, 'dm_flat':zwfs_ns.dm.dm_flat, 'rmse':[], 'dm_cmd':[], 'i':[], 'interp_i':[]} 
 
 no_iters = 100 
 for i in range(no_iters):
@@ -211,8 +217,20 @@ for i in range(no_iters):
 
     training_data['dm_cmd'].append( dm_scrn )
     training_data['i'].append( i )
+    training_data['rmse'].append( np.std( dm_scrn ) )
     training_data['interp_i'].append( interpolated_intensities )
  
+
+
+
+
+
+
+
+
+
+
+
 
 i = -1
 fig, ax = plt.subplots(1, 2, figsize=(10, 5))

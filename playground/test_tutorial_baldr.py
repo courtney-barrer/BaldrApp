@@ -5,7 +5,8 @@ from types import SimpleNamespace
 import importlib 
 from matplotlib.gridspec import GridSpec
 from mpl_toolkits.axes_grid1 import make_axes_locatable
-
+import sys
+import os 
 
 def add_project_root_to_sys_path(project_root_name="BaldrApp"):
     """

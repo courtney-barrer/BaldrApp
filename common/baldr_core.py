@@ -673,7 +673,7 @@ def get_pupil_intensity( phi, theta , phasemask, amp ):
 
     psi_R = abs( b ) * np.sqrt((np.cos(theta)-1)**2 + np.sin(theta)**2)
     mu = np.angle((np.exp(1J*theta)-1) ) # np.arctan( np.sin(theta)/(np.cos(theta)-1) ) #
-
+    beta = np.angle( b )
     # out formula ----------
     #if measured_pupil!=None:
     #    P = measured_pupil / np.mean( P[P > np.mean(P)] ) # normalize by average value in Pupil
@@ -682,6 +682,37 @@ def get_pupil_intensity( phi, theta , phasemask, amp ):
 
     return Ic 
 
+
+
+"""def get_b_fresnel( phi, phasemask, wavelength, dx, z):
+    k = 2 * np.pi / wavelength
+    N = phi.shape[0]
+    x = np.linspace(-N/2, N/2, N) * dx
+    X, Y = np.meshgrid(x, x)
+
+    # Initial field
+    psi_A = np.exp(1j * phi)
+
+    # Fresnel quadratic phase factor
+    Q1 = np.exp(1j * k * (X**2 + Y**2) / (2 * z))
+
+    # Apply Fresnel approximation for propagation to the focal plane
+    psi_B = np.fft.fftshift(np.fft.fft2(np.fft.ifftshift(psi_A * Q1)))
+
+    # Apply the phase mask
+    b = np.fft.fftshift(np.fft.ifft2(phasemask * psi_B))
+
+    return b
+
+
+def get_b( phi, phasemask ):
+    psi_A = np.exp( 1J * ( phi ) )
+
+    psi_B = np.fft.fftshift(np.fft.fft2(np.fft.ifftshift( psi_A )) )
+                            
+    b = np.fft.fftshift( np.fft.ifft2( phasemask * psi_B ) )  
+    
+    return b"""
 
 def update_dm_registration( transform_matrix, zwfs_ns ):
     """_summary_
