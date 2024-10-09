@@ -8,48 +8,98 @@ from mpl_toolkits.axes_grid1 import make_axes_locatable
 import sys
 import os 
 
-def add_project_root_to_sys_path(project_root_name="BaldrApp"):
-    """
-    Adds the project root directory to sys.path to allow importing from shared modules.
-    
-    Args:
-        project_root_name (str): The name of the project root directory.
-    """
-    try:
-        # Attempt to use __file__ to get the current script's directory
-        current_dir = os.path.dirname(os.path.abspath(__file__))
-    except NameError:
-        # Fallback to current working directory (useful in interactive environments)
-        current_dir = os.getcwd()
+import pyzelda.zelda as zelda
+import pyzelda.ztools as ztools
+import pyzelda.utils.aperture as aperture
 
-    # Traverse up the directory tree to find the project root
-    project_root = current_dir
-    while True:
-        if os.path.basename(project_root) == project_root_name:
-            break
-        new_project_root = os.path.dirname(project_root)
-        if new_project_root == project_root:
-            # Reached the filesystem root without finding the project root
-            project_root = None
-            break
-        project_root = new_project_root
-
-    if project_root and project_root not in sys.path:
-        sys.path.append(project_root)
-        print(f"Added '{project_root}' to sys.path")
-    elif project_root is None:
-        print(f"Error: '{project_root_name}' directory not found in the directory hierarchy.")
-    else:
-        print(f"'{project_root}' is already in sys.path")
-
-# Call the function to add the project root
-add_project_root_to_sys_path()
 
 from common import baldr_core as bldr
 from common import DM_basis as gen_basis
 from common import utilities as util
 
 
+
+### we generally deal with Simplename spaces since they are lightweight and meet our requirements  
+# nevertheless - these can be converted to a class for easier handling at anytime. All functionality should be the same 
+class RecursiveNamespaceToClass:
+    def __init__(self, namespace):
+        # Iterate through all attributes of the SimpleNamespace
+        for key, value in vars(namespace).items():
+            # If the attribute is another SimpleNamespace, recursively initialize it as an instance of this class
+            if isinstance(value, SimpleNamespace):
+                value = RecursiveNamespaceToClass(value)
+            # Set the attribute on the instance
+            setattr(self, key, value)
+
+    def __repr__(self):
+        return f"{self.__class__.__name__}({vars(self)})"
+    
+    
+    
+################## INTERFACE WITH pyZELDA
+""" 
+We (git: courtney-barrer) forked the pyZELDA repository and added a new Baldr sensor class that interfaces with the BALDR app.
+BaldrApp can work with or without this sensor. If it is appended to the zwfs_ns object, the pyZelda machinary will be used to calculate the intensity.  
+Otherwise it will use my own machinery. This is useful for testing and debugging.
+"""
+
+# configure the ZWFS for the UT 
+z = zelda.Sensor('BALDR_UT_J3')
+
+
+# Need to init things consistently with the pyZelda object.
+# 
+# our own initialization of the zwfs using simple namespace due to speed
+wvl0 = 1.25e-6
+grid_dict = {
+    "D":8, # diameter of beam (m)
+    "N" : z.pupil_diameter, # number of pixels across pupil diameter
+    "padding_factor" : z.pupil_dim // z.pupil_diameter, # how many pupil diameters fit into grid x axis
+    # TOTAL NUMBER OF PIXELS = padding_factor * N 
+    }
+
+optics_dict = {
+    "wvl0" :wvl0 , # central wavelength (m) 
+    "F_number": z.mask_Fratio   , # F number on phasemask
+    "mask_diam": z.mask_diameter / (1.22 * z.mask_Fratio * wvl0 ), # diameter of phaseshifting region in diffraction limit units (physical unit is mask_diam * 1.22 * F_number * lambda)
+    "theta": z.mask_phase_shift( wvl0 )  # phaseshift of phasemask 
+}
+
+dm_dict = {
+    "dm_model":"BMC-multi-3.5",
+    "actuator_coupling_factor":0.7,# std of in actuator spacing of gaussian IF applied to each actuator. (e.g actuator_coupling_factor = 1 implies std of poke is 1 actuator across.)
+    "dm_pitch":1,
+    "dm_aoi":0, # angle of incidence of light on DM 
+    "opd_per_cmd" : 3e-6, # peak opd applied at center of actuator per command unit (normalized between 0-1) 
+    "flat_rmse" : 20e-9 # std (m) of flatness across Flat DM  
+    }
+
+grid_ns = SimpleNamespace(**grid_dict)
+optics_ns = SimpleNamespace(**optics_dict)
+dm_ns = SimpleNamespace(**dm_dict)
+
+zwfs_ns = bldr.init_zwfs(grid_ns, optics_ns, dm_ns)
+
+# we can simply append the pyZelda object z to our zwfs_ns namespace. This can be converted to a class simply 
+zwfs_ns.pyZelda = z
+
+# if we want (it is not necessary) we can convert the namespace to a class
+zwfs_class = RecursiveNamespaceToClass( zwfs_ns )
+
+# all functionality should remain the same 
+# e.g. 
+zwfs_class.pyZelda.mask_phase_shift(1.25e-6)
+
+plt.figure(1)
+plt.imshow( zwfs_ns.grid.pupil_mask )
+plt.figure(2)
+plt.imshow( zwfs_class.pyZelda.pupil)
+
+################## TEST 1
+# check dm registration on pupil (wavespace)
+zwfs_ns = bldr.init_zwfs(grid_ns, optics_ns, dm_ns)
+
+    
 ################## TEST 0 
 # configure our zwfs 
 grid_dict = {
@@ -86,7 +136,11 @@ dm_ns = SimpleNamespace(**dm_dict)
 # check dm registration on pupil (wavespace)
 zwfs_ns = bldr.init_zwfs(grid_ns, optics_ns, dm_ns)
 
+zwfs_class = RecursiveNamespaceToClass( zwfs_ns )
+
 phi, phi_internal,  N0, I0, Intensity = bldr.test_propagation( zwfs_ns )
+
+phi, phi_internal,  N0, I0, Intensity = bldr.test_propagation( zwfs_class )
 
 fig = plt.figure() 
 im = plt.imshow( N0, extent=[np.min(zwfs_ns.grid.wave_coord.x), np.max(zwfs_ns.grid.wave_coord.x),\
@@ -176,6 +230,15 @@ I0 = bldr.get_I0(  opd_input  = opd_input ,   amp_input = amp_input,\
 N0 = bldr.get_N0(  opd_input  = opd_input ,   amp_input = amp_input,\
     opd_internal = opd_internal,  zwfs_ns= zwfs_ns , detector=None )
 
+# converting to a class and running the same function 
+zwfs_class = RecursiveNamespaceToClass( zwfs_ns )
+
+I0 = bldr.get_I0(  opd_input  = opd_input ,   amp_input = amp_input,\
+    opd_internal = opd_internal,  zwfs_ns= zwfs_class , detector=None )
+
+N0 = bldr.get_N0(  opd_input  = opd_input ,   amp_input = amp_input,\
+    opd_internal = opd_internal,  zwfs_ns= zwfs_class , detector=None )
+
 
 ################## TEST 6
 # classify pupil regions and plot them
@@ -200,6 +263,9 @@ plt.show()
 # Build IM  and look at Eigenmodes! 
 zwfs_ns = bldr.init_zwfs(grid_ns, optics_ns, dm_ns)
 
+# converting to a class and running the same function 
+zwfs_class = RecursiveNamespaceToClass( zwfs_ns )
+
 opd_input = 0 * zwfs_ns.grid.pupil_mask *  np.random.randn( *zwfs_ns.grid.pupil_mask.shape)
 
 opd_internal = 10e-9 * zwfs_ns.grid.pupil_mask * np.random.randn( *zwfs_ns.grid.pupil_mask.shape)
@@ -209,6 +275,9 @@ amp_input = 1e4 * zwfs_ns.grid.pupil_mask
 # we must first define our pupil regions before building 
 zwfs_ns = bldr.classify_pupil_regions( opd_input,  amp_input ,  opd_internal,  zwfs_ns , detector=None)
 
+# using  class
+#_ = bldr.classify_pupil_regions( opd_input,  amp_input ,  opd_internal,  zwfs_class , detector=None)
+
 basis_name_list = ['Hadamard', "Zonal", "Zonal_pinned_edges", "Zernike", "Zernike_pinned_edges", "fourier", "fourier_pinned_edges"]
 
 # perfect field only with internal opd aberrations 
@@ -217,11 +286,12 @@ Nmodes = 100
 basis = 'Zonal_pinned_edges'
 M2C_0 = gen_basis.construct_command_basis( basis= basis, number_of_modes = Nmodes, without_piston=True).T  
 
-IM_00 = bldr.build_IM( zwfs_ns ,  calibration_opd_input= 0 *zwfs_ns.grid.pupil_mask , calibration_amp_input = amp_input , \
+
+_ = bldr.build_IM( zwfs_ns ,  calibration_opd_input= 0 *zwfs_ns.grid.pupil_mask , calibration_amp_input = amp_input , \
     opd_internal = opd_internal,  basis = basis, Nmodes =  Nmodes, poke_amp = 0.05, poke_method = 'double_sided_poke',\
         imgs_to_mean = 1, detector=None)
 
-IM_10 = bldr.build_IM( zwfs_ns ,  calibration_opd_input= 0 *zwfs_ns.grid.pupil_mask , calibration_amp_input = amp_input , \
+_ = bldr.build_IM( zwfs_ns ,  calibration_opd_input= 0 *zwfs_ns.grid.pupil_mask , calibration_amp_input = amp_input , \
     opd_internal = opd_internal,  basis = basis, Nmodes =  Nmodes, poke_amp = 0.05, poke_method = 'single_sided_poke',\
         imgs_to_mean = 1, detector=None)
 
@@ -229,10 +299,15 @@ IM_10 = bldr.build_IM( zwfs_ns ,  calibration_opd_input= 0 *zwfs_ns.grid.pupil_m
 basis = 'Hadamard'
 M2C_0 = gen_basis.construct_command_basis( basis= basis, number_of_modes = Nmodes, without_piston=True).T  
 
-IM_11 = bldr.build_IM( zwfs_ns ,  calibration_opd_input= 0 *zwfs_ns.grid.pupil_mask , calibration_amp_input = amp_input , \
+_ = bldr.build_IM( zwfs_ns ,  calibration_opd_input= 0 *zwfs_ns.grid.pupil_mask , calibration_amp_input = amp_input , \
     opd_internal = opd_internal,  basis = basis, Nmodes =  Nmodes, poke_amp = 0.05, poke_method = 'double_sided_poke',\
         imgs_to_mean = 1, detector=None)
 
+
+# build IM with zwfs_class
+_ = bldr.build_IM( zwfs_class ,  calibration_opd_input= 0 *zwfs_ns.grid.pupil_mask , calibration_amp_input = amp_input , \
+    opd_internal = opd_internal,  basis = basis, Nmodes =  Nmodes, poke_amp = 0.05, poke_method = 'double_sided_poke',\
+        imgs_to_mean = 1, detector=None)
 
 
 ################## TEST 8

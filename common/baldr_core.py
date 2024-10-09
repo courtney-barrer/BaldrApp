@@ -460,7 +460,6 @@ def gaussian_displacement(c_i, sigma_i, x, y, x0, y0):
 
 
 
-
 def generate_dm_coordinates(Nx=12, Ny=12, spacing=1.0):
     """
     Generates the x, y coordinates of the actuators in a 12x12 grid DM with missing corners.
@@ -673,7 +672,7 @@ def get_pupil_intensity( phi, theta , phasemask, amp ):
 
     psi_R = abs( b ) * np.sqrt((np.cos(theta)-1)**2 + np.sin(theta)**2)
     mu = np.angle((np.exp(1J*theta)-1) ) # np.arctan( np.sin(theta)/(np.cos(theta)-1) ) #
-    beta = np.angle( b )
+    #beta = np.angle( b )
     # out formula ----------
     #if measured_pupil!=None:
     #    P = measured_pupil / np.mean( P[P > np.mean(P)] ) # normalize by average value in Pupil
@@ -775,7 +774,44 @@ def update_dm_registration( transform_matrix, zwfs_ns ):
     
     return zwfs_ns
     
+def init_ns_from_pyZelda(z, wvl0):
+    grid_dict = {
+    "D":8, # diameter of beam (m)
+    "N" : z.pupil_diameter, # number of pixels across pupil diameter
+    "padding_factor" : z.pupil_dim // z.pupil_diameter, # how many pupil diameters fit into grid x axis
+    # TOTAL NUMBER OF PIXELS = padding_factor * N 
+    }
+
+    optics_dict = {
+        "wvl0" :wvl0 , # central wavelength (m) 
+        "F_number": z.mask_Fratio   , # F number on phasemask
+        "mask_diam": z.mask_diameter / (1.22 * z.mask_Fratio * wvl0 ), # diameter of phaseshifting region in diffraction limit units (physical unit is mask_diam * 1.22 * F_number * lambda)
+        "theta": z.mask_phase_shift( wvl0 )  # phaseshift of phasemask 
+    }
     
+    grid_ns = SimpleNamespace(**grid_dict)
+    optics_ns = SimpleNamespace(**optics_dict)
+    
+    return grid_ns, optics_ns
+
+def check_ns_consistency_with_pyZelda( z, zwfs_ns ):
+    
+    fail_log = {}
+    
+    if not z.pupil_diameter == zwfs_ns.grid.N:
+        fail_log['pupil_diameter'] = (z.pupil_diameter, zwfs_ns.grid.N)
+    if not z.pupil_dim // z.pupil_diameter == zwfs_ns.grid.padding_factor:
+        fail_log['pupil_dim'] = (z.pupil_dim // z.pupil_diameter, zwfs_ns.grid.padding_factor)
+    if not z.mask_diameter == zwfs_ns.optics.mask_diam * (1.22 * zwfs_ns.optics.F_number * zwfs_ns.optics.wvl0):
+        fail_log["mask_diameter"] = (z.mask_diameter, zwfs_ns.optics.mask_diam * (1.22 * zwfs_ns.optics.F_number * zwfs_ns.optics.wvl0))   
+    if not z.mask_Fratio == zwfs_ns.optics.F_number:
+        fail_log["mask_Fratio"] = (z.mask_Fratio, zwfs_ns.optics.F_number)
+    if not z.mask_phase_shift( zwfs_ns.optics.wvl0 ) == zwfs_ns.optics.theta:
+        fail_log["theta"] = (z.mask_phase_shift( zwfs_ns.optics.wvl0 ), zwfs_ns.optics.theta)
+    
+    return fail_log
+    
+
 def init_zwfs(grid_ns, optics_ns, dm_ns):
     #############
     #### GRID 

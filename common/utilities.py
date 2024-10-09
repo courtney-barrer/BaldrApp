@@ -36,6 +36,44 @@ def insert_concentric(smaller_array, larger_array):
     return result_array
 
 
+
+def crop_pupil(pupil, image):
+    """
+    Detects the boundary of a pupil in a binary mask (with pupil = 1 and background = 0)
+    and crops both the pupil mask and the corresponding image to contain just the pupil.
+    
+    Parameters:
+    - pupil: A 2D NumPy array (binary) representing the pupil (1 inside the pupil, 0 outside).
+    - image: A 2D NumPy array of the same shape as 'pupil' representing the image to be cropped.
+    
+    Returns:
+    - cropped_pupil: The cropped pupil mask.
+    - cropped_image: The cropped image based on the pupil's bounding box.
+    """
+    # Ensure both arrays have the same shape
+    if pupil.shape != image.shape:
+        raise ValueError("Pupil and image must have the same dimensions.")
+
+    # Sum along the rows (axis=1) to find the non-zero rows (pupil region)
+    row_sums = np.sum(pupil, axis=1)
+    non_zero_rows = np.where(row_sums > 0)[0]
+
+    # Sum along the columns (axis=0) to find the non-zero columns (pupil region)
+    col_sums = np.sum(pupil, axis=0)
+    non_zero_cols = np.where(col_sums > 0)[0]
+
+    # Get the bounding box of the pupil by identifying the min and max indices
+    row_start, row_end = non_zero_rows[0], non_zero_rows[-1] + 1
+    col_start, col_end = non_zero_cols[0], non_zero_cols[-1] + 1
+
+    # Crop both the pupil and the image
+    cropped_pupil = pupil[row_start:row_end, col_start:col_end]
+    cropped_image = image[row_start:row_end, col_start:col_end]
+
+    return cropped_pupil, cropped_image
+
+
+
 def create_telem_mosaic(image_list, image_title_list, image_colorbar_list, 
                   plot_list, plot_title_list, plot_xlabel_list, plot_ylabel_list):
     """
@@ -257,3 +295,36 @@ def nice_DM_plot( data, savefig=None ): #for a 140 actuator BMC 3.5 DM
     ax.set_yticks( np.arange(12) - 0.5 , minor=True)
     if savefig is not None:
         plt.savefig( savefig , bbox_inches='tight', dpi=300) 
+
+
+
+# Define Cauchy's equation
+def cauchy_eqn(wavelength, A, B, C):
+    return A + B / wavelength**2 + C / wavelength**4
+
+
+def fit_cauchy_eqn_to_data(df, savefig = None):
+    # Example dataframe (replace with your actual df)
+    # df = pd.read_csv('path_to_your_data.csv')  # If your data is stored in a CSV
+    # Assuming your data is already in a dataframe 'df'
+    wavelengths = df['Wavelength(nm)'].values  # Extracting wavelength values
+    n_measured = df['n'].values  # Extracting refractive index values
+
+    # Perform the curve fitting
+    popt, pcov = curve_fit(cauchy_eqn, wavelengths, n_measured)
+
+    # Extract the fitted coefficients
+    A_fit, B_fit, C_fit = popt
+
+    # Generate the fitted curve
+    n_fitted = cauchy_eqn(wavelengths, A_fit, B_fit, C_fit)
+
+    # Plot the measured data vs the fitted curve
+    plt.plot(wavelengths, n_measured, 'b-', label='Measured Data')
+    plt.plot(wavelengths, n_fitted, 'r--', label=f'Fitted Cauchy Eqn\nA={A_fit:.4f}, B={B_fit:.4e}, C={C_fit:.4e}')
+    plt.xlabel('Wavelength (nm)')
+    plt.ylabel('Refractive Index n')
+    plt.legend()
+    if savefig is not None:
+        plt.savefig(savefig, bbox_inches='tight', dpi=200)  
+    plt.show()
