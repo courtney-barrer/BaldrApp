@@ -708,9 +708,6 @@ def get_pupil_intensity( phi, amp, theta, phasemask_diameter, phasemask_mask , p
     array_dim = phi.shape[0]
     pupil_radius = pupil_diameter // 2
 
-    # mask sampling in the focal plane
-    fplane_pixels = 300
-
     # ++++++++++++++++++++++++++++++++++
     # Numerical simulation part
     # ++++++++++++++++++++++++++++++++++
@@ -732,19 +729,53 @@ def get_pupil_intensity( phi, amp, theta, phasemask_diameter, phasemask_mask , p
              
     b = mft.imft(  phasemask_mask * psi_B , fplane_pixels, array_dim, m1)
 
+    # could be quicker implemeting similar way to pyZelda-
     psi_R = abs( b ) * np.sqrt((np.cos(theta)-1)**2 + np.sin(theta)**2)
     mu = np.angle((np.exp(1J*theta)-1) ) # np.arctan( np.sin(theta)/(np.cos(theta)-1) ) #
-    #beta = np.angle( b )
+    beta = np.angle( b )
     # out formula ----------
     #if measured_pupil!=None:
     #    P = measured_pupil / np.mean( P[P > np.mean(P)] ) # normalize by average value in Pupil
 
-    Ic = abs(psi_A)**2 + abs(psi_R)**2 + 2 * abs(psi_A) * abs(psi_R) * np.cos( phi - mu )  #+ beta)
+    Ic = abs(psi_A)**2 + abs(psi_R)**2 + 2 * abs(psi_A) * abs(psi_R) * np.cos( phi - mu - beta)
 
     return Ic 
 
+def get_b( phi, phasemask , phasemask_diameter , pupil_diameter, fplane_pixels=300, pixels_across_mask=10 ):
+    
+    R_mask =  phasemask_diameter / 1.22 # mask radius in lam0/D unit
+    array_dim = phi.shape[0]
+    pupil_radius = pupil_diameter // 2
 
 
+    #m1 parameter for the Matrix Fourier Transform (MFT)
+    m1 = pixels_across_mask * 2 * R_mask * (array_dim / (2. * pupil_radius))
+    
+    psi_A = np.exp( 1J * ( phi ) )
+
+    psi_B = mft.mft(psi_A, array_dim, fplane_pixels, m1)
+                            
+    b = mft.imft(  phasemask * psi_B , fplane_pixels, array_dim, m1) 
+    
+    return b
+
+
+def get_psf( phi, pupil_diameter,  phasemask_diameter , fplane_pixels=300, pixels_across_mask=10 ):
+    
+    R_mask =  phasemask_diameter / 1.22 # mask radius in lam0/D unit
+    array_dim = phi.shape[0]
+    pupil_radius = pupil_diameter // 2
+
+
+    #m1 parameter for the Matrix Fourier Transform (MFT)
+    m1 = pixels_across_mask * 2 * R_mask * (array_dim / (2. * pupil_radius))
+    
+    psi_A = np.exp( 1j *  phi )
+
+    psi_B = mft.mft(psi_A, array_dim, fplane_pixels, m1)
+                            
+    
+    return psi_B
 
 """def get_b_fresnel( phi, phasemask, wavelength, dx, z):
     k = 2 * np.pi / wavelength
@@ -1129,6 +1160,8 @@ def get_frame( opd_input,  amp_input ,  opd_internal,  zwfs_ns , detector=None):
     # get intensity with the phase mask in the beam
     # and dm shaped to the current command ( zwfs_ns.dm.current_cmd ) 
     # FOR NOW detector = None or a tuple representing the binning to perform on intensity in wavespace. add noise etc 
+    
+    # I could do this outside to save time but for now just do it here
     opd_current_dm = get_dm_displacement( command_vector= zwfs_ns.dm.current_cmd   , gain=zwfs_ns.dm.opd_per_cmd, \
         sigma= zwfs_ns.grid.dm_coord.act_sigma_wavesp, X=zwfs_ns.grid.wave_coord.X, Y=zwfs_ns.grid.wave_coord.Y,\
             x0=zwfs_ns.grid.dm_coord.act_x0_list_wavesp, y0=zwfs_ns.grid.dm_coord.act_y0_list_wavesp )

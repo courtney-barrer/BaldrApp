@@ -96,6 +96,43 @@ z_opd_advanced = z.analyze(clear_pupil=N0, zelda_pupil = Intensity , wave=zwfs_n
                            refwave_from_clear=True,
                            cpix=False, pupil_roi=pupil_roi)
 
+
+opd_input = 40e-9* zwfs_ns.grid.pupil_mask *  np.random.randn( *zwfs_ns.grid.pupil_mask.shape) #nm
+
+
+import time
+start_time = time.time()
+I = z.propagate_opd_map( 1 * opd_input, wave=zwfs_ns.optics.wvl0 )
+end_time = time.time()
+print( end_time - start_time )
+plt.imshow( I  ) ; plt.show()
+
+
+start_time = time.time()
+I2 = bldr.get_frame(  opd_input  = opd_input ,   amp_input = zwfs_ns.grid.pupil_mask ,\
+    opd_internal = 0* opd_input,  zwfs_ns= zwfs_ns , detector=None )
+end_time = time.time()
+print( end_time - start_time )
+plt.imshow( I2  ) ; plt.show()
+
+# slower because do DM surface processing when getting frame
+
+b, expi = ztools.create_reference_wave_beyond_pupil(z.mask_diameter, z.mask_depth, z.mask_substrate, z.mask_Fratio,
+                                       z.pupil_diameter, z.pupil, zwfs_ns.optics.wvl0, clear=np.array([]), 
+                                       sign_mask=np.array([]), cpix=False)
+
+
+
+b_ab, expi = ztools.create_reference_wave_beyond_pupil_with_aberrations( opd_input, z.mask_diameter, z.mask_depth, z.mask_substrate, z.mask_Fratio,
+                                       z.pupil_diameter, z.pupil, zwfs_ns.optics.wvl0, clear=np.array([]), 
+                                       sign_mask=np.array([]), cpix=False)
+
+plt.imshow (np.abs( b )); plt.colorbar(); plt.show()
+
+plt.imshow (np.abs( b_ab )); plt.colorbar(); plt.show()
+
+
+
 plt.figure(1)
 plt.imshow( N0 )
 
@@ -322,6 +359,40 @@ _ = bldr.build_IM( zwfs_ns ,  calibration_opd_input= 0 *zwfs_ns.grid.pupil_mask 
 _ = bldr.build_IM( zwfs_class ,  calibration_opd_input= 0 *zwfs_ns.grid.pupil_mask , calibration_amp_input = amp_input , \
     opd_internal = opd_internal,  basis = basis, Nmodes =  Nmodes, poke_amp = 0.05, poke_method = 'double_sided_poke',\
         imgs_to_mean = 1, detector=None)
+
+
+################## TEST 7.5
+# look at reference field (b)
+# Build IM  and look at Eigenmodes! 
+zwfs_ns = bldr.init_zwfs(grid_ns, optics_ns, dm_ns)
+
+# converting to a class and running the same function 
+zwfs_class = RecursiveNamespaceToClass( zwfs_ns )
+
+opd_input = 1 * zwfs_ns.grid.pupil_mask *  np.random.randn( *zwfs_ns.grid.pupil_mask.shape)
+
+opd_internal = 10e-9 * zwfs_ns.grid.pupil_mask * np.random.randn( *zwfs_ns.grid.pupil_mask.shape)
+
+amp_input = 1e4 * zwfs_ns.grid.pupil_mask
+
+pupil_basis = ztools.zernike.zernike_basis(nterms=15, npix=z.pupil_diameter, rho=None, theta=None) * 1e-9
+
+opd_input = 500 * z.pupil * util.insert_concentric(  np.nan_to_num( pupil_basis[10] ) , np.zeros( z.pupil.shape) )
+
+# something wrong here 
+psi_b = bldr.get_psf( phi= 2*3.14 * opd_input /zwfs_ns.optics.wvl0, phasemask_diameter = zwfs_ns.optics.mask_diam, pupil_diameter = zwfs_ns.grid.N, \
+         fplane_pixels=zwfs_ns.focal_plane.fplane_pixels, pixels_across_mask=zwfs_ns.focal_plane.pixels_across_mask )
+plt.imshow( abs( psi_b )**2, extent=[-1, 1, -1, 1], origin='lower' ); plt.colorbar(); plt.show()
+
+b =  bldr.get_b( phi= opd_input, phasemask= zwfs_ns.grid.phasemask_mask, phasemask_diameter = zwfs_ns.optics.mask_diam, pupil_diameter = zwfs_ns.grid.N, \
+         fplane_pixels=zwfs_ns.focal_plane.fplane_pixels, pixels_across_mask=zwfs_ns.focal_plane.pixels_across_mask )
+plt.imshow( abs( b ), extent=[-1, 1, -1, 1], origin='lower' ); plt.colorbar(); plt.show()
+
+
+
+psi_A = np.exp( 1j *  2*3.14 * opd_input /zwfs_ns.optics.wvl0)
+
+plt.imshow( np.fft.fftshift( abs( np.fft.fft2( np.pad( psi_A, psi_A.shape ) ) ) )); plt.colorbar(); plt.show()
 
 
 ################## TEST 8
