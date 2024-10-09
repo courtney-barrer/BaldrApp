@@ -38,7 +38,7 @@ class RecursiveNamespaceToClass:
     
 ################## INTERFACE WITH pyZELDA
 """ 
-We (git: courtney-barrer) forked the pyZELDA repository and added a new Baldr sensor class that interfaces with the BALDR app.
+I (git: courtney-barrer) forked the pyZELDA repository and added a new Baldr sensor class that interfaces with the BALDR app.
 BaldrApp can work with or without this sensor. If it is appended to the zwfs_ns object, the pyZelda machinary will be used to calculate the intensity.  
 Otherwise it will use my own machinery. This is useful for testing and debugging.
 """
@@ -51,34 +51,26 @@ z = zelda.Sensor('BALDR_UT_J3')
 # 
 # our own initialization of the zwfs using simple namespace due to speed
 wvl0 = 1.25e-6
-grid_dict = {
-    "D":8, # diameter of beam (m)
-    "N" : z.pupil_diameter, # number of pixels across pupil diameter
-    "padding_factor" : z.pupil_dim // z.pupil_diameter, # how many pupil diameters fit into grid x axis
-    # TOTAL NUMBER OF PIXELS = padding_factor * N 
-    }
-
-optics_dict = {
-    "wvl0" :wvl0 , # central wavelength (m) 
-    "F_number": z.mask_Fratio   , # F number on phasemask
-    "mask_diam": z.mask_diameter / (1.22 * z.mask_Fratio * wvl0 ), # diameter of phaseshifting region in diffraction limit units (physical unit is mask_diam * 1.22 * F_number * lambda)
-    "theta": z.mask_phase_shift( wvl0 )  # phaseshift of phasemask 
-}
+grid_ns, optics_ns = bldr.init_ns_from_pyZelda(z, wvl0)
 
 dm_dict = {
     "dm_model":"BMC-multi-3.5",
-    "actuator_coupling_factor":0.7,# std of in actuator spacing of gaussian IF applied to each actuator. (e.g actuator_coupling_factor = 1 implies std of poke is 1 actuator across.)
+    "actuator_coupling_factor":1.1, #0.7,# std of in actuator spacing of gaussian IF applied to each actuator. (e.g actuator_coupling_factor = 1 implies std of poke is 1 actuator across.)
     "dm_pitch":1,
     "dm_aoi":0, # angle of incidence of light on DM 
     "opd_per_cmd" : 3e-6, # peak opd applied at center of actuator per command unit (normalized between 0-1) 
     "flat_rmse" : 20e-9 # std (m) of flatness across Flat DM  
     }
 
-grid_ns = SimpleNamespace(**grid_dict)
-optics_ns = SimpleNamespace(**optics_dict)
+
 dm_ns = SimpleNamespace(**dm_dict)
 
 zwfs_ns = bldr.init_zwfs(grid_ns, optics_ns, dm_ns)
+
+# check if consistent:
+consistency_log = bldr.check_ns_consistency_with_pyZelda( z, zwfs_ns )
+if consistency_log=={}:
+    print('ALL GOOD!')
 
 # we can simply append the pyZelda object z to our zwfs_ns namespace. This can be converted to a class simply 
 zwfs_ns.pyZelda = z
@@ -95,6 +87,26 @@ plt.imshow( zwfs_ns.grid.pupil_mask )
 plt.figure(2)
 plt.imshow( zwfs_class.pyZelda.pupil)
 
+
+phi, phi_internal,  N0, I0, Intensity = bldr.test_propagation( zwfs_ns )
+
+pupil_roi = z.pupil
+z_opd_advanced = z.analyze(clear_pupil=N0, zelda_pupil = Intensity , wave=zwfs_ns.optics.wvl0,
+                           use_arbitrary_amplitude=True,
+                           refwave_from_clear=True,
+                           cpix=False, pupil_roi=pupil_roi)
+
+plt.figure(1)
+plt.imshow( N0 )
+
+plt.figure(2)
+plt.imshow( I0 )
+
+plt.figure(3)
+plt.imshow( z_opd_advanced )
+plt.show()
+
+
 ################## TEST 1
 # check dm registration on pupil (wavespace)
 zwfs_ns = bldr.init_zwfs(grid_ns, optics_ns, dm_ns)
@@ -103,6 +115,7 @@ zwfs_ns = bldr.init_zwfs(grid_ns, optics_ns, dm_ns)
 ################## TEST 0 
 # configure our zwfs 
 grid_dict = {
+    "telescope":'UT',
     "D":1, # diameter of beam 
     "N" : 64, # number of pixels across pupil diameter
     "padding_factor" : 4, # how many pupil diameters fit into grid x axis
@@ -140,7 +153,7 @@ zwfs_class = RecursiveNamespaceToClass( zwfs_ns )
 
 phi, phi_internal,  N0, I0, Intensity = bldr.test_propagation( zwfs_ns )
 
-phi, phi_internal,  N0, I0, Intensity = bldr.test_propagation( zwfs_class )
+#phi, phi_internal,  N0, I0, Intensity = bldr.test_propagation( zwfs_class )
 
 fig = plt.figure() 
 im = plt.imshow( N0, extent=[np.min(zwfs_ns.grid.wave_coord.x), np.max(zwfs_ns.grid.wave_coord.x),\
@@ -169,7 +182,7 @@ ax[3].imshow( I0 )
 zwfs_ns = bldr.init_zwfs(grid_ns, optics_ns, dm_ns)
 
 # redefining the affine transform between DM coordinates and the wavefront space
-a, b, c, d = zwfs_ns.grid.D/np.ptp(zwfs_ns.grid.wave_coord.x)/2, 0, 0, grid_ns.D/np.ptp(zwfs_ns.grid.wave_coord.x)/2  # Parameters for affine transform (identity for simplicity)
+a, b, c, d = 1.8*zwfs_ns.grid.D/np.ptp(zwfs_ns.grid.wave_coord.x), 0, 0, 1.8*grid_ns.D/np.ptp(zwfs_ns.grid.wave_coord.x)  # Parameters for affine transform (identity for simplicity)
 
 # offset 5% of pupil 
 t_x, t_y = np.mean(zwfs_ns.grid.wave_coord.x) + 0.05 * zwfs_ns.grid.D, np.mean(zwfs_ns.grid.wave_coord.x)  # Translation in phase space
@@ -179,7 +192,7 @@ dm_act_2_wave_space_transform_matrix = np.array( [[a,b,t_x],[c,d,t_y]] )
 
 zwfs_ns = bldr.update_dm_registration( dm_act_2_wave_space_transform_matrix , zwfs_ns )
 
-opd_atm, opd_internal, opd_dm, phi, N0, I0,  Intensity  = bldr.test_propagation( zwfs_ns )
+phi, phi_internal,  N0, I0, Intensity = bldr.test_propagation( zwfs_ns )
 
 
 fig = plt.figure() 
@@ -239,6 +252,7 @@ I0 = bldr.get_I0(  opd_input  = opd_input ,   amp_input = amp_input,\
 N0 = bldr.get_N0(  opd_input  = opd_input ,   amp_input = amp_input,\
     opd_internal = opd_internal,  zwfs_ns= zwfs_class , detector=None )
 
+plt.figure(); plt.imshow( I0 ) ;plt.show()
 
 ################## TEST 6
 # classify pupil regions and plot them

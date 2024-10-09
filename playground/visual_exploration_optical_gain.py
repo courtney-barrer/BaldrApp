@@ -93,6 +93,8 @@ detector = (4,4)
 
 zwfs_ns = bldr.init_zwfs(grid_ns, optics_ns, dm_ns)
 
+
+
 scrn = phasescreens.PhaseScreenVonKarman(nx_size= zwfs_ns.grid.N * zwfs_ns.grid.padding_factor , pixel_scale= zwfs_ns.grid.D / zwfs_ns.grid.N , r0=0.1, L0=12)
 
 tel = 'UT'
