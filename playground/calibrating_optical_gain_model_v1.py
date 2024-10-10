@@ -163,6 +163,7 @@ dt = 0.001 # s
 wvl0 = 1.25e-6 # m central wavelength for simulation 
 waveband = 'J'
 magnitude = 3.0 
+bandwidth = 200 #nm 
 
 # telescope throughput 
 vlti_throughput = 0.1
@@ -263,7 +264,7 @@ Ic = photon_scaling * z.propagate_opd_map( opd_map , wave = wvl0 )
 
 det_binning = round( bldr.calculate_detector_binning_factor(grid_pixels_across_pupil = z.pupil_diameter, detector_pixels_across_pupil = 12) )
 
-i = bldr.detect( Ic, binning = (16, 16), qe=qe , dit=dit, ron= ron, include_shotnoise=True, spectral_bandwidth = None )
+i = bldr.detect( Ic, binning = (16, 16), qe=qe , dit=dit, ron= ron, include_shotnoise=True, spectral_bandwidth = bandwidth )
 
 plt.imshow( i ) ; plt.colorbar(); plt.show()
 
