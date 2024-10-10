@@ -3,6 +3,7 @@ import matplotlib.pyplot as plt
 from matplotlib.gridspec import GridSpec
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 import datetime 
+from astropy import units as u
 
 def get_DM_command_in_2D(cmd,Nx_act=12):
     # function so we can easily plot the DM shape (since DM grid is not perfectly square raw cmds can not be plotted in 2D immediately )
@@ -298,33 +299,50 @@ def nice_DM_plot( data, savefig=None ): #for a 140 actuator BMC 3.5 DM
 
 
 
-# Define Cauchy's equation
-def cauchy_eqn(wavelength, A, B, C):
-    return A + B / wavelength**2 + C / wavelength**4
 
 
-def fit_cauchy_eqn_to_data(df, savefig = None):
-    # Example dataframe (replace with your actual df)
-    # df = pd.read_csv('path_to_your_data.csv')  # If your data is stored in a CSV
-    # Assuming your data is already in a dataframe 'df'
-    wavelengths = df['Wavelength(nm)'].values  # Extracting wavelength values
-    n_measured = df['n'].values  # Extracting refractive index values
 
-    # Perform the curve fitting
-    popt, pcov = curve_fit(cauchy_eqn, wavelengths, n_measured)
+def magnitude_to_photon_flux(magnitude, band, wavelength):
+    """
+    Convert stellar magnitude in a given band to photon flux (photons / s / m^2 / nm).
+    
+    ***EXPERIMENTAL  - need to verify results 
+    
+    Parameters:
+    - magnitude: The magnitude of the star.
+    - band: The name of the filter (e.g., 'V', 'J', 'H').
+    - wavelength: The central wavelength of the filter in nm.
+    
+    Returns:
+    - photon_flux: The number of photons per second per square meter per nanometer.
+    """
 
-    # Extract the fitted coefficients
-    A_fit, B_fit, C_fit = popt
-
-    # Generate the fitted curve
-    n_fitted = cauchy_eqn(wavelengths, A_fit, B_fit, C_fit)
-
-    # Plot the measured data vs the fitted curve
-    plt.plot(wavelengths, n_measured, 'b-', label='Measured Data')
-    plt.plot(wavelengths, n_fitted, 'r--', label=f'Fitted Cauchy Eqn\nA={A_fit:.4f}, B={B_fit:.4e}, C={C_fit:.4e}')
-    plt.xlabel('Wavelength (nm)')
-    plt.ylabel('Refractive Index n')
-    plt.legend()
-    if savefig is not None:
-        plt.savefig(savefig, bbox_inches='tight', dpi=200)  
-    plt.show()
+    from astropy.constants import h, c
+    # Zero points in energy flux for different bands (in erg/s/cm^2/Å)
+    zero_point_flux = {
+        'V': 3.63e-9 * u.erg / (u.cm**2 * u.s * u.AA),  # V-band zero point
+        'J': 3.13e-10 * u.erg / (u.cm**2 * u.s * u.AA), # J-band zero point
+        'H': 1.16e-10 * u.erg / (u.cm**2 * u.s * u.AA), # H-band zero point
+        # Add more bands as needed
+    }
+    
+    if band not in zero_point_flux:
+        raise ValueError(f"Unknown band: {band}. Available bands are {list(zero_point_flux.keys())}")
+    
+    # Convert magnitude to energy flux density (f_lambda in erg/s/cm^2/Å)
+    f_lambda = zero_point_flux[band] * 10**(-0.4 * magnitude)
+    
+    # Convert wavelength to meters
+    wavelength_m = (wavelength * u.nm).to(u.m)
+    
+    # Convert energy flux density to W/m^2/nm
+    f_lambda_si = f_lambda.to(u.W / (u.m**2 * u.nm), equivalencies=u.spectral_density(wavelength_m))
+    
+    # Calculate the energy per photon (in joules) at the given wavelength
+    energy_per_photon = (h * c / wavelength_m).to(u.J)  # Energy per photon at this wavelength
+    
+    # Calculate photon flux (photons/s/m^2/nm)
+    photon_flux = f_lambda_si / energy_per_photon.value  # Explicitly divide by the scalar value of energy_per_photon
+    
+    # Return photon flux in the appropriate units (photon/s/m^2/nm)
+    return photon_flux.value

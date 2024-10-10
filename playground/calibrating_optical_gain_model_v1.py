@@ -153,12 +153,19 @@ plt.show()
 z = zelda.Sensor('BALDR_UT_J3')
 
 # grid 
-wvl0 = 1.25e-6 # m central wavelength for simulation 
 D = 8.0 #m
 dim = z.pupil.shape[0]
 Dpix = z.pupil_diameter
 dx = D / Dpix
 dt = 0.001 # s
+
+# stellar parameters 
+wvl0 = 1.25e-6 # m central wavelength for simulation 
+waveband = 'J'
+magnitude = 3.0 
+
+# telescope throughput 
+vlti_throughput = 0.1
 
 # atmosphere 
 r0 = 0.1 * (wvl0/500e-9)**(6/5) #m - applying Fried parameter wavelength scaling 
@@ -190,13 +197,12 @@ opd = [50e-9, 50e-9]
 vibration_frequencies = [15, 45] #Hz
 
 
-
-
-
 # calculate reference (perfect system) optical gain (b0)
 b0, expi = ztools.create_reference_wave_beyond_pupil(z.mask_diameter, z.mask_depth, z.mask_substrate, z.mask_Fratio,
                                        z.pupil_diameter, z.pupil, wvl0, clear=np.array([]), 
                                        sign_mask=np.array([]), cpix=False)
+
+
 
 
 
@@ -230,24 +236,36 @@ print( f'for {Nmodes_removed} Zernike modes removed (scrn_scaling={scrn_scaling}
 #ao1 *= DM_field
 
 # convert to OPD map
-opd_map = wvl0 / (2*np.pi) * ao_1 
+opd_map = z.pupil * wvl0 / (2*np.pi) * ao_1 
 
 # caclulate Strehl ratio
 strehl = np.exp( - np.var( ao_1[z.pupil>0.5]) )
 
-b, _ = ztools.create_reference_wave_beyond_pupil_with_aberrations(opd_map,z.mask_diameter, z.mask_depth, z.mask_substrate, z.mask_Fratio,
+b, _ = ztools.create_reference_wave_beyond_pupil_with_aberrations(opd_map, z.mask_diameter, z.mask_depth, z.mask_substrate, z.mask_Fratio,
                                        z.pupil_diameter, z.pupil, wvl0, clear=np.array([]), 
                                        sign_mask=np.array([]), cpix=False)
 
-Ic = z.propagate_opd_map( opd_map , wave = wvl0 )
+N0 = ztools.propagate_opd_map(0*opd_map, z.mask_diameter, 0*z.mask_depth, z.mask_substrate,
+                                        z.mask_Fratio, z.pupil_diameter, z.pupil, wave=wvl0)
 
+I0 = ztools.propagate_opd_map(0*opd_map, z.mask_diameter, z.mask_depth, z.mask_substrate,
+                                        z.mask_Fratio, z.pupil_diameter, z.pupil, wave=wvl0)
+
+
+# normalized such that np.sum( I0 ) / np.sum( N0 ) ~ 1 where N0.max() = 1. 
 # do normalization by known area of the pupil and the input stellar magnitude at the given wavelength 
+# represent as #photons / s / pixel / nm
+
+# input amplitude of the star 
+photon_scaling = vlti_throughput * (np.pi * (D/2)**2) / (np.pi * z.pupil_diameter/2)**2 * util.magnitude_to_photon_flux(magnitude=magnitude, band = waveband, wavelength= 1e9*wvl0)
+
+Ic = photon_scaling * z.propagate_opd_map( opd_map , wave = wvl0 )
 
 det_binning = round( bldr.calculate_detector_binning_factor(grid_pixels_across_pupil = z.pupil_diameter, detector_pixels_across_pupil = 12) )
 
-i = bldr.detect( 1e9*Ic, binning = (16, 16), qe=qe , dit=dit, ron= ron, include_shotnoise=True, spectral_bandwidth = None )
+i = bldr.detect( Ic, binning = (16, 16), qe=qe , dit=dit, ron= ron, include_shotnoise=True, spectral_bandwidth = None )
 
-plt.imshow( i ) ; plt.show()
+plt.imshow( i ) ; plt.colorbar(); plt.show()
 
 
 # IF YOU WANT TO VISUALIZE ANY INTERMEDIATE STEPS
@@ -259,54 +277,3 @@ plt.imshow( i ) ; plt.show()
 #plt.imshow( z.pupil * np.abs(b) ); plt.colorbar(); plt.show()
 #plt.imshow( z.pupil * np.angle(b) ); plt.colorbar(); plt.show()
 #plt.imshow( Ic ); plt.show()
-from astropy import units as u
-from astropy.constants import h, c
-
-def magnitude_to_photon_flux(magnitude, band, wavelength):
-    """
-    Convert stellar magnitude in a given band to photon flux (photons / s / m^2 / nm).
-    
-    Parameters:
-    - magnitude: The magnitude of the star.
-    - band: The name of the filter (e.g., 'V', 'J', 'H').
-    - wavelength: The central wavelength of the filter in nm.
-    
-    Returns:
-    - photon_flux: The number of photons per second per square meter per nanometer.
-    """
-    # Zero points in energy flux for different bands (in erg/s/cm^2/Å)
-    zero_point_flux = {
-        'V': 3.63e-9 * u.erg / (u.cm**2 * u.s * u.AA),  # V-band zero point
-        'J': 3.13e-10 * u.erg / (u.cm**2 * u.s * u.AA), # J-band zero point
-        'H': 1.16e-10 * u.erg / (u.cm**2 * u.s * u.AA), # H-band zero point
-        # Add more bands as needed
-    }
-    
-    if band not in zero_point_flux:
-        raise ValueError(f"Unknown band: {band}. Available bands are {list(zero_point_flux.keys())}")
-    
-    # Convert magnitude to energy flux density (f_lambda in erg/s/cm^2/Å)
-    f_lambda = zero_point_flux[band] * 10**(-0.4 * magnitude)
-    
-    # Convert wavelength to meters
-    wavelength_m = (wavelength * u.nm).to(u.m)
-    
-    # Convert energy flux density to W/m^2/nm
-    f_lambda_si = f_lambda.to(u.W / (u.m**2 * u.nm), equivalencies=u.spectral_density(wavelength_m))
-    
-    # Calculate the energy per photon (in joules) at the given wavelength
-    energy_per_photon = (h * c / wavelength_m).to(u.J)  # Energy per photon at this wavelength
-    
-    # Calculate photon flux (photons/s/m^2/nm)
-    photon_flux = f_lambda_si / energy_per_photon.value  # Explicitly divide by the scalar value of energy_per_photon
-    
-    # Return photon flux in the appropriate units (photon/s/m^2/nm)
-    return photon_flux.value
-
-# Example usage
-magnitude = 10.0  # Vega's magnitude in the V band
-band = 'J'
-wavelength = 1250  # Central wavelength of the V band in nm
-
-photon_flux = magnitude_to_photon_flux(magnitude, band, wavelength)
-print(f"Photon flux for Vega in {band}-band: {photon_flux:.2e} photons / s / m^2 / nm")
