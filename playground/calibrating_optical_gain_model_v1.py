@@ -1,26 +1,17 @@
 
+import numpy as np
+import matplotlib.pyplot as plt
+from matplotlib.widgets import Slider
+import importlib # reimport package after edits: importlib.reload(bldr)
 
+# from courtney-barrer's fork of pyzelda
+import pyzelda.zelda as zelda
+import pyzelda.ztools as ztools
+import pyzelda.utils.aperture as aperture
 
-# ZWFS initialization 
-z = 
-
-# grid 
-dim = 
-N = 
-dt = 0.001 # s
-
-# atmosphere 
-r0 = 0.1 #cm
-L0 = 25 #m
-
-# first stage AO 
-Nmodes_removed = 0
-
-# vibrations 
-mode_indicies = [0, 1]
-spectrum_type = ['1/f', '1/f']
-opd = [50e-9, 50e-9]
-vibration_frequencies = []
+from common import phasescreens as ps
+from common import utilities as util
+from common import baldr_core as bldr
 
 # create phase screen 
 
@@ -53,23 +44,96 @@ vibration_frequencies = []
 #   and A is a known (by construction) parameter and Pi(x,y) defines the phaseshifting region on the mask (0 if no phase shift applie, 1 otherwise).
  
 
+#   The problem is then to estimate phi0(x,y) and psi_R(x,y) from the measurements I0(x,y) and N0(x,y).
+#    open question 
+#       - fit psi_R first from samples outside pupil and then use this to estimate phi0. 
+#     Then repeat using full function of phi0 est, to get psi_R. Is this convex or non-convex? i.e. will it always converge to global maxima?
+#       - Assume phi0 = 0 and then solve abs(psi_R) pixelwise. Selecting smoothest solution. 
+#          Then use psi_R as normal with some uncertainty and update solve phi0 (bayesian).
 
-#  I0 - N0  = abs(psi_A)**2 + abs(psi_R)**2 + 2 * abs(psi_A) * abs(psi_R) * np.cos(  mu ) - abs(psi_A)**2
-#           = abs(psi_R) * ( abs(psi_R) + 2 * abs(psi_A) * np.cos( phi0 - mu ) ) 
-#  => 0     = abs(psi_R)**2 + 2 * abs(psi_A) * abs(psi_R) * np.cos( phi0 - mu )  - (I0 - N0)   
-# quadratic in abs(psi_R). a= 1, b = 2 * abs(psi_A) * np.cos( phi0 - mu ),  c = -(I0 - N0). 
-# All measured besides phi0 (internal aberrations). initially assume phi0 = 0.
-# we could also estimate phi0 via minimization of the residuals by leaving phi0 as free variable
-# then minimize the residuals to find the best fit phi0.
-# min_phi0 (delta_I_m - delta_i_theory) 
-# we could use a centered normal distribution for the prior on phi0 to avoid phase wrapping.
-
-#a= 1, b = 2 * abs(psi_A) * np.cos( lambda + phi0 - mu ),  c = -(I0 - N0). 
-
-abs(psi_R)_theory - 
+# the general pixelwise model:
+#           y = a*X^2 + b * X * cos( phi + a )
 
 
- 
+#%%
+#Define the function f(X,ϕ)=a⋅X2+b⋅X⋅cos⁡(ϕ+c) .
+# For a fixed value of y, plot the contour where f(X,ϕ)=y
+
+
+# Given constants
+a = 1.0   # Fixed a value
+
+# Define the function f(|psi_R|, phi)
+def f(psi_R, phi, psi_A, mu):
+    b = 2 * np.sqrt(psi_A)  # Compute b from |psi_A|
+    return a * psi_R**2 + b * psi_R * np.cos(phi + mu)
+
+# Define the function for y = |\psi_C|^2 - |\psi_A|^2
+def psi_C_squared(psi_R, phi, psi_A, mu):
+    return f(psi_R, phi, psi_A, mu) + psi_A**2  # y is relabeled as |\psi_C|^2 - |\psi_A|^2
+
+# Define the range of |psi_R| (X) and phi values
+psi_R_vals = np.linspace(-10, 10, 400)  # range of |psi_R| (X) values
+phi_vals = np.linspace(-np.pi, np.pi, 400)  # range of phi values
+
+# Create meshgrid for |psi_R| and phi
+psi_R, phi = np.meshgrid(psi_R_vals, phi_vals)
+
+# Initial parameters
+psi_A_init = 2.0  # Initial |psi_A|
+mu_init = 0.5     # Initial mu value
+psi_C_init = 10.0  # Initial value for |psi_C|
+
+# Create the figure and the contour plot
+fig, ax = plt.subplots(figsize=(8, 6))
+plt.subplots_adjust(left=0.1, bottom=0.35)  # Make room for sliders
+f_vals = psi_C_squared(psi_R, phi, psi_A_init, mu_init)
+contour = ax.contour(psi_R, phi, f_vals, levels=[psi_C_init], colors='r')
+ax.set_title(r'Phase Space Contour for $|\psi_C|^2 - |\psi_A|^2 = {}$'.format(psi_C_init))
+ax.set_xlabel(r'$|\psi_R|$')
+ax.set_ylabel(r'$\phi$')
+ax.grid(True)
+
+# Adjust the position of the sliders
+ax_slider_psi_A = plt.axes([0.1, 0.20, 0.8, 0.03], facecolor='lightgoldenrodyellow')
+ax_slider_mu = plt.axes([0.1, 0.15, 0.8, 0.03], facecolor='lightgoldenrodyellow')
+ax_slider_psi_C = plt.axes([0.1, 0.10, 0.8, 0.03], facecolor='lightgoldenrodyellow')
+
+# Define the sliders
+slider_psi_A = Slider(ax_slider_psi_A, r'$|\psi_A|$', 0.1, 5.0, valinit=psi_A_init)
+slider_mu = Slider(ax_slider_mu, r'$\mu$', -np.pi, np.pi, valinit=mu_init)
+slider_psi_C = Slider(ax_slider_psi_C, r'$|\psi_C|^2 - |\psi_A|^2$', 0.1, 20.0, valinit=psi_C_init)
+
+# Update function to redraw the plot when sliders change
+def update(val):
+    psi_A = slider_psi_A.val
+    mu = slider_mu.val
+    psi_C = slider_psi_C.val
+    
+    ax.clear()
+    f_vals = psi_C_squared(psi_R, phi, psi_A, mu)
+    ax.contour(psi_R, phi, f_vals, levels=[psi_C], colors='r')
+    ax.set_title(r'Phase Space Contour for $|\psi_C|^2 - |\psi_A|^2 = {}$'.format(psi_C))
+    ax.set_xlabel(r'$|\psi_R|$')
+    ax.set_ylabel(r'$\phi$')
+    ax.grid(True)
+    fig.canvas.draw_idle()
+
+# Attach the update function to sliders
+slider_psi_A.on_changed(update)
+slider_mu.on_changed(update)
+slider_psi_C.on_changed(update)
+
+plt.show()
+
+
+# I think the best route (similar to what Zelda does) is to estimate psi_R first from measured (clear) pupil
+# then reconstruct phase analytically.
+
+
+#%%
+
+#### AFTER CALIBRATION OF THE OPTICAL GAIN REFERENCE (ZERO ABERRATIONS)
 # simulate simulate the ZWFS signal with no-aberrations, es 
 # iterate phase screens with vibrations
 #   for each phase screen,
@@ -83,3 +147,166 @@ abs(psi_R)_theory -
 #   goal is to build a model that predicts non-observable parameters from observable parameters
 #   baseline model for Strehl is a linear combination of ZWFS intensity in sub-regions of the image  
 #   baseline model for the optical gain is then b = sqrt(S) * b0. Where b0 is the optical gain without aberrations  
+
+
+# ZWFS initialization 
+z = zelda.Sensor('BALDR_UT_J3')
+
+# grid 
+wvl0 = 1.25e-6 # m central wavelength for simulation 
+D = 8.0 #m
+dim = z.pupil.shape[0]
+Dpix = z.pupil_diameter
+dx = D / Dpix
+dt = 0.001 # s
+
+# atmosphere 
+r0 = 0.1 * (wvl0/500e-9)**(6/5) #m - applying Fried parameter wavelength scaling 
+L0 = 25 #m
+scrn_scaling = 0.3 # to make variance of phase screen match measured Strehl for given  number of modes removed (Naomi data) 
+scrn = ps.PhaseScreenKolmogorov(nx_size=dim, pixel_scale=dx, r0=r0, L0=L0, random_seed=1)
+
+# detector 
+dit = 1e-3 # s
+ron = 1 # electrons
+qe = 0.7 # quantum efficiency
+
+
+# first stage AO 
+basis_cropped = ztools.zernike.zernike_basis(nterms=150, npix=z.pupil_diameter)
+# we have padding around telescope pupil (check z.pupil.shape and z.pupil_diameter) 
+# so we need to put basis in the same frame  
+basis_template = np.zeros( z.pupil.shape )
+basis = np.array( [ util.insert_concentric( np.nan_to_num(b, 0), basis_template) for b in basis_cropped] )
+
+pupil_disk = basis[0] # we define a disk pupil without secondary - useful for removing Zernike modes later
+
+Nmodes_removed = 14 # Default will be to remove Zernike modes 
+
+# vibrations 
+mode_indicies = [0, 1]
+spectrum_type = ['1/f', '1/f']
+opd = [50e-9, 50e-9]
+vibration_frequencies = [15, 45] #Hz
+
+
+
+
+
+# calculate reference (perfect system) optical gain (b0)
+b0, expi = ztools.create_reference_wave_beyond_pupil(z.mask_diameter, z.mask_depth, z.mask_substrate, z.mask_Fratio,
+                                       z.pupil_diameter, z.pupil, wvl0, clear=np.array([]), 
+                                       sign_mask=np.array([]), cpix=False)
+
+
+
+it = 0 
+
+# crop the pupil disk and the phasescreen within it (remove padding outside pupil)
+pupil_disk_cropped, atm_in_pupil = util.crop_pupil(pupil_disk, scrn.scrn)
+
+# test project onto Zernike modes 
+mode_coefficients = np.array( ztools.zernike.opd_expand(atm_in_pupil * pupil_disk_cropped,\
+    nterms=len(basis), aperture =pupil_disk_cropped))
+
+# do the reconstruction for N modes
+reco = np.sum( mode_coefficients[:Nmodes_removed,np.newaxis, np.newaxis] * basis[:Nmodes_removed,:,:] ,axis = 0) 
+
+# remove N modes 
+ao_1 = scrn_scaling * pupil_disk * (scrn.scrn - reco) 
+
+
+# add vibrations
+# TO DO 
+
+# for calibration purposes
+print( f'for {Nmodes_removed} Zernike modes removed (scrn_scaling={scrn_scaling}),\n \
+    atmospheric conditions r0= {round(r0,2)}m at a central wavelength {round(1e6*wvl0,2)}um\n\
+        post 1st stage AO rmse [nm rms] = ',\
+    round( 1e9 * (wvl0 / (2*np.pi) * ao_1)[z.pupil>0.5].std() ) )
+
+
+# apply DM 
+#ao1 *= DM_field
+
+# convert to OPD map
+opd_map = wvl0 / (2*np.pi) * ao_1 
+
+# caclulate Strehl ratio
+strehl = np.exp( - np.var( ao_1[z.pupil>0.5]) )
+
+b, _ = ztools.create_reference_wave_beyond_pupil_with_aberrations(opd_map,z.mask_diameter, z.mask_depth, z.mask_substrate, z.mask_Fratio,
+                                       z.pupil_diameter, z.pupil, wvl0, clear=np.array([]), 
+                                       sign_mask=np.array([]), cpix=False)
+
+Ic = z.propagate_opd_map( opd_map , wave = wvl0 )
+
+# do normalization by known area of the pupil and the input stellar magnitude at the given wavelength 
+
+det_binning = round( bldr.calculate_detector_binning_factor(grid_pixels_across_pupil = z.pupil_diameter, detector_pixels_across_pupil = 12) )
+
+i = bldr.detect( 1e9*Ic, binning = (16, 16), qe=qe , dit=dit, ron= ron, include_shotnoise=True, spectral_bandwidth = None )
+
+plt.imshow( i ) ; plt.show()
+
+
+# IF YOU WANT TO VISUALIZE ANY INTERMEDIATE STEPS
+#plt.figure(); plt.imshow( z.pupil * scrn.scrn); plt.show()
+#plt.imshow( reco ); plt.colorbar(); plt.show()
+#plt.imshow( ao_1 ); plt.colorbar(); plt.show()
+#plt.imshow( z.pupil * np.abs(b0) ); plt.colorbar(); plt.show()
+#plt.imshow( z.pupil * np.angle(b0) ); plt.colorbar(); plt.show()
+#plt.imshow( z.pupil * np.abs(b) ); plt.colorbar(); plt.show()
+#plt.imshow( z.pupil * np.angle(b) ); plt.colorbar(); plt.show()
+#plt.imshow( Ic ); plt.show()
+from astropy import units as u
+from astropy.constants import h, c
+
+def magnitude_to_photon_flux(magnitude, band, wavelength):
+    """
+    Convert stellar magnitude in a given band to photon flux (photons / s / m^2 / nm).
+    
+    Parameters:
+    - magnitude: The magnitude of the star.
+    - band: The name of the filter (e.g., 'V', 'J', 'H').
+    - wavelength: The central wavelength of the filter in nm.
+    
+    Returns:
+    - photon_flux: The number of photons per second per square meter per nanometer.
+    """
+    # Zero points in energy flux for different bands (in erg/s/cm^2/Å)
+    zero_point_flux = {
+        'V': 3.63e-9 * u.erg / (u.cm**2 * u.s * u.AA),  # V-band zero point
+        'J': 3.13e-10 * u.erg / (u.cm**2 * u.s * u.AA), # J-band zero point
+        'H': 1.16e-10 * u.erg / (u.cm**2 * u.s * u.AA), # H-band zero point
+        # Add more bands as needed
+    }
+    
+    if band not in zero_point_flux:
+        raise ValueError(f"Unknown band: {band}. Available bands are {list(zero_point_flux.keys())}")
+    
+    # Convert magnitude to energy flux density (f_lambda in erg/s/cm^2/Å)
+    f_lambda = zero_point_flux[band] * 10**(-0.4 * magnitude)
+    
+    # Convert wavelength to meters
+    wavelength_m = (wavelength * u.nm).to(u.m)
+    
+    # Convert energy flux density to W/m^2/nm
+    f_lambda_si = f_lambda.to(u.W / (u.m**2 * u.nm), equivalencies=u.spectral_density(wavelength_m))
+    
+    # Calculate the energy per photon (in joules) at the given wavelength
+    energy_per_photon = (h * c / wavelength_m).to(u.J)  # Energy per photon at this wavelength
+    
+    # Calculate photon flux (photons/s/m^2/nm)
+    photon_flux = f_lambda_si / energy_per_photon.value  # Explicitly divide by the scalar value of energy_per_photon
+    
+    # Return photon flux in the appropriate units (photon/s/m^2/nm)
+    return photon_flux.value
+
+# Example usage
+magnitude = 10.0  # Vega's magnitude in the V band
+band = 'J'
+wavelength = 1250  # Central wavelength of the V band in nm
+
+photon_flux = magnitude_to_photon_flux(magnitude, band, wavelength)
+print(f"Photon flux for Vega in {band}-band: {photon_flux:.2e} photons / s / m^2 / nm")

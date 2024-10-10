@@ -1112,6 +1112,70 @@ def average_subarrays(array, block_size):
     
     return averaged_subarrays
 
+
+
+def sum_subarrays(array, block_size):
+    """
+    Averages non-overlapping sub-arrays of a given 2D NumPy array.
+    
+    Parameters:
+    array (numpy.ndarray): Input 2D array of shape (N, M).
+    block_size (tuple): Size of the sub-array blocks (height, width).
+    
+    Returns:
+    numpy.ndarray: 2D array containing the averaged values of the sub-arrays.
+    """
+    # Check if the array dimensions are divisible by the block size
+    if array.shape[0] % block_size[0] != 0 or array.shape[1] % block_size[1] != 0:
+        raise ValueError("Array dimensions must be divisible by the block size.")
+    
+    # Reshape the array to isolate the sub-arrays
+    reshaped = array.reshape(array.shape[0] // block_size[0], block_size[0], 
+                             array.shape[1] // block_size[1], block_size[1])
+    
+    # Compute the mean of the sub-arrays
+    summed_subarrays = reshaped.sum(axis=(1, 3))
+    
+    return summed_subarrays
+    
+    
+def calculate_detector_binning_factor(grid_pixels_across_pupil, detector_pixels_across_pupil):
+    binning = grid_pixels_across_pupil / detector_pixels_across_pupil
+    return binning
+
+
+def detect( i, binning, qe , dit, ron= 0, include_shotnoise=True, spectral_bandwidth = None ):
+    """_summary_
+    assumes input intensity is in photons per second per pixel per nm, 
+    if spectral_bandwidth is None than returns photons per pixel per nm of input light,
+    otherwise returns photons per pixel
+    
+    Args:
+        i (2D array like): _description_ input intensity before being detected on a detector (generally higher spatial resolution than detector)
+        binning (tuple): _description_ binning factor (rows to sum, columns to sum) 
+        qe (scalar): _description_ quantum efficiency of detector
+        dit (scalar): _description_ integration time of detector
+        ron (int, optional): _description_. Defaults to 1. readout noise in electrons per pixel
+        include_shotnoise (bool, optional): _description_. Defaults to True. Sample poisson distribution for each pixel (input intensity is the expected value)
+        spectral_bandwidth (_type_, optional): _description_. Defaults to None. if spectral_bandwidth is None than returns photons per pixel per nm of input light,
+    """
+
+    i = sum_subarrays( array = i, block_size = binning )
+    
+    if spectral_bandwidth is None:
+        i *= qe * dit 
+    else:
+        i *= qe * dit * spectral_bandwidth
+    
+    if include_shotnoise:
+        noisy_intensity = np.random.poisson(lam=i)
+    else: # no noise
+        noisy_intensity = i
+        
+    if ron > 0:
+        noisy_intensity += np.random.normal(0, ron, noisy_intensity.shape).astype(int)
+
+    return noisy_intensity
     
     
 def get_I0(  opd_input,  amp_input , opd_internal,  zwfs_ns , detector=None):
