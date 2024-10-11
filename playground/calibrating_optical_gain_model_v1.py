@@ -2,6 +2,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.widgets import Slider
+from types import SimpleNamespace
 import importlib # reimport package after edits: importlib.reload(bldr)
 
 # from courtney-barrer's fork of pyzelda
@@ -156,8 +157,7 @@ z = zelda.Sensor('BALDR_UT_J3')
 D = 8.0 #m
 dim = z.pupil.shape[0]
 Dpix = z.pupil_diameter
-dx = D / Dpix
-dt = 0.001 # s
+dx = D / Dpix # m/pixel in pupil grid
 
 # stellar parameters 
 wvl0 = 1.25e-6 # m central wavelength for simulation 
@@ -171,6 +171,12 @@ vlti_throughput = 0.1
 # atmosphere 
 r0 = 0.1 * (wvl0/500e-9)**(6/5) #m - applying Fried parameter wavelength scaling 
 L0 = 25 #m
+V = 50 # m/s
+pixels_per_iteration = 0.5 # every two iterations we move the phase screen by one pixel
+
+# get required simulation sampling rate to match physical parameters 
+dt = dx * pixels_per_iteration / V # s # simulation sampling rate
+print(f'current parameters have effective wind velocity = {round(V)}m/s')
 scrn_scaling = 0.3 # to make variance of phase screen match measured Strehl for given  number of modes removed (Naomi data) 
 scrn = ps.PhaseScreenKolmogorov(nx_size=dim, pixel_scale=dx, r0=r0, L0=L0, random_seed=1)
 
@@ -204,70 +210,90 @@ b0, expi = ztools.create_reference_wave_beyond_pupil(z.mask_diameter, z.mask_dep
                                        sign_mask=np.array([]), cpix=False)
 
 
+telemetry = {
+    'I0':[],
+    'N0':[],
+    'scrn':[],
+    'ao_1':[],
+    'i':[],
+    'strehl':[],
+    'b':[],
+    'ao_2':[]
+}
+
+telem_ns = SimpleNamespace(**telemetry)
+
+for it in range(100):
+    
+    # roll screen
+    scrn.add_row() 
+    
+    # crop the pupil disk and the phasescreen within it (remove padding outside pupil)
+    pupil_disk_cropped, atm_in_pupil = util.crop_pupil(pupil_disk, scrn.scrn)
+
+    # test project onto Zernike modes 
+    mode_coefficients = np.array( ztools.zernike.opd_expand(atm_in_pupil * pupil_disk_cropped,\
+        nterms=len(basis), aperture =pupil_disk_cropped))
+
+    # do the reconstruction for N modes
+    reco = np.sum( mode_coefficients[:Nmodes_removed,np.newaxis, np.newaxis] * basis[:Nmodes_removed,:,:] ,axis = 0) 
+
+    # remove N modes 
+    ao_1 = scrn_scaling * pupil_disk * (scrn.scrn - reco) 
 
 
+    # add vibrations
+    # TO DO 
 
-it = 0 
-
-# crop the pupil disk and the phasescreen within it (remove padding outside pupil)
-pupil_disk_cropped, atm_in_pupil = util.crop_pupil(pupil_disk, scrn.scrn)
-
-# test project onto Zernike modes 
-mode_coefficients = np.array( ztools.zernike.opd_expand(atm_in_pupil * pupil_disk_cropped,\
-    nterms=len(basis), aperture =pupil_disk_cropped))
-
-# do the reconstruction for N modes
-reco = np.sum( mode_coefficients[:Nmodes_removed,np.newaxis, np.newaxis] * basis[:Nmodes_removed,:,:] ,axis = 0) 
-
-# remove N modes 
-ao_1 = scrn_scaling * pupil_disk * (scrn.scrn - reco) 
+    # for calibration purposes
+    print( f'for {Nmodes_removed} Zernike modes removed (scrn_scaling={scrn_scaling}),\n \
+        atmospheric conditions r0= {round(r0,2)}m at a central wavelength {round(1e6*wvl0,2)}um\n\
+            post 1st stage AO rmse [nm rms] = ',\
+        round( 1e9 * (wvl0 / (2*np.pi) * ao_1)[z.pupil>0.5].std() ) )
 
 
-# add vibrations
-# TO DO 
+    # apply DM 
+    #ao1 *= DM_field
 
-# for calibration purposes
-print( f'for {Nmodes_removed} Zernike modes removed (scrn_scaling={scrn_scaling}),\n \
-    atmospheric conditions r0= {round(r0,2)}m at a central wavelength {round(1e6*wvl0,2)}um\n\
-        post 1st stage AO rmse [nm rms] = ',\
-    round( 1e9 * (wvl0 / (2*np.pi) * ao_1)[z.pupil>0.5].std() ) )
-
-
-# apply DM 
-#ao1 *= DM_field
-
-# convert to OPD map
-opd_map = z.pupil * wvl0 / (2*np.pi) * ao_1 
-
-# caclulate Strehl ratio
-strehl = np.exp( - np.var( ao_1[z.pupil>0.5]) )
-
-b, _ = ztools.create_reference_wave_beyond_pupil_with_aberrations(opd_map, z.mask_diameter, z.mask_depth, z.mask_substrate, z.mask_Fratio,
-                                       z.pupil_diameter, z.pupil, wvl0, clear=np.array([]), 
-                                       sign_mask=np.array([]), cpix=False)
-
-N0 = ztools.propagate_opd_map(0*opd_map, z.mask_diameter, 0*z.mask_depth, z.mask_substrate,
+    # convert to OPD map
+    opd_map = z.pupil * wvl0 / (2*np.pi) * ao_1 
+    
+    if it==0:
+        N0 = ztools.propagate_opd_map(0*opd_map, z.mask_diameter, 0*z.mask_depth, z.mask_substrate,
                                         z.mask_Fratio, z.pupil_diameter, z.pupil, wave=wvl0)
 
-I0 = ztools.propagate_opd_map(0*opd_map, z.mask_diameter, z.mask_depth, z.mask_substrate,
+        I0 = ztools.propagate_opd_map(0*opd_map, z.mask_diameter, z.mask_depth, z.mask_substrate,
                                         z.mask_Fratio, z.pupil_diameter, z.pupil, wave=wvl0)
+    
+        telem_ns.I0.append(I0)
+        telem_ns.N0.append(N0)  
 
+    # caclulate Strehl ratio
+    strehl = np.exp( - np.var( ao_1[z.pupil>0.5]) )
 
-# normalized such that np.sum( I0 ) / np.sum( N0 ) ~ 1 where N0.max() = 1. 
-# do normalization by known area of the pupil and the input stellar magnitude at the given wavelength 
-# represent as #photons / s / pixel / nm
+    b, _ = ztools.create_reference_wave_beyond_pupil_with_aberrations(opd_map, z.mask_diameter, z.mask_depth, z.mask_substrate, z.mask_Fratio,
+                                        z.pupil_diameter, z.pupil, wvl0, clear=np.array([]), 
+                                        sign_mask=np.array([]), cpix=False)
 
-# input amplitude of the star 
-photon_scaling = vlti_throughput * (np.pi * (D/2)**2) / (np.pi * z.pupil_diameter/2)**2 * util.magnitude_to_photon_flux(magnitude=magnitude, band = waveband, wavelength= 1e9*wvl0)
+    # normalized such that np.sum( I0 ) / np.sum( N0 ) ~ 1 where N0.max() = 1. 
+    # do normalization by known area of the pupil and the input stellar magnitude at the given wavelength 
+    # represent as #photons / s / pixel / nm
 
-Ic = photon_scaling * z.propagate_opd_map( opd_map , wave = wvl0 )
+    # input amplitude of the star 
+    photon_scaling = vlti_throughput * (np.pi * (D/2)**2) / (np.pi * z.pupil_diameter/2)**2 * util.magnitude_to_photon_flux(magnitude=magnitude, band = waveband, wavelength= 1e9*wvl0)
 
-det_binning = round( bldr.calculate_detector_binning_factor(grid_pixels_across_pupil = z.pupil_diameter, detector_pixels_across_pupil = 12) )
+    Ic = photon_scaling * z.propagate_opd_map( opd_map , wave = wvl0 )
 
-i = bldr.detect( Ic, binning = (16, 16), qe=qe , dit=dit, ron= ron, include_shotnoise=True, spectral_bandwidth = bandwidth )
+    det_binning = round( bldr.calculate_detector_binning_factor(grid_pixels_across_pupil = z.pupil_diameter, detector_pixels_across_pupil = 12) )
 
-plt.imshow( i ) ; plt.colorbar(); plt.show()
+    i = bldr.detect( Ic, binning = (16, 16), qe=qe , dit=dit, ron= ron, include_shotnoise=True, spectral_bandwidth = bandwidth )
 
+    telem_ns.ao_1.append(z.pupil * ao_1)
+    telem_ns.i.append(i)
+    telem_ns.strehl.append(strehl)
+    telem_ns.b.append(b)
+    
+    print( f'iteration {it} done')
 
 # IF YOU WANT TO VISUALIZE ANY INTERMEDIATE STEPS
 #plt.figure(); plt.imshow( z.pupil * scrn.scrn); plt.show()
@@ -278,3 +304,208 @@ plt.imshow( i ) ; plt.colorbar(); plt.show()
 #plt.imshow( z.pupil * np.abs(b) ); plt.colorbar(); plt.show()
 #plt.imshow( z.pupil * np.angle(b) ); plt.colorbar(); plt.show()
 #plt.imshow( Ic ); plt.show()
+#plt.imshow( i ) ; plt.colorbar(); plt.show()
+
+
+"""can you now write code that turns these plots into a movie from python (running on ubuntu 20.04)?"""
+
+# Example usage:
+# Create some example image data for testing: list of lists, where each inner list contains 10 random images
+example_images = [telem_ns.ao_1, telem_ns.strehl, telem_ns.i, [abs(b) for b in telem_ns.b] ]  # 3 lists of 10 images each
+
+# Call the function
+display_images_with_slider(example_images)
+# Call the function to create and save the movie
+display_images_as_movie(example_images, plot_titles=None, cbar_labels=None, save_path="output_movie.mp4", fps=5)
+
+
+
+
+
+import matplotlib.pyplot as plt
+from matplotlib.widgets import Slider
+import numpy as np
+import matplotlib.animation as animation
+import math
+
+
+
+
+
+def display_images_with_slider(image_lists, plot_titles=None, cbar_labels=None):
+    """
+    Displays multiple images or 1D plots from a list of lists with a slider to control the shared index.
+    
+    Parameters:
+    - image_lists: list of lists where each inner list contains either 2D arrays (images) or 1D arrays (scalars).
+                   The inner lists must all have the same length.
+    - plot_titles: list of strings, one for each subplot. Default is None (no titles).
+    - cbar_labels: list of strings, one for each colorbar. Default is None (no labels).
+    """
+    
+    # Check that all inner lists have the same length
+    assert all(len(lst) == len(image_lists[0]) for lst in image_lists), "All inner lists must have the same length."
+    
+    # Number of rows and columns based on the number of plots
+    num_plots = len(image_lists)
+    ncols = math.ceil(math.sqrt(num_plots))  # Number of columns for grid
+    nrows = math.ceil(num_plots / ncols)     # Number of rows for grid
+    
+    num_frames = len(image_lists[0])
+
+    # Create figure and axes
+    fig, axes = plt.subplots(nrows=nrows, ncols=ncols, figsize=(5 * ncols, 5 * nrows))
+    plt.subplots_adjust(bottom=0.2)
+
+    # Flatten axes array for easier iteration
+    axes = axes.flatten() if num_plots > 1 else [axes]
+
+    # Store the display objects for each plot (either imshow or line plot)
+    img_displays = []
+    line_displays = []
+    
+    # Get max/min values for 1D arrays to set static axis limits
+    max_values = [max(lst) if not isinstance(lst[0], np.ndarray) else None for lst in image_lists]
+    min_values = [min(lst) if not isinstance(lst[0], np.ndarray) else None for lst in image_lists]
+
+    for i, ax in enumerate(axes[:num_plots]):  # Only iterate over the number of plots
+        # Check if the first item in the list is a 2D array (an image) or a scalar
+        if isinstance(image_lists[i][0], np.ndarray) and image_lists[i][0].ndim == 2:
+            # Use imshow for 2D data (images)
+            img_display = ax.imshow(image_lists[i][0], cmap='viridis')
+            img_displays.append(img_display)
+            line_displays.append(None)  # Placeholder for line plots
+            
+            # Add colorbar if it's an image
+            cbar = fig.colorbar(img_display, ax=ax)
+            if cbar_labels and i < len(cbar_labels) and cbar_labels[i] is not None:
+                cbar.set_label(cbar_labels[i])
+
+        else:
+            # Plot the list of scalar values up to the initial index
+            line_display, = ax.plot(np.arange(len(image_lists[i])), image_lists[i], color='b')
+            line_display.set_data(np.arange(1), image_lists[i][:1])  # Start with only the first value
+            ax.set_xlim(0, len(image_lists[i]))  # Set x-axis to full length of the data
+            ax.set_ylim(min_values[i], max_values[i])  # Set y-axis to cover the full range
+            line_displays.append(line_display)
+            img_displays.append(None)  # Placeholder for image plots
+
+        # Set plot title if provided
+        if plot_titles and i < len(plot_titles) and plot_titles[i] is not None:
+            ax.set_title(plot_titles[i])
+
+    # Remove any unused axes
+    for ax in axes[num_plots:]:
+        ax.remove()
+
+    # Slider for selecting the frame index
+    ax_slider = plt.axes([0.2, 0.05, 0.65, 0.03], facecolor='lightgoldenrodyellow')
+    frame_slider = Slider(ax_slider, 'Frame', 0, num_frames - 1, valinit=0, valstep=1)
+
+    # Update function for the slider
+    def update(val):
+        index = int(frame_slider.val)  # Get the selected index from the slider
+        for i, (img_display, line_display) in enumerate(zip(img_displays, line_displays)):
+            if img_display is not None:
+                # Update the image data for 2D data
+                img_display.set_data(image_lists[i][index])
+            if line_display is not None:
+                # Update the line plot for scalar values (plot up to the selected index)
+                line_display.set_data(np.arange(index), image_lists[i][:index])
+        fig.canvas.draw_idle()  # Redraw the figure
+
+    # Connect the slider to the update function
+    frame_slider.on_changed(update)
+
+    plt.show()
+
+
+
+def display_images_as_movie(image_lists, plot_titles=None, cbar_labels=None, save_path="output_movie.mp4", fps=5):
+    """
+    Creates an animation from multiple images or 1D plots from a list of lists and saves it as a movie.
+    
+    Parameters:
+    - image_lists: list of lists where each inner list contains either 2D arrays (images) or 1D arrays (scalars).
+                   The inner lists must all have the same length.
+    - plot_titles: list of strings, one for each subplot. Default is None (no titles).
+    - cbar_labels: list of strings, one for each colorbar. Default is None (no labels).
+    - save_path: path where the output movie will be saved.
+    - fps: frames per second for the output movie.
+    """
+    
+    # Check that all inner lists have the same length
+    assert all(len(lst) == len(image_lists[0]) for lst in image_lists), "All inner lists must have the same length."
+    
+    # Number of rows and columns based on the number of plots
+    num_plots = len(image_lists)
+    ncols = math.ceil(math.sqrt(num_plots))  # Number of columns for grid
+    nrows = math.ceil(num_plots / ncols)     # Number of rows for grid
+    
+    num_frames = len(image_lists[0])
+
+    # Create figure and axes
+    fig, axes = plt.subplots(nrows=nrows, ncols=ncols, figsize=(5 * ncols, 5 * nrows))
+    plt.subplots_adjust(bottom=0.2)
+
+    # Flatten axes array for easier iteration
+    axes = axes.flatten() if num_plots > 1 else [axes]
+
+    # Store the display objects for each plot (either imshow or line plot)
+    img_displays = []
+    line_displays = []
+    
+    # Get max/min values for 1D arrays to set static axis limits
+    max_values = [max(lst) if not isinstance(lst[0], np.ndarray) else None for lst in image_lists]
+    min_values = [min(lst) if not isinstance(lst[0], np.ndarray) else None for lst in image_lists]
+
+    for i, ax in enumerate(axes[:num_plots]):  # Only iterate over the number of plots
+        # Check if the first item in the list is a 2D array (an image) or a scalar
+        if isinstance(image_lists[i][0], np.ndarray) and image_lists[i][0].ndim == 2:
+            # Use imshow for 2D data (images)
+            img_display = ax.imshow(image_lists[i][0], cmap='viridis')
+            img_displays.append(img_display)
+            line_displays.append(None)  # Placeholder for line plots
+            
+            # Add colorbar if it's an image
+            cbar = fig.colorbar(img_display, ax=ax)
+            if cbar_labels and i < len(cbar_labels) and cbar_labels[i] is not None:
+                cbar.set_label(cbar_labels[i])
+
+        else:
+            # Plot the list of scalar values up to the initial index
+            line_display, = ax.plot(np.arange(len(image_lists[i])), image_lists[i], color='b')
+            line_display.set_data(np.arange(1), image_lists[i][:1])  # Start with only the first value
+            ax.set_xlim(0, len(image_lists[i]))  # Set x-axis to full length of the data
+            ax.set_ylim(min_values[i], max_values[i])  # Set y-axis to cover the full range
+            line_displays.append(line_display)
+            img_displays.append(None)  # Placeholder for image plots
+
+        # Set plot title if provided
+        if plot_titles and i < len(plot_titles) and plot_titles[i] is not None:
+            ax.set_title(plot_titles[i])
+
+    # Remove any unused axes
+    for ax in axes[num_plots:]:
+        ax.remove()
+
+    # Function to update the frames
+    def update_frame(frame_idx):
+        for i, (img_display, line_display) in enumerate(zip(img_displays, line_displays)):
+            if img_display is not None:
+                # Update the image data for 2D data
+                img_display.set_data(image_lists[i][frame_idx])
+            if line_display is not None:
+                # Update the line plot for scalar values (plot up to the current index)
+                line_display.set_data(np.arange(frame_idx), image_lists[i][:frame_idx])
+        return img_displays + line_displays
+
+    # Create the animation
+    ani = animation.FuncAnimation(fig, update_frame, frames=num_frames, blit=False, repeat=False)
+
+    # Save the animation as a movie file
+    ani.save(save_path, fps=fps, writer='ffmpeg')
+
+    plt.show()
+
+
