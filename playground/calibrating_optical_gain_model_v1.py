@@ -2,18 +2,166 @@
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.widgets import Slider
+from scipy.stats import pearsonr
+import pickle
 from types import SimpleNamespace
+from sklearn.linear_model import LinearRegression
 import importlib # reimport package after edits: importlib.reload(bldr)
 
 # from courtney-barrer's fork of pyzelda
 import pyzelda.zelda as zelda
 import pyzelda.ztools as ztools
 import pyzelda.utils.aperture as aperture
-
+import pyzelda.utils.imutils as imutils
 from common import phasescreens as ps
 from common import utilities as util
 from common import baldr_core as bldr
 
+def compute_correlation_map(intensity_frames, strehl_ratios):
+    # intensity_frames: k x N x M array (k frames of N x M pixels)
+    # strehl_ratios: k array (Strehl ratio for each frame)
+    
+    k, N, M = intensity_frames.shape
+    correlation_map = np.zeros((N, M))
+    
+    for i in range(N):
+        for j in range(M):
+            pixel_intensity_series = intensity_frames[:, i, j]
+            correlation_map[i, j], _ = pearsonr(pixel_intensity_series, strehl_ratios)
+    
+    return correlation_map
+
+
+class StrehlModel:
+    def __init__(self, model_description="Linear regression model fitting intensities to Strehl ratio."):
+        """
+        Initialize the StrehlModel.
+        
+        Args:
+            model_description (str): A string description of the model.
+        """
+        self.coefficients = None
+        self.intercept = None
+        self.pixel_indices = None
+        self.model_description = model_description
+    
+    def fit(self, X, y, pixel_filter):
+        """
+        Fits the linear model of the form y = sum(alpha_i * x_i) + intercept using the normal equation.
+        
+        Args:
+            X (np.ndarray): A 3D matrix of shape (M, N, K) where M is the number of data points,
+                            and N x K is the grid of pixel intensities.
+            y (np.ndarray): A vector of shape (M,) corresponding to the measured Strehl ratio.
+            pixel_filter (np.ndarray): A boolean array of shape (N, K) that defines which pixels to use in the model.
+        """
+        # Ensure the pixel_filter has the correct shape
+        assert pixel_filter.shape == X[0].shape, "pixel_filter must have the same shape as a single grid (N, K)"
+        
+        # X is shape (M, N, K). Flatten the N x K grid for each data point into a 1D array of length N * K.
+        M, N, K = X.shape
+        X_flattened = X.reshape(M, N * K)
+        
+        
+        self.pixel_filter = pixel_filter
+        
+        # Select the pixel indices based on the boolean pixel_filter
+        self.pixel_indices = np.where(pixel_filter)
+        self.pixel_indices = np.ravel_multi_index(self.pixel_indices, (N, K))  # Convert 2D indices to 1D
+        
+        # Select the relevant pixel indices (features subset) for fitting
+        X_subset = X_flattened[:, self.pixel_indices]
+
+        # Add a column of ones to X for the intercept term
+        X_bias = np.hstack([np.ones((M, 1)), X_subset])  # Add a column of ones to X_subset for the intercept term
+
+        # Solve for theta using the normal equation: theta = (X^T X)^-1 X^T y
+        theta = np.linalg.inv(X_bias.T @ X_bias) @ (X_bias.T @ y)
+        
+        # Extract the intercept and coefficients
+        self.intercept = theta[0]  # First element is the intercept
+        self.coefficients = theta[1:]  # Remaining elements are the coefficients
+    
+    def apply_model(self, X):
+        """
+        Applies the fitted linear model to new 3D data.
+        
+        Args:
+            X (np.ndarray): A 3D matrix of shape (M_new, N, K) where M_new is the number of new data points,
+                            and N x K is the grid of pixel intensities.
+        
+        Returns:
+            np.ndarray: The predicted Strehl ratio for each new data point.
+        """
+        if self.coefficients is None or self.intercept is None:
+            raise ValueError("Model has not been fitted yet.")
+        
+        # X is shape (M_new, N, K). Flatten the N x K grid for each data point into a 1D array of length N * K.
+        M_new, N, K = X.shape
+        X_flattened = X.reshape(M_new, N * K)
+        
+        # Select only the relevant pixels (pixel indices from the fitting process)
+        X_subset = X_flattened[:, self.pixel_indices]
+        
+        # Apply the model: y_pred = X_subset @ coefficients + intercept
+        y_pred = X_subset @ self.coefficients + self.intercept
+        
+        return y_pred
+    
+    def describe(self):
+        """
+        Prints a description of the model.
+        """
+        print(f"Model Description: {self.model_description}")
+        if self.coefficients is not None and self.intercept is not None:
+            print(f"Coefficients: {self.coefficients}")
+            print(f"Intercept: {self.intercept}")
+            print(f"Pixel Indices (P_s): {self.pixel_indices}")
+        else:
+            print("Model has not been fitted yet.")
+
+
+
+    # Function to save the model to a pickle file
+    def save_model_to_pickle(self, filename):
+        """
+        Saves the StrehlModel object to a pickle file.
+        
+        Args:
+            filename (str): The file path where the model should be saved.
+            model (StrehlModel): The StrehlModel instance to save.
+        """
+        with open(filename, 'wb') as file:
+            pickle.dump(self, file)
+
+
+
+# Function to load the model from a pickle file
+def load_model_from_pickle(filename):
+    """
+    Loads the StrehlModel object from a pickle file.
+    
+    Args:
+        filename (str): The file path from where the model should be loaded.
+    
+    Returns:
+        StrehlModel: The loaded StrehlModel instance.
+    """
+    with open(filename, 'rb') as file:
+        model = pickle.load(file)
+        
+    return model
+
+# Function to save the model using pickle
+# def save_model(filename, model):
+#     with open(filename, 'wb') as f:
+#         pickle.dump(model, f)
+
+# # Function to load the model using pickle
+# def load_model(filename):
+#     with open(filename, 'rb') as f:
+#         return pickle.load(f)
+    
 # create phase screen 
 
 # function to remove N modes from the phase screen
@@ -150,47 +298,32 @@ plt.show()
 #   baseline model for the optical gain is then b = sqrt(S) * b0. Where b0 is the optical gain without aberrations  
 
 
-# ZWFS initialization 
-z = zelda.Sensor('BALDR_UT_J3')
 
-# grid 
-D = 8.0 #m
-dim = z.pupil.shape[0]
-Dpix = z.pupil_diameter
-dx = D / Dpix # m/pixel in pupil grid
 
-# stellar parameters 
-wvl0 = 1.25e-6 # m central wavelength for simulation 
-waveband = 'J'
-magnitude = 3.0 
-bandwidth = 200 #nm 
 
-# telescope throughput 
-vlti_throughput = 0.1
 
-# atmosphere 
-r0 = 0.1 * (wvl0/500e-9)**(6/5) #m - applying Fried parameter wavelength scaling 
-L0 = 25 #m
-V = 50 # m/s
-pixels_per_iteration = 0.5 # every two iterations we move the phase screen by one pixel
+# initialize our ZWFS instrument
+wvl0=1.25e-6
+config_ini = '/home/benja/Documents/BALDR/BaldrApp/configurations/BALDR_UT_J3.ini'
+zwfs_ns = bldr.init_zwfs_from_config_ini( config_ini=config_ini , wvl0=wvl0)
 
+
+# short hand for pupil dimensions (pixels)
+#dim = zwfs_ns.grid.N * zwfs_ns.grid.padding_factor # should match zwfs_ns.pyZelda.pupil_dim
+# spatial differential in pupil space 
+dx = zwfs_ns.grid.D / zwfs_ns.grid.N
 # get required simulation sampling rate to match physical parameters 
-dt = dx * pixels_per_iteration / V # s # simulation sampling rate
-print(f'current parameters have effective wind velocity = {round(V)}m/s')
-scrn_scaling = 0.3 # to make variance of phase screen match measured Strehl for given  number of modes removed (Naomi data) 
-scrn = ps.PhaseScreenKolmogorov(nx_size=dim, pixel_scale=dx, r0=r0, L0=L0, random_seed=1)
+dt = dx * zwfs_ns.atmosphere.pixels_per_iteration / zwfs_ns.atmosphere.v # s # simulation sampling rate
 
-# detector 
-dit = 1e-3 # s
-ron = 1 # electrons
-qe = 0.7 # quantum efficiency
+print(f'current parameters have effective wind velocity = {round(zwfs_ns.atmosphere.v )}m/s')
+scrn = ps.PhaseScreenKolmogorov(nx_size=zwfs_ns.grid.dim, pixel_scale=dx, r0=zwfs_ns.atmosphere.r0, L0=zwfs_ns.atmosphere.l0, random_seed=1)
 
 
 # first stage AO 
-basis_cropped = ztools.zernike.zernike_basis(nterms=150, npix=z.pupil_diameter)
-# we have padding around telescope pupil (check z.pupil.shape and z.pupil_diameter) 
+basis_cropped = ztools.zernike.zernike_basis(nterms=150, npix=zwfs_ns.pyZelda.pupil_diameter)
+# we have padding around telescope pupil (check zwfs_ns.pyZelda.pupil.shape and zwfs_ns.pyZelda.pupil_diameter) 
 # so we need to put basis in the same frame  
-basis_template = np.zeros( z.pupil.shape )
+basis_template = np.zeros( zwfs_ns.pyZelda.pupil.shape )
 basis = np.array( [ util.insert_concentric( np.nan_to_num(b, 0), basis_template) for b in basis_cropped] )
 
 pupil_disk = basis[0] # we define a disk pupil without secondary - useful for removing Zernike modes later
@@ -205,307 +338,359 @@ vibration_frequencies = [15, 45] #Hz
 
 
 # calculate reference (perfect system) optical gain (b0)
-b0, expi = ztools.create_reference_wave_beyond_pupil(z.mask_diameter, z.mask_depth, z.mask_substrate, z.mask_Fratio,
-                                       z.pupil_diameter, z.pupil, wvl0, clear=np.array([]), 
+b0, expi = ztools.create_reference_wave_beyond_pupil(zwfs_ns.pyZelda.mask_diameter, zwfs_ns.pyZelda.mask_depth, zwfs_ns.pyZelda.mask_substrate, zwfs_ns.pyZelda.mask_Fratio,
+                                       zwfs_ns.pyZelda.pupil_diameter, zwfs_ns.pyZelda.pupil, wvl0, clear=np.array([]), 
                                        sign_mask=np.array([]), cpix=False)
 
+# to put in pixel space 
+b0_pixelspace = bldr.average_subarrays( abs(b0) , (12,12)) 
+
+
+# input amplitude of the star 
+photon_scaling = zwfs_ns.throughput.vlti_throughput * (np.pi * (zwfs_ns.grid.D/2)**2) / (np.pi * zwfs_ns.pyZelda.pupil_diameter/2)**2 * util.magnitude_to_photon_flux(magnitude=zwfs_ns.stellar.magnitude, band = zwfs_ns.stellar.waveband, wavelength= 1e9*wvl0)
 
 telemetry = {
     'I0':[],
     'N0':[],
     'scrn':[],
     'ao_1':[],
+    'Ic':[],
     'i':[],
     'strehl':[],
+    'dm_cmd':[],
     'b':[],
+    'b_pixelspace':[],
     'ao_2':[]
 }
 
 telem_ns = SimpleNamespace(**telemetry)
 
-for it in range(100):
-    
+it_grid = np.arange(0, 100)
+scrn_scaling_grid = np.logspace(0,1,10)
+dm_phasescreen = True # apply the phasescreen to the DM (this is how we will calibrate the real system)
+# DO THIS - BUT PUT ABERRATION ON THE DM!!!! (SAME WAY WE WOULD CALIBRATE THE REAL SYSTEM)
+
+scrn_list = []
+for _ in range(100):
+    #scrn = ps.PhaseScreenKolmogorov(nx_size=zwfs_ns.grid.N, pixel_scale=dx, r0=zwfs_ns.atmosphere.r0, L0=zwfs_ns.atmosphere.l0, random_seed=1)
+    scrn = ps.PhaseScreenKolmogorov(nx_size=24, pixel_scale = zwfs_ns.grid.D / 24, r0=zwfs_ns.atmosphere.r0, L0=zwfs_ns.atmosphere.l0, random_seed=None)
+    scrn_list.append( scrn ) 
+    #zwfs_ns.grid.pupil_mask * util.insert_concentric( scrn.scrn, zwfs_ns.pyZelda.pupil ) )
+
+for it in range(len(scrn_list)):
+
     # roll screen
-    scrn.add_row() 
-    
-    # crop the pupil disk and the phasescreen within it (remove padding outside pupil)
-    pupil_disk_cropped, atm_in_pupil = util.crop_pupil(pupil_disk, scrn.scrn)
+    #scrn.add_row()     
+    for ph_scale in scrn_scaling_grid: 
+        
 
-    # test project onto Zernike modes 
-    mode_coefficients = np.array( ztools.zernike.opd_expand(atm_in_pupil * pupil_disk_cropped,\
-        nterms=len(basis), aperture =pupil_disk_cropped))
+        if dm_phasescreen:
+            #scaling_factor=0.05, drop_indicies = [0, 11, 11 * 12, -1] , plot_cmd=False
+            zwfs_ns.dm.current_cmd =  util.create_phase_screen_cmd_for_DM(scrn_list[it],  scaling_factor=ph_scale , drop_indicies = [0, 11, 11 * 12, -1] , plot_cmd=False) 
+        
+            opd_current_dm = bldr.get_dm_displacement( command_vector= zwfs_ns.dm.current_cmd   , gain=zwfs_ns.dm.opd_per_cmd, \
+                sigma= zwfs_ns.grid.dm_coord.act_sigma_wavesp, X=zwfs_ns.grid.wave_coord.X, Y=zwfs_ns.grid.wave_coord.Y,\
+                    x0=zwfs_ns.grid.dm_coord.act_x0_list_wavesp, y0=zwfs_ns.grid.dm_coord.act_y0_list_wavesp )
+            
+            phi = zwfs_ns.grid.pupil_mask  *  2*np.pi / zwfs_ns.optics.wvl0 * (  opd_current_dm  )
+            
+            pupil_disk_cropped, atm_in_pupil = util.crop_pupil(pupil_disk, phi)
+        else: 
+            # crop the pupil disk and the phasescreen within it (remove padding outside pupil)
+            pupil_disk_cropped, atm_in_pupil = util.crop_pupil(pupil_disk, ph_scale * scrn.scrn)
+            
+            
+        # test project onto Zernike modes 
+        mode_coefficients = np.array( ztools.zernike.opd_expand(atm_in_pupil * pupil_disk_cropped,\
+            nterms=len(basis), aperture =pupil_disk_cropped))
 
-    # do the reconstruction for N modes
-    reco = np.sum( mode_coefficients[:Nmodes_removed,np.newaxis, np.newaxis] * basis[:Nmodes_removed,:,:] ,axis = 0) 
+        # do the reconstruction for N modes
+        reco = np.sum( mode_coefficients[:Nmodes_removed,np.newaxis, np.newaxis] * basis[:Nmodes_removed,:,:] ,axis = 0) 
 
-    # remove N modes 
-    ao_1 = scrn_scaling * pupil_disk * (scrn.scrn - reco) 
+        # remove N modes 
+        
+        if dm_phasescreen:
+            ao_1 = zwfs_ns.atmosphere.scrn_scaling * pupil_disk * (phi - reco) 
+        else:
+            ao_1 = zwfs_ns.atmosphere.scrn_scaling * pupil_disk * (scrn.scrn - reco)     
+            
+        # add vibrations
+        # TO DO 
+
+        # for calibration purposes
+        print( f'for {Nmodes_removed} Zernike modes removed (scrn_scaling={ph_scale}),\n \
+            atmospheric conditions r0= {round(zwfs_ns.atmosphere.r0,2)}m at a central wavelength {round(1e6*wvl0,2)}um\n\
+                post 1st stage AO rmse [nm rms] = ',\
+            round( 1e9 * (wvl0 / (2*np.pi) * ao_1)[zwfs_ns.pyZelda.pupil>0.5].std() ) )
 
 
-    # add vibrations
-    # TO DO 
+        # apply DM 
+        #ao1 *= DM_field
 
-    # for calibration purposes
-    print( f'for {Nmodes_removed} Zernike modes removed (scrn_scaling={scrn_scaling}),\n \
-        atmospheric conditions r0= {round(r0,2)}m at a central wavelength {round(1e6*wvl0,2)}um\n\
-            post 1st stage AO rmse [nm rms] = ',\
-        round( 1e9 * (wvl0 / (2*np.pi) * ao_1)[z.pupil>0.5].std() ) )
+        # convert to OPD map
+        opd_map = zwfs_ns.pyZelda.pupil * wvl0 / (2*np.pi) * ao_1 
+        
+        if it==0:
+            N0 = ztools.propagate_opd_map(0*opd_map, zwfs_ns.pyZelda.mask_diameter, 0*zwfs_ns.pyZelda.mask_depth, zwfs_ns.pyZelda.mask_substrate,
+                                            zwfs_ns.pyZelda.mask_Fratio, zwfs_ns.pyZelda.pupil_diameter, zwfs_ns.pyZelda.pupil, wave=wvl0)
+
+            I0 = ztools.propagate_opd_map(0*opd_map, zwfs_ns.pyZelda.mask_diameter, zwfs_ns.pyZelda.mask_depth, zwfs_ns.pyZelda.mask_substrate,
+                                            zwfs_ns.pyZelda.mask_Fratio, zwfs_ns.pyZelda.pupil_diameter, zwfs_ns.pyZelda.pupil, wave=wvl0)
+        
+            telem_ns.I0.append(I0)
+            telem_ns.N0.append(N0)  
+
+        # caclulate Strehl ratio
+        strehl = np.exp( - np.var( ao_1[zwfs_ns.pyZelda.pupil>0.5]) )
+
+        b, _ = ztools.create_reference_wave_beyond_pupil_with_aberrations(opd_map, zwfs_ns.pyZelda.mask_diameter, zwfs_ns.pyZelda.mask_depth, zwfs_ns.pyZelda.mask_substrate, zwfs_ns.pyZelda.mask_Fratio,
+                                            zwfs_ns.pyZelda.pupil_diameter, zwfs_ns.pyZelda.pupil, wvl0, clear=np.array([]), 
+                                            sign_mask=np.array([]), cpix=False)
 
 
-    # apply DM 
-    #ao1 *= DM_field
+        b_pixelspace = bldr.average_subarrays( abs(b) , (zwfs_ns.detector.binning, zwfs_ns.detector.binning)) 
 
-    # convert to OPD map
-    opd_map = z.pupil * wvl0 / (2*np.pi) * ao_1 
-    
-    if it==0:
-        N0 = ztools.propagate_opd_map(0*opd_map, z.mask_diameter, 0*z.mask_depth, z.mask_substrate,
-                                        z.mask_Fratio, z.pupil_diameter, z.pupil, wave=wvl0)
+        # normalized such that np.sum( I0 ) / np.sum( N0 ) ~ 1 where N0.max() = 1. 
+        # do normalization by known area of the pupil and the input stellar magnitude at the given wavelength 
+        # represent as #photons / s / pixel / nm
 
-        I0 = ztools.propagate_opd_map(0*opd_map, z.mask_diameter, z.mask_depth, z.mask_substrate,
-                                        z.mask_Fratio, z.pupil_diameter, z.pupil, wave=wvl0)
-    
-        telem_ns.I0.append(I0)
-        telem_ns.N0.append(N0)  
+        Ic = photon_scaling * zwfs_ns.pyZelda.propagate_opd_map( opd_map , wave = wvl0 )
 
-    # caclulate Strehl ratio
-    strehl = np.exp( - np.var( ao_1[z.pupil>0.5]) )
+        det_binning = round( bldr.calculate_detector_binning_factor(grid_pixels_across_pupil = zwfs_ns.pyZelda.pupil_diameter, detector_pixels_across_pupil = 12) )
 
-    b, _ = ztools.create_reference_wave_beyond_pupil_with_aberrations(opd_map, z.mask_diameter, z.mask_depth, z.mask_substrate, z.mask_Fratio,
-                                        z.pupil_diameter, z.pupil, wvl0, clear=np.array([]), 
-                                        sign_mask=np.array([]), cpix=False)
+        i = bldr.detect( Ic, binning = (zwfs_ns.detector.binning, zwfs_ns.detector.binning), qe=zwfs_ns.detector.qe , dit=zwfs_ns.detector.dit, ron= zwfs_ns.detector.ron, include_shotnoise=True, spectral_bandwidth = zwfs_ns.stellar.bandwidth )
 
-    # normalized such that np.sum( I0 ) / np.sum( N0 ) ~ 1 where N0.max() = 1. 
-    # do normalization by known area of the pupil and the input stellar magnitude at the given wavelength 
-    # represent as #photons / s / pixel / nm
-
-    # input amplitude of the star 
-    photon_scaling = vlti_throughput * (np.pi * (D/2)**2) / (np.pi * z.pupil_diameter/2)**2 * util.magnitude_to_photon_flux(magnitude=magnitude, band = waveband, wavelength= 1e9*wvl0)
-
-    Ic = photon_scaling * z.propagate_opd_map( opd_map , wave = wvl0 )
-
-    det_binning = round( bldr.calculate_detector_binning_factor(grid_pixels_across_pupil = z.pupil_diameter, detector_pixels_across_pupil = 12) )
-
-    i = bldr.detect( Ic, binning = (16, 16), qe=qe , dit=dit, ron= ron, include_shotnoise=True, spectral_bandwidth = bandwidth )
-
-    telem_ns.ao_1.append(z.pupil * ao_1)
-    telem_ns.i.append(i)
-    telem_ns.strehl.append(strehl)
-    telem_ns.b.append(b)
-    
+        #telem_ns.ao_1.append(zwfs_ns.pyZelda.pupil * ao_1)
+        telem_ns.i.append(i)
+        telem_ns.Ic.append(Ic)
+        telem_ns.strehl.append(strehl)
+        telem_ns.b.append(b)
+        telem_ns.b_pixelspace.append(b_pixelspace)
+        telem_ns.dm_cmd.append(zwfs_ns.dm.current_cmd )
+        
     print( f'iteration {it} done')
 
 # IF YOU WANT TO VISUALIZE ANY INTERMEDIATE STEPS
-#plt.figure(); plt.imshow( z.pupil * scrn.scrn); plt.show()
+#plt.figure(); plt.imshow( zwfs_ns.pyZelda.pupil * scrn.scrn); plt.show()
 #plt.imshow( reco ); plt.colorbar(); plt.show()
 #plt.imshow( ao_1 ); plt.colorbar(); plt.show()
-#plt.imshow( z.pupil * np.abs(b0) ); plt.colorbar(); plt.show()
-#plt.imshow( z.pupil * np.angle(b0) ); plt.colorbar(); plt.show()
-#plt.imshow( z.pupil * np.abs(b) ); plt.colorbar(); plt.show()
-#plt.imshow( z.pupil * np.angle(b) ); plt.colorbar(); plt.show()
+#plt.imshow( zwfs_ns.pyZelda.pupil * np.abs(b0) ); plt.colorbar(); plt.show()
+#plt.imshow( zwfs_ns.pyZelda.pupil * np.angle(b0) ); plt.colorbar(); plt.show()
+#plt.imshow( zwfs_ns.pyZelda.pupil * np.abs(b) ); plt.colorbar(); plt.show()
+#plt.imshow( zwfs_ns.pyZelda.pupil * np.angle(b) ); plt.colorbar(); plt.show()
 #plt.imshow( Ic ); plt.show()
 #plt.imshow( i ) ; plt.colorbar(); plt.show()
 
-
-"""can you now write code that turns these plots into a movie from python (running on ubuntu 20.04)?"""
-
 # Example usage:
-# Create some example image data for testing: list of lists, where each inner list contains 10 random images
-example_images = [telem_ns.ao_1, telem_ns.strehl, telem_ns.i, [abs(b) for b in telem_ns.b] ]  # 3 lists of 10 images each
+# example_images = [telem_ns.ao_1, telem_ns.strehl, telem_ns.i, [abs(b) for b in telem_ns.b] ]  # 3 lists of 10 images each
 
-# Call the function
-display_images_with_slider(example_images)
-# Call the function to create and save the movie
-display_images_as_movie(example_images, plot_titles=None, cbar_labels=None, save_path="output_movie.mp4", fps=5)
+# # Call the function to dynamically slide through the images
+# util.display_images_with_slider(example_images)
+# # Call the function to create and save the movie
+# util.display_images_as_movie(example_images, plot_titles=None, cbar_labels=None, save_path="output_movie.mp4", fps=5)
+
+"""
+observable is DM command and ZWFS signal
+
+non-observable is Strehl and optical gain that we wish to model 
+
+use known DM commands to calibrate Strehl and optical gain model 
+
+we want to model optical gain in the pixel space. 
+Therefore any iteration model can be scaled by it.
+
+proceedure: 
+
+roll various phase screens across DM and get ZWFS intensity response 
+
+dm shape related to strehl via DM influence function
+
+filter pixels that above Pearson correlation threshold
+fit a linear model to the data ( S ~ exp(-var(dm_rmse)) ~ sum_i alpha_i * I_i + i0_i )
+
+verify optical gain model 
+b = sqrt(S) * b0
+
+metrics 
+- rmse inside the pupil vs strehl
+
+for given strehl bin  
+- mean residual vs radial profile (look at bias in the model)
+- rmse vs radial profile 
+
+
+store the results in a config file 
+- strehl model pixels  
+- coefficients
+- b0 
+
+"""
+
+fig_path = '/home/benja/Downloads/'
+# Example usage
+correlation_map = compute_correlation_map(np.array( telem_ns.i ), np.array( telem_ns.strehl) )
+
+# SNR 
+SNR = np.mean( telem_ns.i ,axis=0 ) / np.std( telem_ns.i ,axis=0  )
+
+im_list =  [ correlation_map ]
+cbar_list = ['pearson R']
+
+util.nice_heatmap_subplots( im_list = [ correlation_map ] , cbar_label_list = ['Pearson R'] , \
+    savefig = None) #fig_path + 'strehl_vs_intensity_pearson_R.png' )
+
+util.nice_heatmap_subplots( im_list = [ SNR / np.max( SNR ) ] , cbar_label_list = ['normalized SNR'] ,\
+    savefig = None)# fig_path + 'SNR_simulation.png' )
+
+# Select top 5% of pixels with the highest correlation
+threshold = 0.9
+selected_pixels = correlation_map > threshold
+
+plt.figure()
+plt.imshow( selected_pixels)
+plt.colorbar(label = "filter")
+plt.savefig(fig_path + 'selected_pixels.png', bbox_inches='tight', dpi=300)
+plt.show()
+
+## FITTING THE MODEL 
+model_description = "Linear regression model fitting intensities to Strehl ratio."
+
+model = StrehlModel(model_description)
+
+#pixel_indices = np.where( selected_pixels )
+
+i_train = int( 0.6 * len( telem_ns.i ) )
+
+y_train = np.array(  telem_ns.strehl )[:i_train]
+X_train = np.array( telem_ns.i )[:i_train] 
+
+y_test = np.array(  telem_ns.strehl )[i_train:]
+X_test = np.array( telem_ns.i )[i_train:]
+
+
+#coefficients, intercept = model.fit_linear_model(x, y)
+model.fit(X = X_train,\
+        y = y_train ,\
+        pixel_filter=selected_pixels )
+
+y_fit = model.apply_model(X_test) 
+
+# add the pupil in 
+model.name = zwfs_ns.name # so we know what config file was used 
+
+#y_fit = model.predict(x)
+
+# show out of sample test results 
+util.plot_data_and_residuals(y_test, y_test, y_fit, xlabel=r'$\text{Strehl Ratio}$', ylabel=r'$\text{Predicted Strehl Ratio}$', \
+    residual_ylabel=r'$\Delta$',label_1="1:1", label_2="model", savefig='{}strehl_linear_fit.png'.format(fig_path) )
+
+
+# save the model
+model.save_model_to_pickle(filename=fig_path + 'strehl_model.pkl')
+
+# read it in 
+model = load_model_from_pickle(filename=fig_path + 'strehl_model.pkl')
 
 
 
+### MODELLING OPTICAL GAIN - VERIFICATION 
+"""
+# baseline model is b = sqrt(S) * b0
+# quality metric = rmse inside the pupil! 
+# using meeasured Strehl (which we won't have in the real system)
+"""
+
+strehl = np.array( telem_ns.strehl )
+y = np.array( [abs(b)for b in  telem_ns.b ] )
+
+# using real strehl values
+#y_model = np.array( [ss* np.abs(b0) for ss in np.sqrt( np.array( telem_ns.strehl ) ) ] )
+
+# using the strehl model 
+y_model = np.array( [ss * np.abs(b0) for ss in  np.sqrt( model.apply_model( np.array( telem_ns.i  ) ) ) ] )
+
+## get azimuth statistics 
+#y_az = np.array([imutils.profile(yy, ptype='mean', step=1, mask=None, center=None, rmax=0, clip=True, exact=False)[0] for yy in y])
 
 
-import matplotlib.pyplot as plt
-from matplotlib.widgets import Slider
-import numpy as np
-import matplotlib.animation as animation
-import math
+# to adjust for small statistics we use Bessel correction for variance
+img = y[0].copy()
+
+# array dimensions
+dimx = img.shape[1]
+dimy = img.shape[0]
+# center
+center = (dimx // 2, dimy // 2)
+
+# intermediate cartesian arrays
+xx, yy = np.meshgrid(np.arange(dimx, dtype=np.int64) - center[0], np.arange(dimy, dtype=np.int64) - center[1])
+rr = np.sqrt(xx**2 + yy**2)
+
+# rounds for faster calculation
+rr = np.round(rr, decimals=0)
+
+# find unique radial values
+uniq = np.unique(rr, return_inverse=True, return_counts=True)
+
+r_uniq_val = uniq[0]
+r_uniq_inv = uniq[1]
+r_uniq_cnt = uniq[2]
 
 
+# get radial vector in pixels 
+_, r_pix  = imutils.profile(y[0], ptype='mean', step=1, mask=None, center=None, rmax=0, clip=True, exact=False)
 
+mean_b0_az = imutils.profile(abs(b0), ptype='mean', step=1, mask=None, center=None, rmax=0, clip=True, exact=False)[0] 
+mean_residual_az = np.array([imutils.profile(meas-model, ptype='mean', step=1, mask=None, center=None, rmax=0, clip=True, exact=False)[0] for meas,model in zip(y, y_model) ])
+std_residual_az = np.array([imutils.profile(meas-model, ptype='std', step=1, mask=None, center=None, rmax=0, clip=True, exact=False)[0] for meas,model in zip(y, y_model) ])
+# editted function for ptype = var using Bessel correction for small sample size 
+var_residual_az = np.array([imutils.profile(meas-model, ptype='var', step=1, mask=None, center=None, rmax=0, clip=True, exact=False)[0] for meas,model in zip(y, y_model) ])
 
+bessel_correction = np.array( [rr / (rr - 1) if rr>1 else np.nan for rr in r_uniq_cnt] )
 
-def display_images_with_slider(image_lists, plot_titles=None, cbar_labels=None):
-    """
-    Displays multiple images or 1D plots from a list of lists with a slider to control the shared index.
+# Normalize r_pix
+r_pix_normalized = r_pix / (zwfs_ns.grid.N / 2)
+
+# Define Strehl bins and labels
+strehl_bins = [(0.4, 0.6), (0.6, 0.8), (0.8, 1.0)]
+colors = ['blue', 'green', 'red']
+labels = ['0.4 ≤ Strehl < 0.6', '0.6 ≤ Strehl < 0.8', '0.8 ≤ Strehl < 1.0']
+
+# Create the plot
+plt.figure(figsize=(8, 6))
+
+for (low, high), color, label in zip(strehl_bins, colors, labels):
+    # Define the Strehl filter for the current bin
+    strehl_filter = (strehl >= low) & (strehl < high)
     
-    Parameters:
-    - image_lists: list of lists where each inner list contains either 2D arrays (images) or 1D arrays (scalars).
-                   The inner lists must all have the same length.
-    - plot_titles: list of strings, one for each subplot. Default is None (no titles).
-    - cbar_labels: list of strings, one for each colorbar. Default is None (no labels).
-    """
+    # Calculate mean and standard deviation for the current Strehl bin
+    mean_residual = np.mean(mean_residual_az[strehl_filter], axis=0)
+    #std_residual = np.mean( std_residual_az[strehl_filter], axis=0)  # Standard deviation
+    #std_residual = np.mean( np.sqrt(var_residual_az[strehl_filter] ), axis=0)  # editted function for ptype = var using Bessel correction for small sample size 
+    std_residual = np.std( mean_residual_az[strehl_filter], axis=0, ddof=1)  # Standard deviation
     
-    # Check that all inner lists have the same length
-    assert all(len(lst) == len(image_lists[0]) for lst in image_lists), "All inner lists must have the same length."
+    # Plot the mean as a solid line for the current bin
+    plt.plot(r_pix_normalized, mean_residual/mean_b0_az, color=color, label=label)
     
-    # Number of rows and columns based on the number of plots
-    num_plots = len(image_lists)
-    ncols = math.ceil(math.sqrt(num_plots))  # Number of columns for grid
-    nrows = math.ceil(num_plots / ncols)     # Number of rows for grid
-    
-    num_frames = len(image_lists[0])
+    # Fill the area around the mean within 1 standard deviation
+    plt.fill_between(r_pix_normalized, (mean_residual - std_residual)/mean_b0_az, 
+                     (mean_residual + std_residual)/mean_b0_az, color=color, alpha=0.2)
 
-    # Create figure and axes
-    fig, axes = plt.subplots(nrows=nrows, ncols=ncols, figsize=(5 * ncols, 5 * nrows))
-    plt.subplots_adjust(bottom=0.2)
-
-    # Flatten axes array for easier iteration
-    axes = axes.flatten() if num_plots > 1 else [axes]
-
-    # Store the display objects for each plot (either imshow or line plot)
-    img_displays = []
-    line_displays = []
-    
-    # Get max/min values for 1D arrays to set static axis limits
-    max_values = [max(lst) if not isinstance(lst[0], np.ndarray) else None for lst in image_lists]
-    min_values = [min(lst) if not isinstance(lst[0], np.ndarray) else None for lst in image_lists]
-
-    for i, ax in enumerate(axes[:num_plots]):  # Only iterate over the number of plots
-        # Check if the first item in the list is a 2D array (an image) or a scalar
-        if isinstance(image_lists[i][0], np.ndarray) and image_lists[i][0].ndim == 2:
-            # Use imshow for 2D data (images)
-            img_display = ax.imshow(image_lists[i][0], cmap='viridis')
-            img_displays.append(img_display)
-            line_displays.append(None)  # Placeholder for line plots
-            
-            # Add colorbar if it's an image
-            cbar = fig.colorbar(img_display, ax=ax)
-            if cbar_labels and i < len(cbar_labels) and cbar_labels[i] is not None:
-                cbar.set_label(cbar_labels[i])
-
-        else:
-            # Plot the list of scalar values up to the initial index
-            line_display, = ax.plot(np.arange(len(image_lists[i])), image_lists[i], color='b')
-            line_display.set_data(np.arange(1), image_lists[i][:1])  # Start with only the first value
-            ax.set_xlim(0, len(image_lists[i]))  # Set x-axis to full length of the data
-            ax.set_ylim(min_values[i], max_values[i])  # Set y-axis to cover the full range
-            line_displays.append(line_display)
-            img_displays.append(None)  # Placeholder for image plots
-
-        # Set plot title if provided
-        if plot_titles and i < len(plot_titles) and plot_titles[i] is not None:
-            ax.set_title(plot_titles[i])
-
-    # Remove any unused axes
-    for ax in axes[num_plots:]:
-        ax.remove()
-
-    # Slider for selecting the frame index
-    ax_slider = plt.axes([0.2, 0.05, 0.65, 0.03], facecolor='lightgoldenrodyellow')
-    frame_slider = Slider(ax_slider, 'Frame', 0, num_frames - 1, valinit=0, valstep=1)
-
-    # Update function for the slider
-    def update(val):
-        index = int(frame_slider.val)  # Get the selected index from the slider
-        for i, (img_display, line_display) in enumerate(zip(img_displays, line_displays)):
-            if img_display is not None:
-                # Update the image data for 2D data
-                img_display.set_data(image_lists[i][index])
-            if line_display is not None:
-                # Update the line plot for scalar values (plot up to the selected index)
-                line_display.set_data(np.arange(index), image_lists[i][:index])
-        fig.canvas.draw_idle()  # Redraw the figure
-
-    # Connect the slider to the update function
-    frame_slider.on_changed(update)
-
-    plt.show()
+# Formatting the plot
+plt.ylabel('Expected Fractional Residual\n'+r'$\left \langle \frac{|b| - |b_{model}|}{b_0} \right \rangle$',fontsize=15)
+plt.xlabel(r'Fractional Pupil Radius',fontsize=15)
+plt.xlim( [0, 1.05])
+plt.gca().tick_params(axis='both', which='major', labelsize=15)
+#plt.title('Expected Residual and Standard Deviation for Different Strehl Bins')
+plt.grid(True)
+plt.legend(loc='best',fontsize=15)  # Add a legend to differentiate Strehl bins
 
 
+# Show the plot
+plt.tight_layout()
+plt.savefig(fig_path + 'residuals_optical_gain_radial_profile_WITH_STREHL_MODEL.png', bbox_inches='tight', dpi=300)
+plt.show()
 
-def display_images_as_movie(image_lists, plot_titles=None, cbar_labels=None, save_path="output_movie.mp4", fps=5):
-    """
-    Creates an animation from multiple images or 1D plots from a list of lists and saves it as a movie.
-    
-    Parameters:
-    - image_lists: list of lists where each inner list contains either 2D arrays (images) or 1D arrays (scalars).
-                   The inner lists must all have the same length.
-    - plot_titles: list of strings, one for each subplot. Default is None (no titles).
-    - cbar_labels: list of strings, one for each colorbar. Default is None (no labels).
-    - save_path: path where the output movie will be saved.
-    - fps: frames per second for the output movie.
-    """
-    
-    # Check that all inner lists have the same length
-    assert all(len(lst) == len(image_lists[0]) for lst in image_lists), "All inner lists must have the same length."
-    
-    # Number of rows and columns based on the number of plots
-    num_plots = len(image_lists)
-    ncols = math.ceil(math.sqrt(num_plots))  # Number of columns for grid
-    nrows = math.ceil(num_plots / ncols)     # Number of rows for grid
-    
-    num_frames = len(image_lists[0])
 
-    # Create figure and axes
-    fig, axes = plt.subplots(nrows=nrows, ncols=ncols, figsize=(5 * ncols, 5 * nrows))
-    plt.subplots_adjust(bottom=0.2)
-
-    # Flatten axes array for easier iteration
-    axes = axes.flatten() if num_plots > 1 else [axes]
-
-    # Store the display objects for each plot (either imshow or line plot)
-    img_displays = []
-    line_displays = []
-    
-    # Get max/min values for 1D arrays to set static axis limits
-    max_values = [max(lst) if not isinstance(lst[0], np.ndarray) else None for lst in image_lists]
-    min_values = [min(lst) if not isinstance(lst[0], np.ndarray) else None for lst in image_lists]
-
-    for i, ax in enumerate(axes[:num_plots]):  # Only iterate over the number of plots
-        # Check if the first item in the list is a 2D array (an image) or a scalar
-        if isinstance(image_lists[i][0], np.ndarray) and image_lists[i][0].ndim == 2:
-            # Use imshow for 2D data (images)
-            img_display = ax.imshow(image_lists[i][0], cmap='viridis')
-            img_displays.append(img_display)
-            line_displays.append(None)  # Placeholder for line plots
-            
-            # Add colorbar if it's an image
-            cbar = fig.colorbar(img_display, ax=ax)
-            if cbar_labels and i < len(cbar_labels) and cbar_labels[i] is not None:
-                cbar.set_label(cbar_labels[i])
-
-        else:
-            # Plot the list of scalar values up to the initial index
-            line_display, = ax.plot(np.arange(len(image_lists[i])), image_lists[i], color='b')
-            line_display.set_data(np.arange(1), image_lists[i][:1])  # Start with only the first value
-            ax.set_xlim(0, len(image_lists[i]))  # Set x-axis to full length of the data
-            ax.set_ylim(min_values[i], max_values[i])  # Set y-axis to cover the full range
-            line_displays.append(line_display)
-            img_displays.append(None)  # Placeholder for image plots
-
-        # Set plot title if provided
-        if plot_titles and i < len(plot_titles) and plot_titles[i] is not None:
-            ax.set_title(plot_titles[i])
-
-    # Remove any unused axes
-    for ax in axes[num_plots:]:
-        ax.remove()
-
-    # Function to update the frames
-    def update_frame(frame_idx):
-        for i, (img_display, line_display) in enumerate(zip(img_displays, line_displays)):
-            if img_display is not None:
-                # Update the image data for 2D data
-                img_display.set_data(image_lists[i][frame_idx])
-            if line_display is not None:
-                # Update the line plot for scalar values (plot up to the current index)
-                line_display.set_data(np.arange(frame_idx), image_lists[i][:frame_idx])
-        return img_displays + line_displays
-
-    # Create the animation
-    ani = animation.FuncAnimation(fig, update_frame, frames=num_frames, blit=False, repeat=False)
-
-    # Save the animation as a movie file
-    ani.save(save_path, fps=fps, writer='ffmpeg')
-
-    plt.show()
 
 

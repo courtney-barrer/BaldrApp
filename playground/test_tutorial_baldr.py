@@ -7,7 +7,12 @@ from matplotlib.gridspec import GridSpec
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 import sys
 import os 
-
+from pathlib import Path
+if sys.version_info < (3, 0):
+    import ConfigParser
+else:
+    import configparser as ConfigParser
+    
 import pyzelda.zelda as zelda
 import pyzelda.ztools as ztools
 import pyzelda.utils.aperture as aperture
@@ -16,7 +21,6 @@ import pyzelda.utils.aperture as aperture
 from common import baldr_core as bldr
 from common import DM_basis as gen_basis
 from common import utilities as util
-
 
 
 ### we generally deal with Simplename spaces since they are lightweight and meet our requirements  
@@ -39,14 +43,25 @@ class RecursiveNamespaceToClass:
 ################## INTERFACE WITH pyZELDA
 """ 
 I (git: courtney-barrer) forked the pyZELDA repository and added a new Baldr sensor class that interfaces with the BALDR app.
-BaldrApp can work with or without this sensor. If it is appended to the zwfs_ns object, the pyZelda machinary will be used to calculate the intensity.  
-Otherwise it will use my own machinery. This is useful for testing and debugging.
+BaldrApp can work with or without this sensor. If it is appended to the zwfs_ns object, the pyZelda machinary can be used to calculate the intensity.  
+But by default I will use my own machinery. This is useful for testing and debugging.
 """
 
+
+## The most concise way to interface with the pyZelda object is to use the following function to init from ini configuation file
+# that contains the necessary information to configure the ZWFS.
+config_ini = '/home/benja/Documents/BALDR/BaldrApp/configurations/baldr_1.ini'
+zwfs_ns = bldr.init_zwfs_from_config_ini( config_ini=config_ini , wvl0=1.25e-6)
+
+# pyZelda object is here 
+zwfs_ns.pyZelda
+
+# this is the same object as the following (using the instrument specified in config_ini)
 # configure the ZWFS for the UT 
 z = zelda.Sensor('BALDR_UT_J3')
 
 
+# IF YOU DO THINGS MANUALLY (not using .ini file - not recommended): 
 # Need to init things consistently with the pyZelda object.
 # 
 # our own initialization of the zwfs using simple namespace due to speed
@@ -155,7 +170,8 @@ grid_dict = {
     "telescope":'UT',
     "D":1, # diameter of beam 
     "N" : 64, # number of pixels across pupil diameter
-    "padding_factor" : 4, # how many pupil diameters fit into grid x axis
+    "dim": 64 * 4
+    #"padding_factor" : 4, # how many pupil diameters fit into grid x axis
     # TOTAL NUMBER OF PIXELS = padding_factor * N 
     }
 
@@ -184,7 +200,9 @@ dm_ns = SimpleNamespace(**dm_dict)
 
 ################## TEST 1
 # check dm registration on pupil (wavespace)
-zwfs_ns = bldr.init_zwfs(grid_ns, optics_ns, dm_ns)
+
+#zwfs_ns = bldr.init_zwfs(grid_ns, optics_ns, dm_ns) # to do it manually on the most basic level    
+zwfs_ns = bldr.init_zwfs_from_config_ini( config_ini=config_ini , wvl0=1.25e-6)
 
 zwfs_class = RecursiveNamespaceToClass( zwfs_ns )
 
@@ -202,7 +220,8 @@ plt.scatter(zwfs_ns.grid.dm_coord.act_x0_list_wavesp, zwfs_ns.grid.dm_coord.act_
 plt.show() 
 
 ################## TEST 2
-# check pupil intensities 
+# check pupil intensities (not using pyZelda machinery)
+
 fig,ax = plt.subplots( 1,4 )
 ax[0].imshow( util.get_DM_command_in_2D( zwfs_ns.dm.current_cmd ))
 ax[0].set_title('dm cmd')
@@ -216,10 +235,13 @@ ax[3].imshow( I0 )
 
 ################## TEST 3 
 # test updating the DM registration 
-zwfs_ns = bldr.init_zwfs(grid_ns, optics_ns, dm_ns)
+#zwfs_ns = bldr.init_zwfs(grid_ns, optics_ns, dm_ns)
+zwfs_ns = bldr.init_zwfs_from_config_ini( config_ini=config_ini , wvl0=1.25e-6)
 
 # redefining the affine transform between DM coordinates and the wavefront space
-a, b, c, d = 1.8*zwfs_ns.grid.D/np.ptp(zwfs_ns.grid.wave_coord.x), 0, 0, 1.8*grid_ns.D/np.ptp(zwfs_ns.grid.wave_coord.x)  # Parameters for affine transform (identity for simplicity)
+#a, b, c, d = 1.8*zwfs_ns.grid.D/np.ptp(zwfs_ns.grid.wave_coord.x), 0, 0, 1.8*grid_ns.D/np.ptp(zwfs_ns.grid.wave_coord.x)  # Parameters for affine transform (identity for simplicity)
+
+a, b, c, d = 1.8*zwfs_ns.grid.D/np.ptp(zwfs_ns.grid.wave_coord.x), 0, 0, 1.8*zwfs_ns.grid.D/np.ptp(zwfs_ns.grid.wave_coord.x)  # Parameters for affine transform (identity for simplicity)
 
 # offset 5% of pupil 
 t_x, t_y = np.mean(zwfs_ns.grid.wave_coord.x) + 0.05 * zwfs_ns.grid.D, np.mean(zwfs_ns.grid.wave_coord.x)  # Translation in phase space
@@ -266,7 +288,8 @@ plt.show()
 
 ################## TEST 5
 # Get reference intensities 
-zwfs_ns = bldr.init_zwfs(grid_ns, optics_ns, dm_ns)
+#zwfs_ns = bldr.init_zwfs(grid_ns, optics_ns, dm_ns)
+zwfs_ns = bldr.init_zwfs_from_config_ini( config_ini=config_ini , wvl0=1.25e-6)
 
 opd_input = 0 * zwfs_ns.grid.pupil_mask *  np.random.randn( *zwfs_ns.grid.pupil_mask.shape)
 
@@ -293,7 +316,8 @@ plt.figure(); plt.imshow( I0 ) ;plt.show()
 
 ################## TEST 6
 # classify pupil regions and plot them
-zwfs_ns = bldr.init_zwfs(grid_ns, optics_ns, dm_ns)
+#zwfs_ns = bldr.init_zwfs(grid_ns, optics_ns, dm_ns)
+zwfs_ns = bldr.init_zwfs_from_config_ini( config_ini=config_ini , wvl0=1.25e-6)
 
 opd_input = 0 * zwfs_ns.grid.pupil_mask *  np.random.randn( *zwfs_ns.grid.pupil_mask.shape)
 
@@ -312,7 +336,8 @@ plt.show()
 
 ################## TEST 7
 # Build IM  and look at Eigenmodes! 
-zwfs_ns = bldr.init_zwfs(grid_ns, optics_ns, dm_ns)
+#zwfs_ns = bldr.init_zwfs(grid_ns, optics_ns, dm_ns)
+zwfs_ns = bldr.init_zwfs_from_config_ini( config_ini=config_ini , wvl0=1.25e-6)
 
 # converting to a class and running the same function 
 zwfs_class = RecursiveNamespaceToClass( zwfs_ns )

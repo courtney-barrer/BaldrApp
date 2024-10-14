@@ -3,6 +3,7 @@ import matplotlib.pyplot as plt
 from types import SimpleNamespace
 import datetime 
 from astropy.io import fits 
+import pyzelda.zelda as zelda
 import pyzelda.utils.mft as mft
 import pyzelda.utils.aperture as aperture
 from . import utilities as util
@@ -807,6 +808,7 @@ def get_b( phi, phasemask ):
     
     return b"""
 
+
 def update_dm_registration( transform_matrix, zwfs_ns ):
     """_summary_
     # STANDARD WAY TO UPDATE THE REGISTRATION OF THE DM IN WAVE SPACE 
@@ -868,6 +870,9 @@ def update_dm_registration( transform_matrix, zwfs_ns ):
     
     return zwfs_ns
     
+
+
+
 def init_ns_from_pyZelda(z, wvl0):
     
     if 'UT' in z.instrument.upper():
@@ -881,7 +886,8 @@ def init_ns_from_pyZelda(z, wvl0):
     "telescope":telescope,
     "D":8, # diameter of beam (m)
     "N" : z.pupil_diameter, # number of pixels across pupil diameter
-    "padding_factor" : z.pupil_dim // z.pupil_diameter, # how many pupil diameters fit into grid x axis
+    "dim": z.pupil_dim # physical size of grid (m)
+    #"padding_factor" : z.pupil_dim / z.pupil_diameter, # how many pupil diameters fit into grid x axis
     # TOTAL NUMBER OF PIXELS = padding_factor * N 
     }
 
@@ -897,14 +903,17 @@ def init_ns_from_pyZelda(z, wvl0):
     
     return grid_ns, optics_ns
 
+
+
+
 def check_ns_consistency_with_pyZelda( z, zwfs_ns ):
     
     fail_log = {}
     
     if not z.pupil_diameter == zwfs_ns.grid.N:
         fail_log['pupil_diameter'] = (z.pupil_diameter, zwfs_ns.grid.N)
-    if not z.pupil_dim // z.pupil_diameter == zwfs_ns.grid.padding_factor:
-        fail_log['pupil_dim'] = (z.pupil_dim // z.pupil_diameter, zwfs_ns.grid.padding_factor)
+    #if not z.pupil_dim / z.pupil_diameter == zwfs_ns.grid.padding_factor:
+    #    fail_log['pupil_dim'] = (z.pupil_dim / z.pupil_diameter, zwfs_ns.grid.padding_factor)
     if not z.mask_diameter == zwfs_ns.optics.mask_diam * (1.22 * zwfs_ns.optics.F_number * zwfs_ns.optics.wvl0):
         fail_log["mask_diameter"] = (z.mask_diameter, zwfs_ns.optics.mask_diam * (1.22 * zwfs_ns.optics.F_number * zwfs_ns.optics.wvl0))   
     if not z.mask_Fratio == zwfs_ns.optics.F_number:
@@ -915,6 +924,36 @@ def check_ns_consistency_with_pyZelda( z, zwfs_ns ):
     return fail_log
     
 
+    
+def init_zwfs_from_config_ini( config_ini , wvl0):
+    
+    ns = util.ini_to_namespace(config_ini)    
+
+    # init the pyZelda sensor
+    z = zelda.Sensor(ns.instrument.pyzelda_config)
+    
+    # extract the grid and optic namespace from pyZelda object at given wavelength
+    # to put in format compatible with BaldrApp code
+    grid_ns, optics_ns = init_ns_from_pyZelda(z, wvl0)
+    
+    # merge all namespaces into one following standards of BaldrApp
+    zwfs_ns = init_zwfs(grid_ns, optics_ns, ns.dm)
+
+    zwfs_ns.name = ns.instrument.name
+    
+    # append the other relevant information to the namespace
+    zwfs_ns.detector = ns.detector
+    zwfs_ns.stellar = ns.stellar
+    zwfs_ns.throughput = ns.throughput
+    zwfs_ns.atmosphere = ns.atmosphere
+    
+    # also append the pyZelda object to the namespace to inherit methods etc 
+    zwfs_ns.pyZelda = z
+    
+    return( zwfs_ns )
+
+
+
 def init_zwfs(grid_ns, optics_ns, dm_ns):
     #############
     #### GRID 
@@ -924,25 +963,26 @@ def init_zwfs(grid_ns, optics_ns, dm_ns):
 
     if hasattr(grid_ns, "telescope"):
         if grid_ns.telescope.upper() == 'UT':
-            pupil = aperture.baldr_UT_pupil(  diameter=grid_ns.N, dim=grid_ns.N * grid_ns.padding_factor, spiders_thickness=0.008) #padding_factor = 2 )
+            pupil = aperture.baldr_UT_pupil(  diameter=grid_ns.N, dim=int(grid_ns.dim), spiders_thickness=0.008) #padding_factor = 2 )
         elif grid_ns.telescope.upper() == 'AT':
-            pupil = aperture.baldr_AT_pupil( diameter=grid_ns.N, dim=grid_ns.N * grid_ns.padding_factor, spiders_thickness=0.016, strict=False, cpix=False) #, padding_factor = 2 )
+            pupil = aperture.baldr_AT_pupil( diameter=grid_ns.N, dim=int(grid_ns.dim), spiders_thickness=0.016, strict=False, cpix=False) #, padding_factor = 2 )
         elif grid_ns.telescope.upper() == 'DISC':
-            pupil = aperture.disc(dim=grid_ns.N * grid_ns.padding_factor, size= grid_ns.N, diameter=True, strict=False, center=(), cpix=False, invert=False, mask=False)
+            pupil = aperture.disc(dim=int(grid_ns.dim), size= grid_ns.N, diameter=True, strict=False, center=(), cpix=False, invert=False, mask=False)
     
         else:
             raise TypeError("telescope not implemented. Try AT or UT")
         
     else:   
-        pupil = aperture.disc(dim=grid_ns.N * grid_ns.padding_factor, size= grid_ns.N, diameter=True, strict=False, center=(), cpix=False, invert=False, mask=False)
+        pupil = aperture.disc(dim=int(grid_ns.dim), size= grid_ns.N, diameter=True, strict=False, center=(), cpix=False, invert=False, mask=False)
         #raise UserWarning("telescope not defined in grid_ns. Defaulting to disk pupil")
         print( "telescope not defined in grid_ns. Defaulting to disk pupil")
     grid_ns.pupil_mask = pupil
     #grid_ns.phasemask_mask = phasemask
     
     # coorindates in the pupil plance
-    x = np.linspace( -(grid_ns.D * grid_ns.padding_factor)//2 ,(grid_ns.D * grid_ns.padding_factor)//2, pupil.shape[0] )
-    y = np.linspace( -(grid_ns.D * grid_ns.padding_factor)//2 ,(grid_ns.D * grid_ns.padding_factor)//2, pupil.shape[0] )
+    padding_factor = grid_ns.dim / grid_ns.N
+    x = np.linspace( -(grid_ns.D * padding_factor)//2 ,(grid_ns.D * padding_factor)//2, pupil.shape[0] )
+    y = np.linspace( -(grid_ns.D * padding_factor)//2 ,(grid_ns.D * padding_factor)//2, pupil.shape[0] )
     X, Y = np.meshgrid( x, y )
 
     wave_coord_dict = {

@@ -724,8 +724,9 @@ if __name__ == "__main__":
     grid_dict = {
         "D":1, # diameter of beam 
         "N" : 64, # number of pixels across pupil diameter
-        "padding_factor" : 4, # how many pupil diameters fit into grid x axis
+        #"padding_factor" : 4, # how many pupil diameters fit into grid x axis
         # TOTAL NUMBER OF PIXELS = padding_factor * N 
+        "dim": 64 * 4
         }
 
     optics_dict = {
@@ -803,7 +804,8 @@ if __name__ == "__main__":
     dm_disturbance = 0.1 * TT_vectors.T[0]
     
     #scrn = aotools.infinitephasescreen.PhaseScreenVonKarman(nx_size= zwfs_ns.grid.N * zwfs_ns.grid.padding_factor, pixel_scale= zwfs_ns.grid.D / zwfs_ns.grid.N ,r0=0.1,L0=12)
-    scrn = phasescreens.PhaseScreenVonKarman(nx_size= zwfs_ns.grid.N * zwfs_ns.grid.padding_factor, pixel_scale= zwfs_ns.grid.D / zwfs_ns.grid.N ,r0=0.1,L0=12)
+    #scrn = phasescreens.PhaseScreenVonKarman(nx_size = zwfs_ns.grid.N * zwfs_ns.grid.padding_factor, pixel_scale= zwfs_ns.grid.D / zwfs_ns.grid.N ,r0=0.1,L0=12)
+    scrn = phasescreens.PhaseScreenVonKarman(nx_size = zwfs_ns.grid.dim, pixel_scale= zwfs_ns.grid.D / zwfs_ns.grid.N ,r0=0.1,L0=12)
     dynamic_opd_input = True
     
     #dm_disturbance = 0.1 * HO_dm_disturb.T[3]
