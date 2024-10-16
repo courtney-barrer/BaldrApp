@@ -17,6 +17,23 @@ from common import phasescreens as ps
 from common import utilities as util
 from common import baldr_core as bldr
 
+from common.baldr_core import StrehlModel 
+
+"""
+Most of the calibration of the Strehl model done in this script has been generalized to a function in the baldr_core module:
+
+bldr.calibrate_strehl_model( zwfs_ns, save_results_path = 'path/to/save/results', train_fraction = 0.6, correlation_threshold = 0.5, \
+    number_of_screen_initiations = 50, scrn_scaling_grid = np.logspace(-1,0.2,5) )    
+    
+
+The end of this script does some analysis on the residual of the predicted optical gain from the Strehl model (b=b0 * sqrt(S))
+in different strehl regions and as a function of the radial profile of the optical gain.
+
+results were saved in sydney_test overleaf project.
+"""
+
+
+
 def compute_correlation_map(intensity_frames, strehl_ratios):
     # intensity_frames: k x N x M array (k frames of N x M pixels)
     # strehl_ratios: k array (Strehl ratio for each frame)
@@ -32,107 +49,6 @@ def compute_correlation_map(intensity_frames, strehl_ratios):
     return correlation_map
 
 
-class StrehlModel:
-    def __init__(self, model_description="Linear regression model fitting intensities to Strehl ratio."):
-        """
-        Initialize the StrehlModel.
-        
-        Args:
-            model_description (str): A string description of the model.
-        """
-        self.coefficients = None
-        self.intercept = None
-        self.pixel_indices = None
-        self.model_description = model_description
-    
-    def fit(self, X, y, pixel_filter):
-        """
-        Fits the linear model of the form y = sum(alpha_i * x_i) + intercept using the normal equation.
-        
-        Args:
-            X (np.ndarray): A 3D matrix of shape (M, N, K) where M is the number of data points,
-                            and N x K is the grid of pixel intensities.
-            y (np.ndarray): A vector of shape (M,) corresponding to the measured Strehl ratio.
-            pixel_filter (np.ndarray): A boolean array of shape (N, K) that defines which pixels to use in the model.
-        """
-        # Ensure the pixel_filter has the correct shape
-        assert pixel_filter.shape == X[0].shape, "pixel_filter must have the same shape as a single grid (N, K)"
-        
-        # X is shape (M, N, K). Flatten the N x K grid for each data point into a 1D array of length N * K.
-        M, N, K = X.shape
-        X_flattened = X.reshape(M, N * K)
-        
-        
-        self.pixel_filter = pixel_filter
-        
-        # Select the pixel indices based on the boolean pixel_filter
-        self.pixel_indices = np.where(pixel_filter)
-        self.pixel_indices = np.ravel_multi_index(self.pixel_indices, (N, K))  # Convert 2D indices to 1D
-        
-        # Select the relevant pixel indices (features subset) for fitting
-        X_subset = X_flattened[:, self.pixel_indices]
-
-        # Add a column of ones to X for the intercept term
-        X_bias = np.hstack([np.ones((M, 1)), X_subset])  # Add a column of ones to X_subset for the intercept term
-
-        # Solve for theta using the normal equation: theta = (X^T X)^-1 X^T y
-        theta = np.linalg.inv(X_bias.T @ X_bias) @ (X_bias.T @ y)
-        
-        # Extract the intercept and coefficients
-        self.intercept = theta[0]  # First element is the intercept
-        self.coefficients = theta[1:]  # Remaining elements are the coefficients
-    
-    def apply_model(self, X):
-        """
-        Applies the fitted linear model to new 3D data.
-        
-        Args:
-            X (np.ndarray): A 3D matrix of shape (M_new, N, K) where M_new is the number of new data points,
-                            and N x K is the grid of pixel intensities.
-        
-        Returns:
-            np.ndarray: The predicted Strehl ratio for each new data point.
-        """
-        if self.coefficients is None or self.intercept is None:
-            raise ValueError("Model has not been fitted yet.")
-        
-        # X is shape (M_new, N, K). Flatten the N x K grid for each data point into a 1D array of length N * K.
-        M_new, N, K = X.shape
-        X_flattened = X.reshape(M_new, N * K)
-        
-        # Select only the relevant pixels (pixel indices from the fitting process)
-        X_subset = X_flattened[:, self.pixel_indices]
-        
-        # Apply the model: y_pred = X_subset @ coefficients + intercept
-        y_pred = X_subset @ self.coefficients + self.intercept
-        
-        return y_pred
-    
-    def describe(self):
-        """
-        Prints a description of the model.
-        """
-        print(f"Model Description: {self.model_description}")
-        if self.coefficients is not None and self.intercept is not None:
-            print(f"Coefficients: {self.coefficients}")
-            print(f"Intercept: {self.intercept}")
-            print(f"Pixel Indices (P_s): {self.pixel_indices}")
-        else:
-            print("Model has not been fitted yet.")
-
-
-
-    # Function to save the model to a pickle file
-    def save_model_to_pickle(self, filename):
-        """
-        Saves the StrehlModel object to a pickle file.
-        
-        Args:
-            filename (str): The file path where the model should be saved.
-            model (StrehlModel): The StrehlModel instance to save.
-        """
-        with open(filename, 'wb') as file:
-            pickle.dump(self, file)
 
 
 

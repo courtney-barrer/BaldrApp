@@ -1,14 +1,18 @@
 import numpy as np
+import os
 import matplotlib.pyplot as plt
 from types import SimpleNamespace
+from scipy.stats import pearsonr
 import datetime 
 from astropy.io import fits 
+import pickle
 import pyzelda.zelda as zelda
+import pyzelda.ztools as ztools
 import pyzelda.utils.mft as mft
 import pyzelda.utils.aperture as aperture
 from . import utilities as util
 from . import DM_basis as gen_basis
-
+from . import phasescreens
 
 # PID and leaky integrator copied from /Users/bencb/Documents/asgard-alignment/playground/open_loop_tests_HO.py
 class PIDController:
@@ -149,7 +153,279 @@ class LeakyIntegrator:
     def reset(self):
         self.output = np.zeros(len(self.ki))
 
+
+class detector :
+    def __init__(self, dit, ron, qe, binning):
+        """_summary_
+
+        Args:
+            binning (tuple): _description_ binning factor (rows to sum, columns to sum) 
+            qe (scalar): _description_ quantum efficiency of detector
+            dit (scalar): _description_ integration time of detector
+            ron (int): _description_. readout noise in electrons per pixel
+        """
+        self.dit = dit
+        self.ron = ron
+        self.qe = qe
+        self.binning = binning
         
+
+    
+    def detect(self, i, include_shotnoise=True, spectral_bandwidth = None ):
+        """_summary_
+        
+        copy of the detect function generalized for this class
+        
+        assumes input intensity is in photons per second per pixel per nm, 
+        if spectral_bandwidth is None than returns photons per pixel per nm of input light,
+        otherwise returns photons per pixel
+        
+        Args:
+            i (2D array like): _description_ input intensity (abs(field)**2!!!) before being detected on a detector (generally higher spatial resolution than detector)
+            include_shotnoise (bool, optional): _description_. Defaults to True. Sample poisson distribution for each pixel (input intensity is the expected value)
+            spectral_bandwidth (_type_, optional): _description_. Defaults to None. if spectral_bandwidth is None than returns photons per pixel per nm of input light,
+        """
+
+        i = sum_subarrays( array = i, block_size = self.binning )
+        
+        if spectral_bandwidth is None:
+            i *= self.qe * self.dit 
+        else:
+            i *= self.qe * self.dit * spectral_bandwidth
+        
+        if include_shotnoise:
+            noisy_intensity = np.random.poisson(lam=i)
+        else: # no noise
+            noisy_intensity = i
+            
+        if self.ron > 0:
+            noisy_intensity += np.random.normal(0, self.ron, noisy_intensity.shape).astype(int)
+
+        return noisy_intensity
+    
+    
+    
+class StrehlModel:
+    def __init__(self, model_description="Linear regression model fitting intensities to Strehl ratio."):
+        """
+        Initialize the StrehlModel.
+        
+        Args:
+            model_description (str): A string description of the model.
+        """
+        self.coefficients = None
+        self.intercept = None
+        self.pixel_indices = None
+        self.model_description = model_description
+    
+    def fit(self, X, y, pixel_filter):
+        """
+        Fits the linear model of the form y = sum(alpha_i * x_i) + intercept using the normal equation.
+        
+        Args:
+            X (np.ndarray): A 3D matrix of shape (M, N, K) where M is the number of data points,
+                            and N x K is the grid of pixel intensities (best if they are normalized! ).
+            y (np.ndarray): A vector of shape (M,) corresponding to the measured Strehl ratio.
+            pixel_filter (np.ndarray): A boolean array of shape (N, K) that defines which pixels to use in the model.
+        """
+        # Ensure the pixel_filter has the correct shape
+        assert pixel_filter.shape == X[0].shape, "pixel_filter must have the same shape as a single grid (N, K)"
+        
+        # X is shape (M, N, K). Flatten the N x K grid for each data point into a 1D array of length N * K.
+        M, N, K = X.shape
+        X_flattened = X.reshape(M, N * K)
+        
+        
+        self.pixel_filter = pixel_filter
+        
+        # Select the pixel indices based on the boolean pixel_filter
+        self.pixel_indices = np.where(pixel_filter)
+        self.pixel_indices = np.ravel_multi_index(self.pixel_indices, (N, K))  # Convert 2D indices to 1D
+        
+        # Select the relevant pixel indices (features subset) for fitting
+        X_subset = X_flattened[:, self.pixel_indices]
+
+        # Add a column of ones to X for the intercept term
+        X_bias = np.hstack([np.ones((M, 1)), X_subset])  # Add a column of ones to X_subset for the intercept term
+
+        # Solve for theta using the normal equation: theta = (X^T X)^-1 X^T y
+        theta = np.linalg.inv(X_bias.T @ X_bias) @ (X_bias.T @ y)
+        
+        # Extract the intercept and coefficients
+        self.intercept = theta[0]  # First element is the intercept
+        self.coefficients = theta[1:]  # Remaining elements are the coefficients
+    
+    def apply_model(self, X):
+        """
+        Applies the fitted linear model to new 3D data.
+        
+        Args:
+            X (np.ndarray): A 3D matrix of shape (M_new, N, K) where M_new is the number of new data points,
+                            and N x K is the grid of pixel intensities.
+        
+        Returns:
+            np.ndarray: The predicted Strehl ratio for each new data point.
+        """
+        if self.coefficients is None or self.intercept is None:
+            raise ValueError("Model has not been fitted yet.")
+        
+        X = np.array( X ) # ensure it is an numpy array 
+        
+        # X is shape (M_new, N, K). Flatten the N x K grid for each data point into a 1D array of length N * K.
+        M_new, N, K = X.shape
+        X_flattened = X.reshape(M_new, N * K)
+        
+        # Select only the relevant pixels (pixel indices from the fitting process)
+        X_subset = X_flattened[:, self.pixel_indices]
+        
+        # Apply the model: y_pred = X_subset @ coefficients + intercept
+        y_pred = X_subset @ self.coefficients + self.intercept
+        
+        return y_pred
+    
+    def describe(self):
+        """
+        Prints a description of the model.
+        """
+        print(f"Model Description: {self.model_description}")
+        if self.coefficients is not None and self.intercept is not None:
+            print(f"Coefficients: {self.coefficients}")
+            print(f"Intercept: {self.intercept}")
+            print(f"Pixel Indices (P_s): {self.pixel_indices}")
+        else:
+            print("Model has not been fitted yet.")
+
+
+
+    # Function to save the model to a pickle file
+    def save_model_to_pickle(self, filename):
+        """
+        Saves the StrehlModel object to a pickle file.
+        
+        Args:
+            filename (str): The file path where the model should be saved.
+            model (StrehlModel): The StrehlModel instance to save.
+        """
+        with open(filename, 'wb') as file:
+            pickle.dump(self, file)
+
+
+
+class PixelWiseStrehlModel:
+    def __init__(self,model_description="Linear regression model fitting intensities to Strehl ratio."):
+        self.m = None  # Slopes for each pixel
+        self.S0 = None  # Intercepts for each pixel
+        self.pixel_indices = None
+        self.model_description = model_description
+
+    def fit(self, X, y, pixel_filter):
+        """
+        Fits a linear model S = m_ij * I_ij + S0 for each pixel (filtered by pixel_filter) across all samples. 
+        The final model will just apply the average prediction from each pixel
+        
+        Args:
+            X (np.ndarray): A 3D matrix of shape (M, N, K) where M is the number of data points,
+                            and N x K is the grid of pixel intensities.
+            y (np.ndarray): A vector of shape (M,) corresponding to the measured Strehl ratio.
+            pixel_filter (np.ndarray): A boolean array of shape (N, K) that defines which pixels to use in the model.
+        """
+        # Ensure the pixel_filter has the correct shape
+        assert pixel_filter.shape == X[0].shape, "pixel_filter must have the same shape as a single grid (N, K)"
+        
+        # X is shape (M, N, K). Flatten the N x K grid for each data point into a 1D array of length N * K.
+        M, N, K = X.shape
+        X_flattened = X.reshape(M, N * K)
+        
+        # Select the pixel indices based on the boolean pixel_filter (already flattened to 1D)
+        self.pixel_indices = np.where(pixel_filter.ravel())[0]
+
+        # Select only the pixels from X that pass through the filter
+        X_subset = X_flattened[:, self.pixel_indices]
+
+        # Initialize arrays to store slopes and intercepts for each selected pixel
+        num_selected_pixels = len(self.pixel_indices)
+        self.m = np.zeros(num_selected_pixels)
+        self.S0 = np.zeros(num_selected_pixels)
+        
+        # Fit a linear model y = m_ij * X_ij + S0 for each selected pixel
+        for idx, pixel_idx in enumerate(self.pixel_indices):
+            I_pixel = X_subset[:, idx]  # Intensities for this pixel across all samples
+            
+            # Use least squares to fit the linear model: y = m * I_pixel + S0
+            A = np.vstack([I_pixel, np.ones(len(I_pixel))]).T  # Design matrix [I_pixel, 1]
+            m_ij, S0_ij = np.linalg.lstsq(A, y, rcond=None)[0]  # Least squares fit
+            
+            # Store the slope and intercept
+            self.m[idx] = m_ij
+            self.S0[idx] = S0_ij
+
+    def apply_model(self, X):
+        """
+        Applies the fitted linear model to new data and returns the estimated Strehl ratio.
+        
+        Args:
+            X (np.ndarray): A 3D matrix of shape (M_new, N, K) where M_new is the number of new data points,
+                            and N x K is the grid of pixel intensities.
+        
+        Returns:
+            np.ndarray: The predicted Strehl ratio for each new data point (M_new,).
+        """
+        if self.m is None or self.S0 is None or self.pixel_indices is None:
+            raise ValueError("Model has not been fitted yet.")
+        
+        M_new, N, K = X.shape
+
+        # Flatten the N x K grid for each data point into a 1D array of length N * K.
+        X_flattened = X.reshape(M_new, N * K)
+        
+        # Select only the relevant pixels (from the pixel_filter used during fitting)
+        X_subset = X_flattened[:, self.pixel_indices]
+        
+        # Initialize an array to store predicted Strehl values
+        S_pred = np.zeros(M_new)
+        
+        # For each sample, compute the Strehl estimate by averaging over the selected pixels
+        for k in range(M_new):
+            # Apply the model for each selected pixel: S_ij = m_ij * I_ij + S0_ij
+            S_ij = self.m * X_subset[k] + self.S0
+            
+            # Average the Strehl predictions across the selected pixels to get the final estimate
+            S_pred[k] = np.mean(S_ij)
+        
+        return S_pred
+
+
+    def describe(self):
+        """
+        Prints a description of the model.
+        """
+        print(f"Model Description: {self.model_description}")
+        if self.coefficients is not None and self.intercept is not None:
+            print(f"Coefficients: {self.coefficients}")
+            print(f"Intercept: {self.intercept}")
+            print(f"Pixel Indices (P_s): {self.pixel_indices}")
+        else:
+            print("Model has not been fitted yet.")
+
+
+
+    # Function to save the model to a pickle file
+    def save_model_to_pickle(self, filename):
+        """
+        Saves the StrehlModel object to a pickle file.
+        
+        Args:
+            filename (str): The file path where the model should be saved.
+            model (StrehlModel): The StrehlModel instance to save.
+        """
+        with open(filename, 'wb') as file:
+            pickle.dump(self, file)
+
+
+
+
+
+
 
 def reset_telemetry( zwfs_ns ):
     zwfs_ns.telem = SimpleNamespace(**init_telem_dict())
@@ -214,6 +490,269 @@ def save_telemetry( zwfs_ns , savename = None):
         savename = f'~/Downloads/telemetry_simulation_{tstamp}.fits'
     hdul.writeto( savename, overwrite=True)
 
+
+
+
+def calibrate_strehl_model( zwfs_ns, save_results_path = None, train_fraction = 0.6, correlation_threshold = 0.5,\
+    number_of_screen_initiations = 50, scrn_scaling_grid = np.logspace(-1,0.2,5) , model_type = 'PixelWiseStrehlModel'):
+    """_summary_
+
+    Training a linear model to map a subset of pixel intensities to Strehl Ratio in a Zernike wavefront sensor. 
+    The model is trained by applying various instances of scaled Kolmogorov phasescreens on the DM and measuring the ZWFS intensity response
+    The pixel intensities are normalized by the average clear (no phasemask) pupil intensity measured in the detector within the active pupil region.   
+    pixels are selected that have a Pearson R correlation with the Strehl ratio (determined by DM influience function ) > correlation_threshold
+
+    quiet slow in simulation mode, but should be fast in real life (i.e on a real DM / camera)
+    
+    Args:
+        zwfs_ns (_type_): _description_ namespace initialized from a configuration file. e.g. 
+        save_results_path (_type_, optional): _description_. Defaults to None. where to save the results? 
+            if not None a timestamped folder will be created in the path and all plots/ results save here.
+        train_fraction (float, optional): _description_. Defaults to 0.6. what fraction of the data should be used for training?
+        correlation_threshold (float, optional): _description_. Defaults to 0.5. what is the minimum correlation threshold 
+            between a pixels intensity and the Strehl ratio for it to be included in the model?
+        number_of_screen_initiations (int, optional): _description_. Defaults to 50. How many unique instances of a Kolmogorov screens to initialize on 
+            the DM for training the model? 
+        scrn_scaling_grid (_type_, optional): _description_. what scaling grid do you want to apply to the phasescreen for training the model? Defaults to np.logspace(-1,0.2,5).
+        model_type (str, optional): _description_. Defaults to 'PixelWiseStrehlModel'. what type of model do you want to train/apply?  model_type must be 'lin_comb' or 'PixelWiseStrehlModel'
+    Returns:
+        _type_: the trained Strehl model
+    """
+
+    print( f'USING ---- {model_type} ----')
+    
+    if save_results_path is not None:
+        
+        timestamp = datetime.datetime.now().strftime("%Y-%m-%dT%H.%M.%S")
+
+        save_results_path = os.path.join(save_results_path, f'strehl_model_config-{zwfs_ns.name}_{timestamp}', '')
+        if os.path.exists(save_results_path) == False:
+            os.makedirs(save_results_path)
+            
+
+    ## FITTING THE MODEL 
+    model_description = "Linear regression model fitting intensities to Strehl ratio."
+
+    if model_type == 'lin_comb':
+        model = StrehlModel(model_description)
+        
+    elif model_type == 'PixelWiseStrehlModel':
+        model = PixelWiseStrehlModel(model_description)
+    else:
+        raise ValueError("invalid model_type! model_type must be 'lin_comb' or 'PixelWiseStrehlModel'")
+
+    # first stage AO 
+    basis_cropped = ztools.zernike.zernike_basis(nterms=150, npix=zwfs_ns.pyZelda.pupil_diameter)
+    # we have padding around telescope pupil (check zwfs_ns.pyZelda.pupil.shape and zwfs_ns.pyZelda.pupil_diameter) 
+    # so we need to put basis in the same frame  
+    basis_template = np.zeros( zwfs_ns.pyZelda.pupil.shape )
+    basis = np.array( [ util.insert_concentric( np.nan_to_num(b, 0), basis_template) for b in basis_cropped] )
+
+    pupil_disk = basis[0] # we define a disk pupil without secondary - useful for removing Zernike modes later
+
+    Nmodes_removed = 2 # Default will be to remove Zernike modes 
+
+    photon_flux_per_pixel_at_vlti = zwfs_ns.throughput.vlti_throughput * (np.pi * (zwfs_ns.grid.D/2)**2) / (np.pi * zwfs_ns.pyZelda.pupil_diameter/2)**2 * util.magnitude_to_photon_flux(magnitude=zwfs_ns.stellar.magnitude, band = zwfs_ns.stellar.waveband, wavelength= 1e9*zwfs_ns.optics.wvl0)
+        
+    scrn_list = []
+    for _ in range(number_of_screen_initiations):
+        #scrn = ps.PhaseScreenKolmogorov(nx_size=zwfs_ns.grid.N, pixel_scale=dx, r0=zwfs_ns.atmosphere.r0, L0=zwfs_ns.atmosphere.l0, random_seed=1)
+        scrn = phasescreens.PhaseScreenKolmogorov(nx_size=24, pixel_scale = zwfs_ns.grid.D / 24, r0=zwfs_ns.atmosphere.r0, L0=zwfs_ns.atmosphere.l0, random_seed=None)
+        scrn_list.append( scrn ) 
+        #zwfs_ns.grid.pupil_mask * util.insert_concentric( scrn.scrn, zwfs_ns.pyZelda.pupil ) )
+
+    telemetry = {
+        'I0':[],
+        'N0':[],
+        'scrn':[],
+        'ao_1':[],
+        'Ic':[],
+        'i':[],
+        'i_norm':[],
+        'strehl':[],
+        'dm_cmd':[],
+        'b':[],
+        'b_detector':[],
+        'pupilmask_in_detector':[],
+        'ao_2':[]
+    }
+    telem_ns = SimpleNamespace(**telemetry)
+
+    for it in range(len(scrn_list)):
+
+        # roll screen
+        #scrn.add_row()     
+        for ph_scale in scrn_scaling_grid: 
+            
+            #scaling_factor=0.05, drop_indicies = [0, 11, 11 * 12, -1] , plot_cmd=False
+            zwfs_ns.dm.current_cmd =  util.create_phase_screen_cmd_for_DM(scrn_list[it],  scaling_factor=ph_scale , drop_indicies = [0, 11, 11 * 12, -1] , plot_cmd=False) 
+        
+            opd_current_dm = get_dm_displacement( command_vector= zwfs_ns.dm.current_cmd   , gain=zwfs_ns.dm.opd_per_cmd, \
+                sigma= zwfs_ns.grid.dm_coord.act_sigma_wavesp, X=zwfs_ns.grid.wave_coord.X, Y=zwfs_ns.grid.wave_coord.Y,\
+                    x0=zwfs_ns.grid.dm_coord.act_x0_list_wavesp, y0=zwfs_ns.grid.dm_coord.act_y0_list_wavesp )
+            
+            phi = zwfs_ns.grid.pupil_mask  *  2*np.pi / zwfs_ns.optics.wvl0 * (  opd_current_dm  )
+            
+            pupil_disk_cropped, atm_in_pupil = util.crop_pupil(pupil_disk, phi)
+
+            
+                
+            # test project onto Zernike modes 
+            mode_coefficients = np.array( ztools.zernike.opd_expand(atm_in_pupil * pupil_disk_cropped,\
+                nterms=len(basis), aperture =pupil_disk_cropped))
+
+            # do the reconstruction for N modes
+            reco = np.sum( mode_coefficients[:Nmodes_removed,np.newaxis, np.newaxis] * basis[:Nmodes_removed,:,:] ,axis = 0) 
+
+            # remove N modes 
+            ao_1 =  pupil_disk * (phi - reco) 
+        
+            # add vibrations
+            # TO DO 
+
+            # for calibration purposes
+            print( f'for {Nmodes_removed} Zernike modes removed (scrn_scaling={ph_scale}),\n \
+                atmospheric conditions r0= {round(zwfs_ns.atmosphere.r0,2)}m at a central wavelength {round(1e6*zwfs_ns.optics.wvl0,2)}um\n\
+                    post 1st stage AO rmse [nm rms] = ',\
+                round( 1e9 * (zwfs_ns.optics.wvl0 / (2*np.pi) * ao_1)[zwfs_ns.pyZelda.pupil>0.5].std() ) )
+
+
+            # apply DM 
+            # ao1 *= DM_field
+
+            # convert to OPD map
+            opd_map = zwfs_ns.pyZelda.pupil * zwfs_ns.optics.wvl0 / (2*np.pi) * ao_1 
+            
+            if it==0:
+                
+                N0_wsp = photon_flux_per_pixel_at_vlti * ztools.propagate_opd_map(0*opd_map, zwfs_ns.pyZelda.mask_diameter, 0*zwfs_ns.pyZelda.mask_depth, zwfs_ns.pyZelda.mask_substrate,
+                                                zwfs_ns.pyZelda.mask_Fratio, zwfs_ns.pyZelda.pupil_diameter, zwfs_ns.pyZelda.pupil, wave=zwfs_ns.optics.wvl0)
+
+                I0_wsp = photon_flux_per_pixel_at_vlti * ztools.propagate_opd_map(0*opd_map, zwfs_ns.pyZelda.mask_diameter, zwfs_ns.pyZelda.mask_depth, zwfs_ns.pyZelda.mask_substrate,
+                                                zwfs_ns.pyZelda.mask_Fratio, zwfs_ns.pyZelda.pupil_diameter, zwfs_ns.pyZelda.pupil, wave=zwfs_ns.optics.wvl0)
+                
+                # bin to detector pixelspace 
+                I0 = detect( I0_wsp, binning = (zwfs_ns.detector.binning, zwfs_ns.detector.binning), qe=zwfs_ns.detector.qe , dit=zwfs_ns.detector.dit, ron= zwfs_ns.detector.ron, include_shotnoise=True, spectral_bandwidth = zwfs_ns.stellar.bandwidth )
+                N0 = detect( N0_wsp, binning = (zwfs_ns.detector.binning, zwfs_ns.detector.binning), qe=zwfs_ns.detector.qe , dit=zwfs_ns.detector.dit, ron= zwfs_ns.detector.ron, include_shotnoise=True, spectral_bandwidth = zwfs_ns.stellar.bandwidth )
+
+                pupilmask_in_detector = 0 < sum_subarrays( zwfs_ns.pyZelda.pupil, (zwfs_ns.detector.binning, zwfs_ns.detector.binning) ) 
+                
+                telem_ns.pupilmask_in_detector.append( pupilmask_in_detector )
+                telem_ns.I0.append(I0)
+                telem_ns.N0.append(N0)  
+
+            # caclulate Strehl ratio
+            strehl = np.exp( - np.var( ao_1[zwfs_ns.pyZelda.pupil>0.5]) )
+
+            b, _ = ztools.create_reference_wave_beyond_pupil_with_aberrations(opd_map, zwfs_ns.pyZelda.mask_diameter, zwfs_ns.pyZelda.mask_depth, zwfs_ns.pyZelda.mask_substrate, zwfs_ns.pyZelda.mask_Fratio,
+                                                zwfs_ns.pyZelda.pupil_diameter, zwfs_ns.pyZelda.pupil, zwfs_ns.optics.wvl0, clear=np.array([]), 
+                                                sign_mask=np.array([]), cpix=False)
+
+
+            b_detector = average_subarrays( abs(b) , (zwfs_ns.detector.binning, zwfs_ns.detector.binning)) 
+
+            # normalized such that np.sum( I0 ) / np.sum( N0 ) ~ 1 where N0.max() = 1. 
+            # do normalization by known area of the pupil and the input stellar magnitude at the given wavelength 
+            # represent as #photons / s / pixel / nm
+
+            Ic = photon_flux_per_pixel_at_vlti * zwfs_ns.pyZelda.propagate_opd_map( opd_map , wave = zwfs_ns.optics.wvl0 )
+
+            i = detect( Ic, binning = (zwfs_ns.detector.binning, zwfs_ns.detector.binning), qe=zwfs_ns.detector.qe , \
+                    dit=zwfs_ns.detector.dit, ron= zwfs_ns.detector.ron, include_shotnoise=True, spectral_bandwidth = zwfs_ns.stellar.bandwidth )
+
+            #telem_ns.ao_1.append(zwfs_ns.pyZelda.pupil * ao_1)
+            telem_ns.i.append(i)
+            
+            # this is what we use for model 
+            telem_ns.i_norm.append( i / np.mean( telem_ns.N0[0][ telem_ns.pupilmask_in_detector[0] ] ) )
+            
+            telem_ns.Ic.append(Ic)
+            telem_ns.strehl.append(strehl)
+            telem_ns.b.append(b)
+            telem_ns.b_detector.append(b_detector)
+            telem_ns.dm_cmd.append(zwfs_ns.dm.current_cmd )
+            
+        print( f'iteration {it} done')
+
+
+
+    def _compute_correlation_map(intensity_frames, strehl_ratios):
+        # intensity_frames: k x N x M array (k frames of N x M pixels)
+        # strehl_ratios: k array (Strehl ratio for each frame)
+        
+        k, N, M = intensity_frames.shape
+        correlation_map = np.zeros((N, M))
+        
+        for i in range(N):
+            for j in range(M):
+                pixel_intensity_series = intensity_frames[:, i, j]
+                correlation_map[i, j], _ = pearsonr(pixel_intensity_series, strehl_ratios)
+        
+        return correlation_map
+
+
+    correlation_map = _compute_correlation_map(np.array( telem_ns.i ), np.array( telem_ns.strehl) )
+
+    # SNR 
+    SNR = np.mean( telem_ns.i ,axis=0 ) / np.std( telem_ns.i ,axis=0  )
+
+
+    if save_results_path is not None:
+        util.nice_heatmap_subplots( im_list = [ correlation_map ] , cbar_label_list = ['Pearson R'] , \
+            savefig = save_results_path + 'strehl_vs_intensity_pearson_R.png' ) #fig_path + 'strehl_vs_intensity_pearson_R.png' )
+
+        util.nice_heatmap_subplots( im_list = [ SNR / np.max( SNR ) ] , cbar_label_list = ['normalized SNR'] ,\
+            savefig = save_results_path + 'SNR_simulation.png')# fig_path + 'SNR_simulation.png' )
+
+    # Select top 5% of pixels with the highest correlation
+
+    selected_pixels = correlation_map > correlation_threshold 
+
+    if save_results_path is not None:
+        plt.figure()
+        plt.imshow( selected_pixels)
+        plt.colorbar(label = "filter")
+        plt.savefig(save_results_path + 'selected_pixels.png', bbox_inches='tight', dpi=300)
+        plt.show()
+
+
+    #pixel_indices = np.where( selected_pixels )
+
+    i_train = int( train_fraction * len( telem_ns.i ) )
+
+    y_train = np.array(  telem_ns.strehl )[:i_train]
+    X_train = np.array( telem_ns.i_norm )[:i_train] 
+
+    y_test = np.array(  telem_ns.strehl )[i_train:]
+    X_test = np.array( telem_ns.i_norm )[i_train:]
+
+
+    #coefficients, intercept = model.fit_linear_model(x, y)
+    model.fit(X = X_train,\
+            y = y_train ,\
+            pixel_filter=selected_pixels )
+
+    y_fit = model.apply_model(X_test) 
+
+    # add the pupil in 
+    model.name = zwfs_ns.name # so we know what config file was used 
+
+    model.detector_pupilmask = telem_ns.pupilmask_in_detector[0] # mask used to get pixels for normalization
+    model.N0 = telem_ns.N0[0] # clear pupil intensity used for normalization 
+    
+    #y_fit = model.predict(x)
+
+    # show out of sample test results 
+    if save_results_path is not None:
+        util.plot_data_and_residuals(y_test, y_test, y_fit, xlabel=r'$\text{Strehl Ratio}$', ylabel=r'$\text{Predicted Strehl Ratio}$', \
+            residual_ylabel=r'$\Delta$',label_1="1:1", label_2="model", savefig=save_results_path + 'strehl_linear_fit.png' )
+
+
+    # save the model
+    if save_results_path is not None:
+        model.save_model_to_pickle(filename=save_results_path + f'strehl_model_config-{zwfs_ns.name}_{timestamp}.pkl')
+
+    return model 
 
 
 
@@ -1066,6 +1605,47 @@ def init_zwfs(grid_ns, optics_ns, dm_ns):
     
     return zwfs_ns 
 
+def first_stage_ao( atm_scrn, Nmodes_removed , basis  , phase_scaling_factor = 1, return_reconstructor = False ):
+    """_summary_
+
+    simple first stage AO that perfectly reconstructs Nmodes_removed Zernike modes from the input phase screen
+    returns the reconstructor
+    
+    if return_reco = True the reconstructor is also returned so AO latency can be simulated by applying reconstructor after 
+    rolling the phase screen a few times 
+    e.g.
+    atm_scrn.add_row()
+    ao_1 = pupil * (phase_scaling_factor * atm_scrn.scrn - reco)    
+     
+    
+    Args:
+        atm_scrn (phasescreens.PhaseScreenKolmogorov): atmospheric phase screen object initialized from aotools or common/phasescreens.py
+        Nmodes_removed (int): Number of Zernike modes removed in first stage ao 
+        basis (list of 2D arrays): Zernike basis function on the input atm_scrn pupil footprint
+            IMPORTANT - basis[0] should be the pupil disk without secondary mirror  
+        phase_scaling_factor (int, optional): _description_. Defaults to 1. to scale the phase screen before projecting onto Zernike modes
+        return_reco (bool) : return the reconstructor if you want to add latency in the simulation
+    """
+    pupil_disk = basis[0] # we define a disk pupil without secondary - so Zernike modes are orthogonal
+
+    # crop the pupil disk and the phasescreen within it (remove padding outside pupil)
+    pupil_disk_cropped, atm_in_pupil = util.crop_pupil(pupil_disk ,  phase_scaling_factor * atm_scrn.scrn)
+
+    # project onto Zernike modes 
+    mode_coefficients = np.array( ztools.zernike.opd_expand(atm_in_pupil * pupil_disk_cropped,\
+        nterms=len(basis), aperture =pupil_disk_cropped))
+
+    # do the reconstruction for N modes
+    reco = np.sum( mode_coefficients[:Nmodes_removed,np.newaxis, np.newaxis] * basis[:Nmodes_removed,:,:] ,axis = 0) 
+
+    # remove N modes 
+    ao_1 = pupil_disk * (phase_scaling_factor * atm_scrn.scrn - reco)     
+    
+    if return_reconstructor:
+        return ao_1, reco 
+    else:
+        return ao_1 
+
 
 
 def test_propagation( zwfs_ns ):
@@ -1218,66 +1798,166 @@ def detect( i, binning, qe , dit, ron= 0, include_shotnoise=True, spectral_bandw
     return noisy_intensity
     
     
-def get_I0(  opd_input,  amp_input , opd_internal,  zwfs_ns , detector=None):
-    # get intensity with the phase mask in the beam
-    # forces dm to be in the current flat configuration (zwfs_ns.dm.dm_flat )
-    # FOR NOW detector = None or a tuple representing the binning to perform on intensity in wavespace. add noise etc . Later consider claass for this
+def get_I0(  opd_input,  amp_input, opd_internal,  zwfs_ns, detector=None, include_shotnoise=True , use_pyZelda = True):
+    """_summary_
+    propagates the input field with phase described by opd_input and internal aberrations described by opd_internal, field flux described by amp_input
+    through a Zernike wavefront sensor system described by the zwfs_ns namespace.
+    
+    I0 is the reference intensity so HERE the DM is set to the flat state (no correction) 
+    
+    Args:
+        opd_input (2D array like): _description_ opd map in units of meters in wavespace
+        amp_input (2D array like): _description_ flux of the input field in wavespace in units of sqrt( photons / pixel / second / nm )
+        opd_internal (2D array like): _description_ opd map in units of meters in wavespace for internal aberrations (somewhat redudant with opd_input.. i know)
+        zwfs_ns (simple name space): _description_ namespace containing all the information about the zwfs system. Use configuration file and init_zwfs_from_config_ini to get this
+        detector (_type_, optional): _description_. Defaults to None. if None returns intensity in wave space, otherwise returns intensity on detector. 
+            Detector should be a class or namespace with dit, qe, ron, binning, attributes. If you want to use the spectral_bandwidth attribute of zwfs_ns.stellar should also be present 
+        include_shotnoise (bool, optional): _description_. Defaults to True.
+        use_pyZelda (bool, optional): _description_. Defaults to True. use pyZelda to propagate the opd map. If False use the get_pupil_intensity function to propagate the opd map
+
+    Raises:
+        ValueError: _description_
+
+    Returns:
+        _type_: field intensity 
+    """
     opd_current_dm = get_dm_displacement( command_vector = zwfs_ns.dm.dm_flat  , gain=zwfs_ns.dm.opd_per_cmd, \
         sigma= zwfs_ns.grid.dm_coord.act_sigma_wavesp, X=zwfs_ns.grid.wave_coord.X, Y=zwfs_ns.grid.wave_coord.Y,\
             x0=zwfs_ns.grid.dm_coord.act_x0_list_wavesp, y0=zwfs_ns.grid.dm_coord.act_y0_list_wavesp )
     
-    phi = zwfs_ns.grid.pupil_mask  *  2*np.pi / zwfs_ns.optics.wvl0 * (  opd_input + opd_internal + opd_current_dm  )
+    opd_map = (opd_input + opd_internal + opd_current_dm )
+    
+    if use_pyZelda:
+        Intensity = ztools.propagate_opd_map( zwfs_ns.pyZelda.pupil * opd_map, zwfs_ns.pyZelda.mask_diameter, zwfs_ns.pyZelda.mask_depth, zwfs_ns.pyZelda.mask_substrate, \
+                                            zwfs_ns.pyZelda.mask_Fratio, zwfs_ns.pyZelda.pupil_diameter, amp_input * zwfs_ns.pyZelda.pupil, wave=zwfs_ns.optics.wvl0)
+        #Intensity =  amp_input**2 * zwfs_ns.pyZelda.propagate_opd_map( opd_map , wave = zwfs_ns.optics.wvl0 )
+        #Intensity =  amp_input**2 * ztools.propagate_opd_map( zwfs_ns.pyZelda.pupil * (opd_map), zwfs_ns.pyZelda.mask_diameter, zwfs_ns.pyZelda.mask_depth, zwfs_ns.pyZelda.mask_substrate,
+        #                                    zwfs_ns.pyZelda.mask_Fratio, zwfs_ns.pyZelda.pupil_diameter, zwfs_ns.pyZelda.pupil, wave=zwfs_ns.optics.wvl0)
+        
 
-    Intensity = get_pupil_intensity( phi= phi, amp=amp_input, theta = zwfs_ns.optics.theta , phasemask_diameter = zwfs_ns.optics.mask_diam, \
-        phasemask_mask = zwfs_ns.grid.phasemask_mask, pupil_diameter = zwfs_ns.grid.N, fplane_pixels=zwfs_ns.focal_plane.fplane_pixels, \
-            pixels_across_mask=zwfs_ns.focal_plane.pixels_across_mask )
-    #get_pupil_intensity( phi = phi, theta = zwfs_ns.optics.theta, phasemask=zwfs_ns.grid.phasemask_mask, amp=amp_input )
+    else:
+        phi = zwfs_ns.grid.pupil_mask  *  2*np.pi / zwfs_ns.optics.wvl0 * (  opd_map )
+
+        Intensity = get_pupil_intensity( phi= phi, amp=amp_input, theta = zwfs_ns.optics.theta , phasemask_diameter = zwfs_ns.optics.mask_diam, \
+            phasemask_mask = zwfs_ns.grid.phasemask_mask, pupil_diameter = zwfs_ns.grid.N, fplane_pixels=zwfs_ns.focal_plane.fplane_pixels, \
+                pixels_across_mask=zwfs_ns.focal_plane.pixels_across_mask )
+        #get_pupil_intensity( phi = phi, theta = zwfs_ns.optics.theta, phasemask=zwfs_ns.grid.phasemask_mask, amp=amp_input )
 
     if detector is not None:
-        Intensity = average_subarrays(array=Intensity, block_size = detector)
+        if not hasattr(zwfs_ns, 'stellar'):
+            raise ValueError("zwfs_ns must have a stellar attribute to get spectral bandwidth (zwfs_ns.stellar.bandwidth )")
+
+        Intensity = detect( Intensity, binning = (detector.binning,detector.binning) , qe= detector.qe , dit= detector.dit, ron = detector.ron, include_shotnoise=include_shotnoise, spectral_bandwidth = zwfs_ns.stellar.bandwidth  )
+        #average_subarrays(array=Intensity, block_size = detector)
         
 
     return Intensity
 
-def get_N0( opd_input,  amp_input ,  opd_internal,  zwfs_ns , detector=None):
-    # get intensity with the phase mask out of the beam (here we jiust put theta = 0)
-    # forces dm to be in the current flat configuration (zwfs_ns.dm.dm_flat )
-    # FOR NOW detector = None or a tuple representing the binning to perform on intensity in wavespace. add noise etc 
+def get_N0( opd_input,  amp_input ,  opd_internal,  zwfs_ns , detector=None, include_shotnoise=True , use_pyZelda = True):
+    """_summary_
+    propagates the input field with phase described by opd_input and internal aberrations described by opd_internal, field flux described by amp_input
+    through a Zernike wavefront sensor system described by the zwfs_ns namespace WITH NO PHASEMASK INSERTED (CLEAR PUPIL).
+    
+    Args:
+        opd_input (2D array like): _description_ opd map in units of meters in wavespace
+        amp_input (2D array like): _description_ flux of the input field in wavespace in units of sqrt( photons / wavespace_pixel / second / nm )
+        opd_internal (2D array like): _description_ opd map in units of meters in wavespace for internal aberrations (somewhat redudant with opd_input.. i know)
+        zwfs_ns (simple name space): _description_ namespace containing all the information about the zwfs system. Use configuration file and init_zwfs_from_config_ini to get this
+        detector (_type_, optional): _description_. Defaults to None. if None returns intensity in wave space, otherwise returns intensity on detector. 
+            Detector should be a class or namespace with dit, qe, ron, binning, attributes. If you want to use the spectral_bandwidth attribute of zwfs_ns.stellar should also be present 
+        include_shotnoise (bool, optional): _description_. Defaults to True.
+        use_pyZelda (bool, optional): _description_. Defaults to True. use pyZelda to propagate the opd map. If False use the get_pupil_intensity function to propagate the opd map
+
+    Raises:
+        ValueError: _description_
+
+    Returns:
+        _type_: field intensity 
+    """
+
     opd_current_dm = get_dm_displacement( command_vector= zwfs_ns.dm.dm_flat   , gain=zwfs_ns.dm.opd_per_cmd, \
         sigma= zwfs_ns.grid.dm_coord.act_sigma_wavesp, X=zwfs_ns.grid.wave_coord.X, Y=zwfs_ns.grid.wave_coord.Y,\
             x0=zwfs_ns.grid.dm_coord.act_x0_list_wavesp, y0=zwfs_ns.grid.dm_coord.act_y0_list_wavesp )
-    
-    phi = zwfs_ns.grid.pupil_mask  *  2*np.pi / zwfs_ns.optics.wvl0 * ( opd_input + opd_internal + opd_current_dm  )
+        
+    opd_map = opd_input + opd_internal + opd_current_dm 
+        
+    if use_pyZelda:
+        Intensity = ztools.propagate_opd_map( zwfs_ns.pyZelda.pupil * opd_map, 0 * zwfs_ns.pyZelda.mask_diameter, zwfs_ns.pyZelda.mask_depth, zwfs_ns.pyZelda.mask_substrate, \
+                                            zwfs_ns.pyZelda.mask_Fratio, zwfs_ns.pyZelda.pupil_diameter, amp_input *zwfs_ns.pyZelda.pupil, wave=zwfs_ns.optics.wvl0)
+        #Intensity =  amp_input**2 * ztools.propagate_opd_map(opd_map, zwfs_ns.pyZelda.mask_diameter, 0 * zwfs_ns.pyZelda.mask_depth, zwfs_ns.pyZelda.mask_substrate,
+        #                                   zwfs_ns.pyZelda.mask_Fratio, zwfs_ns.pyZelda.pupil_diameter, zwfs_ns.pyZelda.pupil, wave=zwfs_ns.optics.wvl0)
+        #
+        
 
-    
-    Intensity = get_pupil_intensity( phi= phi, amp=amp_input, theta = 0 , phasemask_diameter = zwfs_ns.optics.mask_diam, \
-        phasemask_mask = zwfs_ns.grid.phasemask_mask, pupil_diameter = zwfs_ns.grid.N, fplane_pixels=zwfs_ns.focal_plane.fplane_pixels, \
-            pixels_across_mask=zwfs_ns.focal_plane.pixels_across_mask )
+    else:
+        #  convert to radians 
+        phi = zwfs_ns.grid.pupil_mask  *  2*np.pi / zwfs_ns.optics.wvl0 * ( opd_map )
+
+        Intensity = get_pupil_intensity( phi= phi, amp=amp_input, theta = 0 , phasemask_diameter = zwfs_ns.optics.mask_diam, \
+            phasemask_mask = zwfs_ns.grid.phasemask_mask, pupil_diameter = zwfs_ns.grid.N, fplane_pixels=zwfs_ns.focal_plane.fplane_pixels, \
+                pixels_across_mask=zwfs_ns.focal_plane.pixels_across_mask )
 
     if detector is not None:
-        Intensity = average_subarrays(array=Intensity, block_size = detector)
+        if not hasattr(zwfs_ns, 'stellar'):
+            raise ValueError("zwfs_ns must have a stellar attribute to get spectral bandwidth (zwfs_ns.stellar.bandwidth )")
+
+        Intensity = detect( Intensity, binning = (detector.binning,detector.binning) , qe= detector.qe , dit= detector.dit, ron = detector.ron, include_shotnoise=include_shotnoise, spectral_bandwidth = zwfs_ns.stellar.bandwidth  )
+        #average_subarrays(array=Intensity, block_size = detector)
 
     return Intensity
 
 
-def get_frame( opd_input,  amp_input ,  opd_internal,  zwfs_ns , detector=None):
-    # get intensity with the phase mask in the beam
-    # and dm shaped to the current command ( zwfs_ns.dm.current_cmd ) 
-    # FOR NOW detector = None or a tuple representing the binning to perform on intensity in wavespace. add noise etc 
+def get_frame( opd_input,  amp_input ,  opd_internal,  zwfs_ns , detector=None, include_shotnoise=True , use_pyZelda = True):
+    """_summary_
+    propagates the input field with phase described by opd_input and internal aberrations described by opd_internal, field flux described by amp_input
+    through a Zernike wavefront sensor system described by the zwfs_ns namespace.
     
+    Args:
+        opd_input (2D array like): _description_ opd map in units of meters in wavespace
+        amp_input (2D array like): _description_ flux of the input field in wavespace in units of sqrt( photons / pixel / second / nm )
+        opd_internal (2D array like): _description_ opd map in units of meters in wavespace for internal aberrations (somewhat redudant with opd_input.. i know)
+        zwfs_ns (simple name space): _description_ namespace containing all the information about the zwfs system. Use configuration file and init_zwfs_from_config_ini to get this
+        detector (_type_, optional): _description_. Defaults to None. if None returns intensity in wave space, otherwise returns intensity on detector. 
+            Detector should be a class or namespace with dit, qe, ron, binning, attributes. If you want to use the spectral_bandwidth attribute of zwfs_ns.stellar should also be present 
+        include_shotnoise (bool, optional): _description_. Defaults to True.
+        use_pyZelda (bool, optional): _description_. Defaults to True. use pyZelda to propagate the opd map. If False use the get_pupil_intensity function to propagate the opd map
+
+    Raises:
+        ValueError: _description_
+
+    Returns:
+        _type_: field intensity 
+    """
+
+
     # I could do this outside to save time but for now just do it here
     opd_current_dm = get_dm_displacement( command_vector= zwfs_ns.dm.current_cmd   , gain=zwfs_ns.dm.opd_per_cmd, \
-        sigma= zwfs_ns.grid.dm_coord.act_sigma_wavesp, X=zwfs_ns.grid.wave_coord.X, Y=zwfs_ns.grid.wave_coord.Y,\
-            x0=zwfs_ns.grid.dm_coord.act_x0_list_wavesp, y0=zwfs_ns.grid.dm_coord.act_y0_list_wavesp )
+            sigma= zwfs_ns.grid.dm_coord.act_sigma_wavesp, X=zwfs_ns.grid.wave_coord.X, Y=zwfs_ns.grid.wave_coord.Y,\
+                x0=zwfs_ns.grid.dm_coord.act_x0_list_wavesp, y0=zwfs_ns.grid.dm_coord.act_y0_list_wavesp )
+            
+    opd_map = opd_input + opd_internal + opd_current_dm
     
-    phi = zwfs_ns.grid.pupil_mask  *  2*np.pi / zwfs_ns.optics.wvl0 * ( opd_input + opd_internal + opd_current_dm  )
-    
-    Intensity = get_pupil_intensity( phi= phi, amp=amp_input, theta = zwfs_ns.optics.theta , phasemask_diameter = zwfs_ns.optics.mask_diam, \
-        phasemask_mask = zwfs_ns.grid.phasemask_mask, pupil_diameter = zwfs_ns.grid.N, fplane_pixels=zwfs_ns.focal_plane.fplane_pixels, \
-            pixels_across_mask=zwfs_ns.focal_plane.pixels_across_mask )
+    if use_pyZelda:
+        
+        Intensity = ztools.propagate_opd_map( zwfs_ns.pyZelda.pupil * opd_map, zwfs_ns.pyZelda.mask_diameter, zwfs_ns.pyZelda.mask_depth, zwfs_ns.pyZelda.mask_substrate, \
+                                            zwfs_ns.pyZelda.mask_Fratio, zwfs_ns.pyZelda.pupil_diameter, amp_input*zwfs_ns.pyZelda.pupil, wave=zwfs_ns.optics.wvl0)
+        #amp_input**2 * zwfs_ns.pyZelda.propagate_opd_map( opd_map , wave = zwfs_ns.optics.wvl0 )
+        
+    else:
+
+        # convert phase in radians
+        phi = zwfs_ns.grid.pupil_mask * 2*np.pi / zwfs_ns.optics.wvl0 * ( opd_map )
+        
+        Intensity = get_pupil_intensity( phi= phi, amp=amp_input, theta = zwfs_ns.optics.theta , phasemask_diameter = zwfs_ns.optics.mask_diam, \
+            phasemask_mask = zwfs_ns.grid.phasemask_mask, pupil_diameter = zwfs_ns.grid.N, fplane_pixels=zwfs_ns.focal_plane.fplane_pixels, \
+                pixels_across_mask=zwfs_ns.focal_plane.pixels_across_mask )
 
     if detector is not None:
-        Intensity = average_subarrays(array=Intensity, block_size = detector)
+        if not hasattr(zwfs_ns, 'stellar') :
+            raise ValueError("zwfs_ns must have a stellar attribute to get spectral bandwidth (zwfs_ns.stellar.bandwidth )")
+
+        Intensity = detect( Intensity, binning = (detector.binning,detector.binning) , qe= detector.qe , dit= detector.dit, ron = detector.ron, include_shotnoise=include_shotnoise, spectral_bandwidth = zwfs_ns.stellar.bandwidth  )
+        #average_subarrays(array=Intensity, block_size = detector)
 
     return Intensity
 
@@ -1303,13 +1983,13 @@ def classify_pupil_regions( opd_input,  amp_input ,  opd_internal,  zwfs_ns , de
     outer_strehl_filt = ( I0 - N0 >   4.5 * np.median(I0) ) * outside_filt
     
     if detector is not None:
-        pupil_filt = average_subarrays(array= pupil_filt, block_size=detector) > 0
+        pupil_filt = average_subarrays(array= pupil_filt, block_size=(zwfs_ns.detector.binning,zwfs_ns.detector.binning)) > 0
         
-        outside_filt = average_subarrays(array= outside_filt, block_size=detector) > 0
+        outside_filt = average_subarrays(array= outside_filt, block_size=(zwfs_ns.detector.binning,zwfs_ns.detector.binning)) > 0
         
-        secondary_strehl_filt = average_subarrays( secondary_strehl_filt ,block_size=detector) > 0
+        secondary_strehl_filt = average_subarrays( secondary_strehl_filt ,block_size=(zwfs_ns.detector.binning,zwfs_ns.detector.binning)) > 0
         
-        outer_strehl_filt = average_subarrays( outer_strehl_filt ,block_size=detector) > 0
+        outer_strehl_filt = average_subarrays( outer_strehl_filt ,block_size=(zwfs_ns.detector.binning,zwfs_ns.detector.binning)) > 0
 
 
     region_classification_dict = {

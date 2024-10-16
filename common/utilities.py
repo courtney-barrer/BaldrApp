@@ -145,6 +145,7 @@ def crop_pupil(pupil, image):
 
 
 
+
 def create_phase_screen_cmd_for_DM(scrn,  scaling_factor=0.1, drop_indicies = None, plot_cmd=False):
     """
     aggregate a scrn (aotools.infinitephasescreen object) onto a DM command space. phase screen is normalized by
