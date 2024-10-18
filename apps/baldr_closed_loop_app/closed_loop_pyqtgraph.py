@@ -314,7 +314,7 @@ class AOControlApp(QtWidgets.QWidget):
         
         if file_name:
             
-            bldr.save_telemetry( zwfs_ns , savename = file_name )
+            bldr.save_telemetry( zwfs_ns.telem , savename = file_name )
 
 
     def save_zwfs_ns_to_json(self):
@@ -500,11 +500,12 @@ class AOControlApp(QtWidgets.QWidget):
     def run_AO_iteration(self):
         
         if dynamic_opd_input:
-            opd_input = update_opd_input( scrn, scaling_factor=1 )
+            opd_input = update_opd_input( scrn, scaling_factor=0.1 )
          
          
         # Call the AO iteration function from your module
-        bldr.AO_iteration( opd_input, amp_input, opd_internal, zwfs_ns.reco.I0,  zwfs_ns, dm_disturbance, record_telemetry=True ,detector=detector)
+        bldr.AO_iteration( opd_input, amp_input, opd_internal, zwfs_ns.reco.I0,  zwfs_ns, dm_disturbance, \
+            record_telemetry=True ,detector=detector, use_pyZelda=use_pyZelda)
 
         # Retrieve telemetry data
         im_dm_dist = util.get_DM_command_in_2D(zwfs_ns.telem.dm_disturb_list[-1])
@@ -578,7 +579,7 @@ class AOControlApp(QtWidgets.QWidget):
 
 
 
-def update_opd_input(scrn, scaling_factor = 1):
+def update_opd_input(scrn, scaling_factor = 0.1):
     # update rolling phase screen if dynamic_opd_input 
     scrn.add_row()
     opd_input = scaling_factor * zwfs_ns.optics.wvl0 / (2*np.pi) * zwfs_ns.grid.pupil_mask * scrn.scrn
@@ -720,38 +721,42 @@ def deserialize_object(obj):
 
 if __name__ == "__main__":
     
-    # configure our zwfs 
-    grid_dict = {
-        "D":1, # diameter of beam 
-        "N" : 64, # number of pixels across pupil diameter
-        #"padding_factor" : 4, # how many pupil diameters fit into grid x axis
-        # TOTAL NUMBER OF PIXELS = padding_factor * N 
-        "dim": 64 * 4
-        }
+    # # configure our zwfs 
+    # grid_dict = {
+    #     "D":1, # diameter of beam 
+    #     "N" : 64, # number of pixels across pupil diameter
+    #     #"padding_factor" : 4, # how many pupil diameters fit into grid x axis
+    #     # TOTAL NUMBER OF PIXELS = padding_factor * N 
+    #     "dim": 64 * 4
+    #     }
 
-    optics_dict = {
-        "wvl0" :1.65e-6, # central wavelength (m) 
-        "F_number": 21.2, # F number on phasemask
-        "mask_diam": 1.06, # diameter of phaseshifting region in diffraction limit units (physical unit is mask_diam * 1.22 * F_number * lambda)
-        "theta": 1.57079, # phaseshift of phasemask 
-    }
+    # optics_dict = {
+    #     "wvl0" :1.65e-6, # central wavelength (m) 
+    #     "F_number": 21.2, # F number on phasemask
+    #     "mask_diam": 1.06, # diameter of phaseshifting region in diffraction limit units (physical unit is mask_diam * 1.22 * F_number * lambda)
+    #     "theta": 1.57079, # phaseshift of phasemask 
+    # }
 
-    dm_dict = {
-        "dm_model":"BMC-multi-3.5",
-        "actuator_coupling_factor":0.7,# std of in actuator spacing of gaussian IF applied to each actuator. (e.g actuator_coupling_factor = 1 implies std of poke is 1 actuator across.)
-        "dm_pitch":1,
-        "dm_aoi":0, # angle of incidence of light on DM 
-        "opd_per_cmd" : 3e-6, # peak opd applied at center of actuator per command unit (normalized between 0-1) 
-        "flat_rmse" : 20e-9 # std (m) of flatness across Flat DM  
-        }
+    # dm_dict = {
+    #     "dm_model":"BMC-multi-3.5",
+    #     "actuator_coupling_factor":0.7,# std of in actuator spacing of gaussian IF applied to each actuator. (e.g actuator_coupling_factor = 1 implies std of poke is 1 actuator across.)
+    #     "dm_pitch":1,
+    #     "dm_aoi":0, # angle of incidence of light on DM 
+    #     "opd_per_cmd" : 3e-6, # peak opd applied at center of actuator per command unit (normalized between 0-1) 
+    #     "flat_rmse" : 20e-9 # std (m) of flatness across Flat DM  
+    #     }
 
-    grid_ns = SimpleNamespace(**grid_dict)
-    optics_ns = SimpleNamespace(**optics_dict)
-    dm_ns = SimpleNamespace(**dm_dict)
+    # grid_ns = SimpleNamespace(**grid_dict)
+    # optics_ns = SimpleNamespace(**optics_dict)
+    # dm_ns = SimpleNamespace(**dm_dict)
 
+    # zwfs_ns = bldr.init_zwfs(grid_ns, optics_ns, dm_ns)
 
-    # Build IM  and look at Eigenmodes! 
-    zwfs_ns = bldr.init_zwfs(grid_ns, optics_ns, dm_ns)
+    use_pyZelda = False
+
+    wvl0=1.25e-6
+    config_ini = '/home/benja/Documents/BALDR/BaldrApp/configurations/BALDR_UT_J3.ini'
+    zwfs_ns = bldr.init_zwfs_from_config_ini( config_ini=config_ini , wvl0=wvl0)
 
     opd_input = 0 * zwfs_ns.grid.pupil_mask *  np.random.randn( *zwfs_ns.grid.pupil_mask.shape)
 
@@ -762,6 +767,9 @@ if __name__ == "__main__":
 
     #basis_name_list = ['Hadamard', "Zonal", "Zonal_pinned_edges", "Zernike", "Zernike_pinned_edges", "fourier", "fourier_pinned_edges"]
 
+    # Build IM  and look at Eigenmodes! 
+    
+    
     # perfect field only with internal opd aberrations 
     # different poke methods 
     Nmodes = 100
@@ -769,7 +777,7 @@ if __name__ == "__main__":
     basis = 'Zonal_pinned_edges' #'fourier_pinned_edges' #'Hadamard' #'Zonal_pinned_edges'
     poke_amp = 0.05
     Smax = 30
-    detector = (4,4) # for binning , zwfs_ns.grid.N is #pixels across pupil diameter (64) therefore division 4 = 16 pixels (between CRed2 and Cred1 )
+    detector = zwfs_ns.detector #(4,4) # for binning , zwfs_ns.grid.N is #pixels across pupil diameter (64) therefore division 4 = 16 pixels (between CRed2 and Cred1 )
     #M2C_0 = gen_basis.construct_command_basis( basis= basis, number_of_modes = Nmodes, without_piston=True).T  
 
     #I0 = bldr.get_I0(  opd_input  = 0 *zwfs_ns.grid.pupil_mask ,   amp_input = amp_input,\
@@ -779,11 +787,11 @@ if __name__ == "__main__":
     #    opd_internal = opd_internal,  zwfs_ns= zwfs_ns , detector=None )
 
     # we must first define our pupil regions before building 
-    zwfs_ns = bldr.classify_pupil_regions( opd_input,  amp_input ,  opd_internal,  zwfs_ns , detector= detector) # For now detector is just tuple of pixels to average. useful to know is zwfs_ns.grid.N is number of pixels across pupil. # from this calculate an appropiate binning for detector 
+    zwfs_ns = bldr.classify_pupil_regions( opd_input,  amp_input ,  opd_internal,  zwfs_ns , detector= detector , use_pyZelda = False) # For now detector is just tuple of pixels to average. useful to know is zwfs_ns.grid.N is number of pixels across pupil. # from this calculate an appropiate binning for detector 
 
     zwfs_ns = bldr.build_IM( zwfs_ns,  calibration_opd_input= 0 *zwfs_ns.grid.pupil_mask , calibration_amp_input = amp_input , \
         opd_internal = opd_internal,  basis = basis, Nmodes =  Nmodes, poke_amp = poke_amp, poke_method = 'double_sided_poke',\
-            imgs_to_mean = 1, detector=detector )
+            imgs_to_mean = 1, detector=detector, use_pyZelda = False )
 
     # look at the eigenmodes in camera, DM and singular values
     bldr.plot_eigenmodes( zwfs_ns , save_path = None )
@@ -801,7 +809,7 @@ if __name__ == "__main__":
 
     #zwfs_ns = init_CL_simulation( zwfs_ns,  opd_internal, amp_input , basis, Nmodes, poke_amp, Smax )
       
-    dm_disturbance = 0.1 * TT_vectors.T[0]
+    dm_disturbance = 0. * TT_vectors.T[0]
     
     #scrn = aotools.infinitephasescreen.PhaseScreenVonKarman(nx_size= zwfs_ns.grid.N * zwfs_ns.grid.padding_factor, pixel_scale= zwfs_ns.grid.D / zwfs_ns.grid.N ,r0=0.1,L0=12)
     #scrn = phasescreens.PhaseScreenVonKarman(nx_size = zwfs_ns.grid.N * zwfs_ns.grid.padding_factor, pixel_scale= zwfs_ns.grid.D / zwfs_ns.grid.N ,r0=0.1,L0=12)

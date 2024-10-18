@@ -7,7 +7,7 @@ import pickle
 from types import SimpleNamespace
 from sklearn.linear_model import LinearRegression
 import importlib # reimport package after edits: importlib.reload(bldr)
-
+import os
 # from courtney-barrer's fork of pyzelda
 import pyzelda.zelda as zelda
 import pyzelda.ztools as ztools
@@ -39,11 +39,20 @@ def load_model_from_pickle(filename):
     return model
 
 
+
+
+
+
 # initialize our ZWFS instrument
 wvl0=1.25e-6
 config_ini = '/home/benja/Documents/BALDR/BaldrApp/configurations/BALDR_UT_J3.ini'
 zwfs_ns = bldr.init_zwfs_from_config_ini( config_ini=config_ini , wvl0=wvl0)
 
+fig_path = f'/home/benja/Downloads/act_cross_coupling_{zwfs_ns.dm.actuator_coupling_factor}/'
+if os.path.exists(fig_path) == False:
+    os.makedirs(fig_path)
+    
+    
 # set up detector class from zwfs_ns.detector 
 # bldr_detector = bldr.detector( binning = (zwfs_ns.detector.binning, zwfs_ns.detector.binning), qe=zwfs_ns.detector.qe ,\
 #     dit=zwfs_ns.detector.dit, ron= zwfs_ns.detector.ron)
@@ -145,8 +154,9 @@ zwfs_ns = bldr.build_IM( zwfs_ns ,  calibration_opd_input = 0*opd_internal , cal
             opd_internal = opd_internal,  basis = basis_name, Nmodes =  Nmodes, poke_amp = 0.05, poke_method = 'double_sided_poke',\
                 imgs_to_mean = 1, detector=zwfs_ns.detector)
 
-bldr.plot_eigenmodes( zwfs_ns , save_path = None )
+bldr.plot_eigenmodes( zwfs_ns , descr_label = f'dm_interactuator_coupling-{zwfs_ns.dm.actuator_coupling_factor}', save_path = fig_path )
 
+    
 ### 
 # DM registration 
 ###
@@ -189,7 +199,7 @@ I0_dm = DM_registration.interpolate_pixel_intensities(image = b0, pixel_coords =
 N0_dm = DM_registration.interpolate_pixel_intensities(image = N0, pixel_coords = transform_dict['actuator_coord_list_pixel_space'])
 
 # calibrate a model to map a subset of pixel intensities to Strehl Ratio 
-strehl_model = bldr.calibrate_strehl_model( zwfs_ns, save_results_path = '/home/benja/Downloads/', train_fraction = 0.6, correlation_threshold = 0.6, \
+strehl_model = bldr.calibrate_strehl_model( zwfs_ns, save_results_path = fig_path, train_fraction = 0.6, correlation_threshold = 0.6, \
     number_of_screen_initiations = 10, scrn_scaling_grid = np.logspace(-2, -0.5, 5), model_type = 'PixelWiseStrehlModel' ) #lin_comb') 
 
 # or read one in  
@@ -307,6 +317,50 @@ for it in range(100):
     telem_ns.b_dm_est.append( b_dm_est )
     telem_ns.dm_cmd.append( zwfs_ns.dm.current_cmd )
 
+
+# save fits 
+bldr.save_telemetry( telem_ns , savename = fig_path + f'telem_with_dm_interactuator_coupling-{zwfs_ns.dm.actuator_coupling_factor}.fits', overwrite=True, return_fits = False)
+
+
+
+
+# let have a dybnamic plot of the telemetry
+image_lists = [[ util.get_DM_command_in_2D( a ) for a in telem_ns.i_dm], \
+    [ util.get_DM_command_in_2D( a ) for a in telem_ns.dm_cmd], \
+     telem_ns.Ic] 
+util.display_images_with_slider(image_lists = image_lists,\
+    plot_titles=['intensity interp dm', 'dm cmd', 'intensity wavespace'], cbar_labels=None)
+       
+# make a movie
+util.display_images_as_movie( image_lists = image_lists,\
+    plot_titles=['intensity interp dm', 'dm cmd', 'intensity wavespace'], cbar_labels=None, save_path = fig_path + 'zonal_model_calibration_dm_interactuator_coupling-{zwfs_ns.dm.actuator_coupling_factor}.mp4', fps=5) 
+                             
+                            
+# plot the  interpolated intensity on DM and the DM command
+act=65
+plt.figure()
+plt.plot(  np.array( telem_ns.dm_cmd ).T[act], np.array( telem_ns.i_dm ).T[act],'.')
+plt.xlabel('dm cmd')
+plt.ylabel('intensity interp dm')
+plt.savefig(fig_path + f'dmcmd_vs_dmIntensity_actuator-{act}_dm_interactuator_coupling-{zwfs_ns.dm.actuator_coupling_factor}.png')
+plt.show()
+
+# look at the correlation between the DM command and the interpolated intensity (Pearson R) 
+R_list = []
+for act in range(140):
+    R_list.append( pearsonr([a[act] for a in telem_ns.i_dm ], [a[act] for a in telem_ns.dm_cmd]).statistic )
+
+plt.figure() 
+plt.imshow( util.get_DM_command_in_2D( R_list ) )
+plt.colorbar(label='Pearson R') 
+plt.title( 'Pearson R between DM command and \ninterpolated intensity onto DM actuator space')
+plt.savefig(fig_path + f'pearson_r_dmcmd_dmIntensity_dm_interactuator_coupling-{zwfs_ns.dm.actuator_coupling_factor}.png')
+plt.show()  
+
+
+
+
+
 #fir Y=M@X
 M = np.linalg.lstsq(np.array( telem_ns.i_dm ).T[filt].T , np.array( telem_ns.dm_cmd ).T[filt].T, rcond=None)[0]
 
@@ -319,14 +373,7 @@ plt.figure(); plt.plot( (M @ (np.array( telem_ns.i_dm ).T[filt]) )[act], np.arra
 filt = np.var( telem_ns.i_dm , axis= 0 ) > 180000 
 plt.imshow( util.get_DM_command_in_2D( filt ) ) ; plt.colorbar() ; plt.show()
 
-R_list = []
-for act in range(140):
-    R_list.append( pearsonr([a[act] for a in telem_ns.i_dm ], [a[act] for a in telem_ns.dm_cmd]).statistic )
 
-    
-plt.imshow( util.get_DM_command_in_2D( R_list ) )
-plt.colorbar() 
-plt.show()  
 
    
 ii = [ ]
@@ -338,12 +385,6 @@ pearsonr(pixel_intensity_series, strehl_ratios)
 plt.plot( telem_ns.strehl_2, telem_ns.strehl_2_est, 'o')
 
 
-image_lists = [[ util.get_DM_command_in_2D( a ) for a in telem_ns.i_dm], \
-    [ util.get_DM_command_in_2D( a ) for a in telem_ns.dm_cmd], \
-     telem_ns.Ic] 
-util.display_images_with_slider(image_lists = image_lists,\
-    plot_titles=None, cbar_labels=None)
-       
     
 i_fft = np.fft.fftshift( np.fft.fft2( telem_ns.i[0] ) )
 

@@ -463,35 +463,83 @@ def init_telem_dict():
     return telemetry_dict
 
 
-def save_telemetry( zwfs_ns , savename = None):
+# def save_telemetry( zwfs_ns , savename = None, overwrite=True):
+    
+#     tstamp = datetime.datetime.now().strftime("%d-%m-%YT%H.%M.%S")
+
+#     telem_dict = vars(zwfs_ns.telem )
+#     # Create a list of HDUs (Header Data Units)
+#     hdul = fits.HDUList()
+
+#     # Add each list to the HDU list as a new extension
+#     for list_name, data_list in telem_dict.items():
+#         # Convert list to numpy array for FITS compatibility
+#         data_array = np.array(data_list, dtype=float)  # Ensure it is a float array or any appropriate type
+
+#         # Create a new ImageHDU with the data
+#         hdu = fits.ImageHDU(data_array)
+
+#         # Set the EXTNAME header to the variable name
+#         hdu.header['EXTNAME'] = list_name
+
+#         # Append the HDU to the HDU list
+#         hdul.append(hdu)
+
+#     # Write the HDU list to a FITS file
+#     if savename is None:
+#         savename = f'~/Downloads/telemetry_simulation_{tstamp}.fits'
+#     hdul.writeto( savename, overwrite=True)
+
+#     return hdul
+
+def save_telemetry( telemetry_ns , savename = None, overwrite=True, return_fits = False):
     
     tstamp = datetime.datetime.now().strftime("%d-%m-%YT%H.%M.%S")
+    
+    # Create a Primary HDU (Header/Data Unit)
+    primary_hdu = fits.PrimaryHDU()
 
-    telem_dict = vars(zwfs_ns.telem )
-    # Create a list of HDUs (Header Data Units)
-    hdul = fits.HDUList()
+    # Create a list to hold the individual HDUs
+    hdul = fits.HDUList([primary_hdu])
 
-    # Add each list to the HDU list as a new extension
-    for list_name, data_list in telem_dict.items():
-        # Convert list to numpy array for FITS compatibility
-        data_array = np.array(data_list, dtype=float)  # Ensure it is a float array or any appropriate type
-
-        # Create a new ImageHDU with the data
-        hdu = fits.ImageHDU(data_array)
-
-        # Set the EXTNAME header to the variable name
-        hdu.header['EXTNAME'] = list_name
-
-        # Append the HDU to the HDU list
-        hdul.append(hdu)
-
-    # Write the HDU list to a FITS file
-    if savename is None:
-        savename = f'~/Downloads/telemetry_simulation_{tstamp}.fits'
-    hdul.writeto( savename, overwrite=True)
-
-
-
+    # Iterate through the telemetry dictionary and create HDUs for each key-value pair
+    for key, value in vars(telemetry_ns).items():
+        if value:  # Only add non-empty data arrays/lists
+            value_array = np.array(value)
+            
+            if np.iscomplexobj(value_array):  # Check if the array contains complex numbers
+                # Split into real and imaginary parts
+                real_part = np.real(value_array)
+                imag_part = np.imag(value_array)
+                
+                # Create HDU for the real part
+                real_hdu = fits.ImageHDU(real_part, name=f'{key.upper()}_REAL')
+                real_hdu.header['EXTNAME'] = f'{key}_REAL'
+                real_hdu.header['COMMENT'] = 'Real part of complex values'
+                
+                # Create HDU for the imaginary part
+                imag_hdu = fits.ImageHDU(imag_part, name=f'{key.upper()}_IMAG')
+                imag_hdu.header['EXTNAME'] = f'{key}_IMAG'
+                imag_hdu.header['COMMENT'] = 'Imaginary part of complex values'
+                
+                # Append both HDUs to the HDU list
+                hdul.append(real_hdu)
+                hdul.append(imag_hdu)
+            else:
+                # Handle non-complex data as usual
+                hdu = fits.ImageHDU(value_array, name=key.upper())
+                hdu.header['EXTNAME'] = key.upper()
+                hdu.header['COMMENT'] = f'Data corresponding to {key.upper()}'
+                hdul.append(hdu)
+                
+        if savename is None:
+            savename = f'~/Downloads/telemetry_simulation_{tstamp}.fits'
+            
+        # Write the HDU list to a FITS file
+        hdul.writeto( savename, overwrite=overwrite)
+        
+        if return_fits:
+            return hdul
 
 def calibrate_strehl_model( zwfs_ns, save_results_path = None, train_fraction = 0.6, correlation_threshold = 0.5,\
     number_of_screen_initiations = 50, scrn_scaling_grid = np.logspace(-1,0.2,5) , model_type = 'PixelWiseStrehlModel'):
@@ -1827,6 +1875,10 @@ def get_I0(  opd_input,  amp_input, opd_internal,  zwfs_ns, detector=None, inclu
     
     opd_map = (opd_input + opd_internal + opd_current_dm )
     
+    if use_pyZelda and (not hasattr( zwfs_ns, 'pyZelda')):
+        raise ValueError("use_pyZelda= True but pyZelda not in zwfs_ns (no zwfs_ns.pyZelda namespace exists).\
+            Add pyZelda to zwfs_ns namespace or Set use_pyZelda = False to use get_pupil_intensity function instead")
+        
     if use_pyZelda:
         Intensity = ztools.propagate_opd_map( zwfs_ns.pyZelda.pupil * opd_map, zwfs_ns.pyZelda.mask_diameter, zwfs_ns.pyZelda.mask_depth, zwfs_ns.pyZelda.mask_substrate, \
                                             zwfs_ns.pyZelda.mask_Fratio, zwfs_ns.pyZelda.pupil_diameter, amp_input * zwfs_ns.pyZelda.pupil, wave=zwfs_ns.optics.wvl0)
@@ -1880,6 +1932,10 @@ def get_N0( opd_input,  amp_input ,  opd_internal,  zwfs_ns , detector=None, inc
             x0=zwfs_ns.grid.dm_coord.act_x0_list_wavesp, y0=zwfs_ns.grid.dm_coord.act_y0_list_wavesp )
         
     opd_map = opd_input + opd_internal + opd_current_dm 
+        
+    if use_pyZelda and (not hasattr( zwfs_ns, 'pyZelda')):
+        raise ValueError("use_pyZelda= True but pyZelda not in zwfs_ns (no zwfs_ns.pyZelda namespace exists).\
+            Add pyZelda to zwfs_ns namespace or Set use_pyZelda = False to use get_pupil_intensity function instead")
         
     if use_pyZelda:
         Intensity = ztools.propagate_opd_map( zwfs_ns.pyZelda.pupil * opd_map, 0 * zwfs_ns.pyZelda.mask_diameter, zwfs_ns.pyZelda.mask_depth, zwfs_ns.pyZelda.mask_substrate, \
@@ -1937,6 +1993,10 @@ def get_frame( opd_input,  amp_input ,  opd_internal,  zwfs_ns , detector=None, 
             
     opd_map = opd_input + opd_internal + opd_current_dm
     
+    if use_pyZelda and (not hasattr( zwfs_ns, 'pyZelda')):
+        raise ValueError("use_pyZelda= True but pyZelda not in zwfs_ns (no zwfs_ns.pyZelda namespace exists).\
+            Add pyZelda to zwfs_ns namespace or Set use_pyZelda = False to use get_pupil_intensity function instead")
+        
     if use_pyZelda:
         
         Intensity = ztools.propagate_opd_map( zwfs_ns.pyZelda.pupil * opd_map, zwfs_ns.pyZelda.mask_diameter, zwfs_ns.pyZelda.mask_depth, zwfs_ns.pyZelda.mask_substrate, \
@@ -1962,15 +2022,15 @@ def get_frame( opd_input,  amp_input ,  opd_internal,  zwfs_ns , detector=None, 
     return Intensity
 
 
-def classify_pupil_regions( opd_input,  amp_input ,  opd_internal,  zwfs_ns , detector=None, pupil_diameter_scaling = 1.0, pupil_offset = (0,0)):
+def classify_pupil_regions( opd_input,  amp_input ,  opd_internal,  zwfs_ns , detector=None, pupil_diameter_scaling = 1.0, pupil_offset = (0,0), use_pyZelda = True):
     # very basic pupil classification
     # adds to zwfs_ns 
     # inside pupil 
     
     # We intentionally put detector as None here to keep intensities in wave space
     # we do the math here and then bin after if user selects detector is not None    
-    N0 = get_N0( opd_input,  amp_input ,  opd_internal,  zwfs_ns , detector=None)
-    I0 = get_I0( opd_input,  amp_input ,  opd_internal,  zwfs_ns , detector=None)
+    N0 = get_N0( opd_input,  amp_input ,  opd_internal,  zwfs_ns , detector=None, use_pyZelda = use_pyZelda)
+    I0 = get_I0( opd_input,  amp_input ,  opd_internal,  zwfs_ns , detector=None, use_pyZelda = use_pyZelda)
     
     # currently we don't use N0 to classify, just use known pupil diameter 
     #pupil_filt = zwfs_ns.grid.pupil_mask > 0.5
@@ -2023,7 +2083,7 @@ def process_zwfs_signal( I, I0, pupil_filt ):
 
 
     
-def build_IM( zwfs_ns ,  calibration_opd_input, calibration_amp_input ,  opd_internal,  basis = 'Zonal_pinned', Nmodes = 100, poke_amp = 0.05, poke_method = 'double_sided_poke', imgs_to_mean = 10, detector=None):
+def build_IM( zwfs_ns ,  calibration_opd_input, calibration_amp_input ,  opd_internal,  basis = 'Zonal_pinned', Nmodes = 100, poke_amp = 0.05, poke_method = 'double_sided_poke', imgs_to_mean = 10, detector=None, use_pyZelda = True):
     
     # build reconstructor name space with normalized basis, IM generated, IM generation method, pokeamp 
     modal_basis = gen_basis.construct_command_basis( basis= basis, number_of_modes = Nmodes, without_piston=True).T 
@@ -2032,12 +2092,12 @@ def build_IM( zwfs_ns ,  calibration_opd_input, calibration_amp_input ,  opd_int
 
     I0_list = []
     for _ in range(imgs_to_mean) :
-        I0_list .append( get_I0( opd_input  =calibration_opd_input,    amp_input = calibration_amp_input  ,  opd_internal= opd_internal,  zwfs_ns=zwfs_ns , detector=detector )  )
+        I0_list .append( get_I0( opd_input  =calibration_opd_input,    amp_input = calibration_amp_input  ,  opd_internal= opd_internal,  zwfs_ns=zwfs_ns , detector=detector, use_pyZelda = use_pyZelda )  )
     I0 = np.mean( I0_list ,axis =0 )
     
     N0_list = []
     for _ in range(imgs_to_mean) :
-        N0_list .append( get_N0( opd_input  =calibration_opd_input,    amp_input = calibration_amp_input  ,  opd_internal= opd_internal,  zwfs_ns=zwfs_ns , detector=detector )  )
+        N0_list .append( get_N0( opd_input  =calibration_opd_input,    amp_input = calibration_amp_input  ,  opd_internal= opd_internal,  zwfs_ns=zwfs_ns , detector=detector, use_pyZelda = use_pyZelda )  )
     N0 = np.mean( N0_list ,axis =0 )
     
     if poke_method=='single_sided_poke': # just poke one side  
@@ -2050,7 +2110,7 @@ def build_IM( zwfs_ns ,  calibration_opd_input, calibration_amp_input ,  opd_int
             
             img_list = []
             for _ in range( imgs_to_mean ):
-                img_list.append( get_frame( calibration_opd_input,   calibration_amp_input  ,  opd_internal,  zwfs_ns , detector=detector ) ) # get some frames 
+                img_list.append( get_frame( calibration_opd_input,   calibration_amp_input  ,  opd_internal,  zwfs_ns , detector=detector , use_pyZelda = use_pyZelda) ) # get some frames 
                  
             Intensity = np.mean( img_list, axis = 0).reshape(-1) 
 
@@ -2074,11 +2134,11 @@ def build_IM( zwfs_ns ,  calibration_opd_input, calibration_amp_input ,  opd_int
                 
                 if sign > 0:
                     
-                    I_plus_list += [list( get_frame( calibration_opd_input,   calibration_amp_input  ,  opd_internal,  zwfs_ns , detector=detector ) ) ]
+                    I_plus_list += [list( get_frame( calibration_opd_input,   calibration_amp_input  ,  opd_internal,  zwfs_ns , detector=detector , use_pyZelda = use_pyZelda) ) ]
                     
                 if sign < 0:
                     
-                    I_minus_list += [list( get_frame( calibration_opd_input,   calibration_amp_input  ,  opd_internal,  zwfs_ns , detector=detector ) ) ] 
+                    I_minus_list += [list( get_frame( calibration_opd_input,   calibration_amp_input  ,  opd_internal,  zwfs_ns , detector=detector, use_pyZelda = use_pyZelda ) ) ] 
                     
 
             I_plus = np.mean( I_plus_list, axis = 0).reshape(-1)  # flatten so can filter with ZWFS.pupil_pixels
@@ -2114,8 +2174,15 @@ def build_IM( zwfs_ns ,  calibration_opd_input, calibration_amp_input ,  opd_int
 
 
 
-def plot_eigenmodes( zwfs_ns , save_path = None, descr_label=None ):
-    
+def plot_eigenmodes( zwfs_ns , save_path = None, descr_label=None, crop_image_modes = [None, None, None, None]):
+    """_summary_
+
+    Args:
+        zwfs_ns (namespace ): _description_ namespace with interaction matrix 
+        save_path (string, optional): _description_. Defaults to None. path to save images
+        descr_label (string, optional): _description_. Defaults to None. descriptive label to add to default plot names when saving
+        crop_image_modes (list, optional): _description_. Defaults to [None, None, None, None]. crop the image modes to show only a portion of the image (i.e. pupil)
+    """
     tstamp = datetime.datetime.now().strftime("%d-%m-%YT%H.%M.%S")
 
     U,S,Vt = np.linalg.svd( zwfs_ns.reco.IM, full_matrices=True)
@@ -2141,7 +2208,7 @@ def plot_eigenmodes( zwfs_ns , save_path = None, descr_label=None ):
         tmp =  zwfs_ns.pupil_regions.pupil_filt.copy()
         vtgrid = np.zeros(tmp.shape)
         vtgrid[tmp] = Vt[i]
-        r1,r2,c1,c2 = 10,-10,10,-10
+        r1,r2,c1,c2 = crop_image_modes # 10,-10,10,-10
         axx.imshow( vtgrid.reshape(zwfs_ns.reco.I0.shape )[r1:r2,c1:c2] ) #cp_x2-cp_x1,cp_y2-cp_y1) )
         #axx.set_title(f'\n\n\nmode {i}, S={round(S[i]/np.max(S),3)}',fontsize=5)
         #
@@ -2152,7 +2219,7 @@ def plot_eigenmodes( zwfs_ns , save_path = None, descr_label=None ):
     plt.tight_layout()
 
     if save_path is not None:
-        plt.savefig(save_path + f'det_eignmodes_{descr_label}_{tstamp}.png',bbox_inches='tight',dpi=200)
+        plt.savefig(save_path + f'det_eignmodes_{descr_label}_{tstamp}.png',bbox_inches='tight',dpi=100)
     #plt.show()
     
     # THE DM MODES 
@@ -2170,7 +2237,7 @@ def plot_eigenmodes( zwfs_ns , save_path = None, descr_label=None ):
         #plt.legend(ax=axx)
     plt.tight_layout()
     if save_path is not None:
-        plt.savefig(save_path +  f'dm_eignmodes_{descr_label}_{tstamp}.png',bbox_inches='tight',dpi=200)
+        plt.savefig(save_path +  f'dm_eignmodes_{descr_label}_{tstamp}.png',bbox_inches='tight',dpi=100)
     #plt.show()
 
 
@@ -2322,7 +2389,7 @@ def add_controllers( zwfs_ns , TT='PID', HO = 'leaky'):
     return zwfs_ns
 
 
-def AO_iteration( opd_input, amp_input, opd_internal, I0,  zwfs_ns, dm_disturbance = np.zeros(140), record_telemetry=True, detector=None, obs_intermediate_field=True):
+def AO_iteration( opd_input, amp_input, opd_internal, I0,  zwfs_ns, dm_disturbance = np.zeros(140), record_telemetry=True, detector=None, obs_intermediate_field=True, use_pyZelda = True):
     # single iteration of AO in closed loop 
     
     # propagates opd over DM and get intensity
@@ -2335,18 +2402,25 @@ def AO_iteration( opd_input, amp_input, opd_internal, I0,  zwfs_ns, dm_disturban
         
         phi = zwfs_ns.grid.pupil_mask  *  2*np.pi / zwfs_ns.optics.wvl0 * ( opd_input + opd_internal + opd_current_dm  )
         
-        i = get_pupil_intensity( phi= phi, amp=amp_input, theta = zwfs_ns.optics.theta , phasemask_diameter = zwfs_ns.optics.mask_diam, \
-        phasemask_mask = zwfs_ns.grid.phasemask_mask, pupil_diameter = zwfs_ns.grid.N, fplane_pixels=zwfs_ns.focal_plane.fplane_pixels, \
-            pixels_across_mask=zwfs_ns.focal_plane.pixels_across_mask )
-        #get_pupil_intensity( phi = phi, theta = zwfs_ns.optics.theta, phasemask=zwfs_ns.grid.phasemask_mask, amp=amp_input )
-
-        if detector is not None:
-            i = average_subarrays(array=i, block_size = detector)
+        i = get_frame(  opd_input  = opd_input + opd_current_dm ,   amp_input = amp_input,\
+                opd_internal = opd_internal,  zwfs_ns= zwfs_ns , detector= detector, use_pyZelda = use_pyZelda )
+        
+        # if use_pyZelda :
+        #     i = get_frame(  opd_input  = opd_input + opd_current_dm ,   amp_input = amp_input,\
+        #         opd_internal = opd_internal,  zwfs_ns= zwfs_ns , detector= detector, use_pyZelda =True)
+        # else:
+        #     # i = get_pupil_intensity( phi= phi, amp=amp_input, theta = zwfs_ns.optics.theta , phasemask_diameter = zwfs_ns.optics.mask_diam, \
+        #     # phasemask_mask = zwfs_ns.grid.phasemask_mask, pupil_diameter = zwfs_ns.grid.N, fplane_pixels=zwfs_ns.focal_plane.fplane_pixels, \
+        #     #     pixels_across_mask=zwfs_ns.focal_plane.pixels_across_mask )
+            
+        #if detector is not None:
+        #    i = average_subarrays(array=i, block_size = detector)
+            
         strehl = np.exp( -np.var( phi[ zwfs_ns.grid.pupil_mask > 0]) ) 
         
     else: # we just see intensity 
         i = get_frame(  opd_input  = opd_input ,   amp_input = amp_input,\
-        opd_internal = opd_internal,  zwfs_ns= zwfs_ns , detector= detector )
+        opd_internal = opd_internal,  zwfs_ns= zwfs_ns , detector= detector, use_pyZelda = use_pyZelda )
 
     sig = process_zwfs_signal( i, I0, zwfs_ns.pupil_regions.pupil_filt ) # I0_theory/ np.mean(I0_theory) #
 
