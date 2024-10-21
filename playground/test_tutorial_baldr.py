@@ -249,7 +249,7 @@ t_x, t_y = np.mean(zwfs_ns.grid.wave_coord.x) + 0.05 * zwfs_ns.grid.D, np.mean(z
 # we could also introduce mis-registrations by rolling input pupil 
 dm_act_2_wave_space_transform_matrix = np.array( [[a,b,t_x],[c,d,t_y]] )
 
-zwfs_ns = bldr.update_dm_registration( dm_act_2_wave_space_transform_matrix , zwfs_ns )
+zwfs_ns = bldr.update_dm_registration_wavespace( dm_act_2_wave_space_transform_matrix , zwfs_ns )
 
 phi, phi_internal,  N0, I0, Intensity = bldr.test_propagation( zwfs_ns )
 

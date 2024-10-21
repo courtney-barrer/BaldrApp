@@ -11,8 +11,9 @@ import pyzelda.ztools as ztools
 import pyzelda.utils.mft as mft
 import pyzelda.utils.aperture as aperture
 from . import utilities as util
-from . import DM_basis as gen_basis
+from . import DM_basis 
 from . import phasescreens
+from . import DM_registration
 
 # PID and leaky integrator copied from /Users/bencb/Documents/asgard-alignment/playground/open_loop_tests_HO.py
 class PIDController:
@@ -1396,7 +1397,7 @@ def get_b( phi, phasemask ):
     return b"""
 
 
-def update_dm_registration( transform_matrix, zwfs_ns ):
+def update_dm_registration_wavespace( transform_matrix, zwfs_ns ):
     """_summary_
     # STANDARD WAY TO UPDATE THE REGISTRATION OF THE DM IN WAVE SPACE 
     # UPDATES --> zwfs_ns <--- name space !!! Only use this method to update registration
@@ -1430,8 +1431,8 @@ def update_dm_registration( transform_matrix, zwfs_ns ):
     y0_list = [yy[1] for yy in pixel_coord_list]
     
 
-    dm2pixel_registration_dict = {
-            "dm_to_pixsp_transform_matrix" : transform_matrix, # affine transform from DM coordinates to wave coordinates 
+    dm2wavespace_registration_dict = {
+            "dm_to_wavesp_transform_matrix" : transform_matrix, # affine transform from DM coordinates to wave coordinates 
             "dm_actuator_to_coord" : dm_actuator_to_coord,
             "dm_coord_to_actuator" :dm_coord_to_actuator,
             }
@@ -1447,13 +1448,13 @@ def update_dm_registration( transform_matrix, zwfs_ns ):
     
 
     
-    dm2pixel_registration_ns =  SimpleNamespace(**dm2pixel_registration_dict )
+    dm2wavespace_registration_ns =  SimpleNamespace(**dm2wavespace_registration_dict )
     #wave_coord_ns = SimpleNamespace(**wave_coord_dict )
     dm_coord_ns =  SimpleNamespace(**dm_coord_dict )
     
     # Add DM and wave coorindates to grid namespace 
     zwfs_ns.grid.dm_coord = dm_coord_ns
-    zwfs_ns.dm2pixel_registration = dm2pixel_registration_ns
+    zwfs_ns.dm2wavespace_registration = dm2wavespace_registration_ns
     
     return zwfs_ns
     
@@ -1642,16 +1643,18 @@ def init_zwfs(grid_ns, optics_ns, dm_ns):
         "optics":optics_ns,
         "dm":dm_ns,
         "focal_plane":focal_plane_ns
-        #"dm2pixel_registration" : dm2pixel_registration_ns
+        #"dm2wavespace_registration" : dm2wavespace_registration_ns
         }
         
     zwfs_ns = SimpleNamespace(**zwfs_dict)
     
-    # user warning: only ever use update_dm_registration if you want a consistent update across all variables 
-    # this updates the zwfs_ns.grid with dm coords in DM and wavespace as well as defining dm2pixel_registration namespace
-    zwfs_ns = update_dm_registration(  dm_act_2_wave_space_transform_matrix, zwfs_ns )
+    # user warning: only ever use update_dm_registration_wavespace if you want a consistent update across all variables 
+    # this updates the zwfs_ns.grid with dm coords in DM and wavespace as well as defining dm2wavespace_registration namespace
+    zwfs_ns = update_dm_registration_wavespace(  dm_act_2_wave_space_transform_matrix, zwfs_ns )
     
     return zwfs_ns 
+
+
 
 def first_stage_ao( atm_scrn, Nmodes_removed , basis  , phase_scaling_factor = 1, return_reconstructor = False ):
     """_summary_
@@ -2086,7 +2089,7 @@ def process_zwfs_signal( I, I0, pupil_filt ):
 def build_IM( zwfs_ns ,  calibration_opd_input, calibration_amp_input ,  opd_internal,  basis = 'Zonal_pinned', Nmodes = 100, poke_amp = 0.05, poke_method = 'double_sided_poke', imgs_to_mean = 10, detector=None, use_pyZelda = True):
     
     # build reconstructor name space with normalized basis, IM generated, IM generation method, pokeamp 
-    modal_basis = gen_basis.construct_command_basis( basis= basis, number_of_modes = Nmodes, without_piston=True).T 
+    modal_basis = DM_basis.construct_command_basis( basis= basis, number_of_modes = Nmodes, without_piston=True).T 
 
     IM=[] # init our raw interaction matrix 
 
@@ -2174,6 +2177,87 @@ def build_IM( zwfs_ns ,  calibration_opd_input, calibration_amp_input ,  opd_int
 
 
 
+def register_DM_in_pixelspace_from_IM( zwfs_ns , plot_intermediate_results=True ):
+    """_summary_
+    uses the interaction matrix (must be constructed on a zonal basis) to register the DM in pixel space.
+    uses the inner corners of the DM to estimate the DM center in pixel space and calibrate an affine transform.
+    Args:
+        zwfs_ns (_type_): namespace containing all the information about the zwfs system. Use configuration file and init_zwfs_from_config_ini to get this
+    """
+    
+    # get info about the basis used to generate the IM
+    basis_name = zwfs_ns.reco.basis_name
+    if 'Zonal' not in basis_name:
+        raise UserWarning('basis used to construct IM must be zonal (either Zonal_pinned_edges or Zonal)')
+    Nmodes = zwfs_ns.reco.IM.shape[0]
+    M2C_0 = DM_basis.construct_command_basis( basis= basis_name, number_of_modes = Nmodes, without_piston=True).T  
+
+
+    # get inner corners for estiamting DM center in pixel space (have to deal seperately with pinned actuator basis)
+    if zwfs_ns.reco.IM.shape[0] == 100: # outer actuators are pinned, 
+        corner_indicies = DM_registration.get_inner_square_indices(outer_size=10, inner_offset=3, without_outer_corners=False)
+        
+    elif zwfs_ns.reco.IM.shape[0] == 140: # outer acrtuators are free 
+        print(140)
+        corner_indicies = DM_registration.get_inner_square_indices(outer_size=12, inner_offset=4, without_outer_corners=True)
+    else:
+        print("CASE NOT MATCHED  d['I2M'].data.shape = { d['I2M'].data.shape}")
+        
+    img_4_corners = []
+    dm_4_corners = []
+    for i in corner_indicies:
+        dm_4_corners.append( np.where( M2C_0[i] )[0][0] )
+        #dm2px.get_DM_command_in_2D( d['M2C'].data[:,i]  # if you want to plot it 
+
+        tmp = np.zeros( zwfs_ns.pupil_regions.pupil_filt.shape )
+        tmp.reshape(-1)[zwfs_ns.pupil_regions.pupil_filt.reshape(-1)] = zwfs_ns.reco.IM[i] 
+
+        #plt.imshow( tmp ); plt.show()
+        img_4_corners.append( abs(tmp ) )
+
+    #plt.imshow( np.sum( tosee, axis=0 ) ); plt.show()
+
+    # dm_4_corners should be an array of length 4 corresponding to the actuator index in the (flattened) DM command space
+    # img_4_corners should be an array of length 4xNxM where NxM are the image dimensions.
+    # !!! It is very important that img_4_corners are registered in the same order as dm_4_corners !!!
+    transform_dict = DM_registration.calibrate_transform_between_DM_and_image( dm_4_corners, img_4_corners, debug=plot_intermediate_results, fig_path = None )
+
+    # before proceeding assert that the DM coordinates in transform dict match those in zwfs_ns.grid.dm_coords
+    if not np.all( transform_dict['actuator_coord_list_dm_space'] == zwfs_ns.grid.dm_coord.dm_coords): 
+        raise UserWarning('actuator_coord_list_dm_space in transform_dict does not match zwfs_ns.grid.dm_coords - this could lead to inconsistent results, make sure they are consistent ')
+    
+    #interpolated_intensities = DM_registration.interpolate_pixel_intensities(image = I0, pixel_coords = transform_dict['actuator_coord_list_pixel_space'])
+    zwfs_ns = update_dm_registration_in_detector_space( zwfs_ns, transform_dict )
+
+    return zwfs_ns
+
+
+def update_dm_registration_in_detector_space( zwfs_ns, transform_dict ):
+    """_summary_
+
+    DM registration in wavespace is done (by construction on init) in the telescope pupil coordinates. 
+    Depending on detector (zwfs_ns.detector) binning this naturally dictates the detector
+    pixel space coordinates (in pixels). Hence from construction we can get the DM registration in 
+    detector space from the wavespace simply by interpolation onto the detector pixel grid.
+
+    However in the real system we cannot measured DM registration directly, so we need to measure it on the detector space
+    This is what transform_dict has in it ( generated from DM_registration.calibrate_transform_between_DM_and_image(..)
+    - so here we just standardize the relevant information to extract from here and append to zwfs namespace.
+    
+    on the detector 
+    Args:
+        zwfs_ns (_type_): namespace containing all the information about the zwfs system. Use configuration file and init_zwfs_from_config_ini to get this
+        transform_dict (_type_): generated from DM_registration.calibrate_transform_between_DM_and_image( dm_4_corners, img_4_corners, debug=plot_intermediate_results, fig_path = None )
+    """
+    
+    dm_reg_dict = {'dm_to_pixel_transform_matrix' : transform_dict['actuator_to_pixel_matrix'],
+    'DM_center_pixel_space': transform_dict['DM_center_pixel_space'],
+    'actuator_coord_list_pixel_space' : transform_dict['actuator_coord_list_pixel_space']}
+
+    zwfs_ns.dm2pix_registration = SimpleNamespace( **dm_reg_dict )
+    
+    return zwfs_ns
+    
 def plot_eigenmodes( zwfs_ns , save_path = None, descr_label=None, crop_image_modes = [None, None, None, None]):
     """_summary_
 
@@ -2241,7 +2325,7 @@ def plot_eigenmodes( zwfs_ns , save_path = None, descr_label=None, crop_image_mo
     #plt.show()
 
 
-def construct_ctrl_matricies_from_IM(zwfs_ns,  method = 'Eigen_TT-HO', Smax = 50, TT_vectors = gen_basis.get_tip_tilt_vectors() ):
+def construct_ctrl_matricies_from_IM(zwfs_ns,  method = 'Eigen_TT-HO', Smax = 50, TT_vectors = DM_basis.get_tip_tilt_vectors() ):
 
 
     M2C_0 = zwfs_ns.reco.M2C_0
@@ -2252,7 +2336,7 @@ def construct_ctrl_matricies_from_IM(zwfs_ns,  method = 'Eigen_TT-HO', Smax = 50
 
         R  = (Vt.T * [1/ss if i < Smax else 0 for i,ss in enumerate(S)])  @ U.T
 
-        #TT_vectors = gen_basis.get_tip_tilt_vectors()
+        #TT_vectors = DM_basis.get_tip_tilt_vectors()
 
         TT_space = M2C_0 @ TT_vectors
             
@@ -2530,7 +2614,7 @@ def AO_iteration( opd_input, amp_input, opd_internal, I0,  zwfs_ns, dm_disturban
 # # we could also introduce mis-registrations by rolling input pupil 
 # dm_act_2_wave_space_transform_matrix = np.array( [[a,b,t_x],[c,d,t_y]] )
 
-# zwfs_ns = update_dm_registration( dm_act_2_wave_space_transform_matrix , zwfs_ns )
+# zwfs_ns = update_dm_registration_wavespace( dm_act_2_wave_space_transform_matrix , zwfs_ns )
 
 # opd_atm, opd_internal, opd_dm,  N0, I0, I = test_propagation( zwfs_ns )
 

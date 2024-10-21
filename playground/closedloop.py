@@ -107,17 +107,20 @@ class my_lin_fit:
         else:
             return None
         
-        
+
+
 tstamp = datetime.datetime.now().strftime("%d-%m-%YT%H.%M.%S")
+
+proj_path =  '/home/rtc/Documents/BaldrApp/'#'/home/benja/Documents/BALDR/BaldrApp/'
 
 # initialize our ZWFS instrument
 wvl0=1.25e-6
-config_ini = '/home/benja/Documents/BALDR/BaldrApp/configurations/BALDR_UT_J3.ini'
+config_ini = proj_path  + 'configurations/BALDR_UT_J3.ini'#'/home/benja/Documents/BALDR/BaldrApp/configurations/BALDR_UT_J3.ini'
 zwfs_ns = bldr.init_zwfs_from_config_ini( config_ini=config_ini , wvl0=wvl0)
 
-fig_path = f'/home/benja/Downloads/act_cross_coupling_{zwfs_ns.dm.actuator_coupling_factor}_{tstamp}/'
+fig_path = f'/home/rtc/Documents/act_cross_coupling_{zwfs_ns.dm.actuator_coupling_factor}_{tstamp}/'#f'/home/benja/Downloads/act_cross_coupling_{zwfs_ns.dm.actuator_coupling_factor}_{tstamp}/'
 if os.path.exists(fig_path) == False:
-    os.makedirs(fig_path)
+    os.makedirs(fig_path) 
     
 plot_intermediate_results = False
 
@@ -223,6 +226,17 @@ zwfs_ns = bldr.build_IM( zwfs_ns ,  calibration_opd_input = 0*opd_internal , cal
             opd_internal = opd_internal,  basis = basis_name, Nmodes =  Nmodes, poke_amp = 0.05, poke_method = 'double_sided_poke',\
                 imgs_to_mean = 1, detector=zwfs_ns.detector)
 
+# from IM register the DM in the detector pixelspace 
+zwfs_ns = bldr.register_DM_in_pixelspace_from_IM( zwfs_ns, plot_intermediate_results=True  )
+
+# build control matrices from IM 
+zwfs_ns = bldr.construct_ctrl_matricies_from_IM( zwfs_ns,  method = 'Eigen_TT-HO', Smax = 60, TT_vectors = DM_basis.get_tip_tilt_vectors() )
+
+# example to interpolate any detected image onto the DM actuator grid
+DM_registration.interpolate_pixel_intensities(image = I0, pixel_coords = zwfs_ns.dm2pix_registration.actuator_coord_list_pixel_space)
+
+
+# add controllers 
 zwfs_ns = bldr.add_controllers( zwfs_ns, TT = 'PID', HO = 'leaky')
 
 if plot_intermediate_results:
@@ -273,12 +287,12 @@ N0_dm = DM_registration.interpolate_pixel_intensities(image = N0, pixel_coords =
 
 # calibrate a model to map a subset of pixel intensities to Strehl Ratio 
 # should eventually come back and debug for model_type = lin_comb - since it seemed to work better intially
-# = bldr.calibrate_strehl_model( zwfs_ns, save_results_path = fig_path, train_fraction = 0.6, correlation_threshold = 0.6, \
-#    number_of_screen_initiations = 60, scrn_scaling_grid = np.logspace(-2, -0.5, 5), model_type = 'PixelWiseStrehlModel' ) #lin_comb') 
+strehl_model = bldr.calibrate_strehl_model( zwfs_ns, save_results_path = fig_path, train_fraction = 0.6, correlation_threshold = 0.6, \
+    number_of_screen_initiations = 60, scrn_scaling_grid = np.logspace(-2, -0.5, 5), model_type = 'PixelWiseStrehlModel' ) #lin_comb') 
 
 # or read one in  
-strehl_model_file = '/home/benja/Documents/BALDR/BaldrApp/configurations/strehl_model_config-BALDR_UT_J3_2024-10-19T09.28.27.pkl'
-strehl_model = load_model_from_pickle(filename=strehl_model_file)
+#strehl_model_file = proj_path  + 'configurations/strehl_model_config-BALDR_UT_J3_2024-10-19T09.28.27.pkl'
+#strehl_model = load_model_from_pickle(filename=strehl_model_file)
 
 ###
 ### FITTING LINEAR ZONAL MODEL FROM APPLYING KOLMOGOROV PHASE SCREENS TO DM COMMANDS
@@ -588,7 +602,20 @@ print( f'WITH EIGENMODE strehl before = {np.exp(- (2*np.pi/ zwfs_ns.optics.wvl0 
 ###
 ### CLOSED LOOP SIMULATION
 #### 
-opd_input = 0.1* zwfs_ns.pyZelda.pupil * zwfs_ns.optics.wvl0 / (2*np.pi) *  (basis[5] + basis[10])
+
+
+
+
+dynamic  = False
+
+phase_scaling_factor = 0.1
+
+if dynamic:
+    scrn = ps.PhaseScreenKolmogorov(nx_size=zwfs_ns.grid.dim, pixel_scale=dx, r0=zwfs_ns.atmosphere.r0, L0=zwfs_ns.atmosphere.l0, random_seed=1)
+    opd_input =  zwfs_ns.pyZelda.pupil * zwfs_ns.optics.wvl0 / (2*np.pi) *  scrn.scrn
+else:# static 
+    opd_input = 1 * zwfs_ns.pyZelda.pupil * zwfs_ns.optics.wvl0 / (2*np.pi) *  (basis[5] + basis[10])
+
 amp_input = photon_flux_per_pixel_at_vlti**0.5 * zwfs_ns.pyZelda.pupil
 dm_disturbance = np.zeros( 140 )
 
@@ -601,8 +628,11 @@ zwfs_ns.ctrl.HO_ctrl.set_all_gains_to_zero()
 
 close_after = 10
 
+Strehl_0_list = []
+Strehl_1_list = []
+
 kpTT = 1
-ki_grid = np.linspace(0,0.9,15)
+ki_grid = np.linspace(0, 0.9, 15)
 for cnt, kiTT in enumerate( [0.9]) :
     zwfs_ns.dm.current_cmd = zwfs_ns.dm.dm_flat + dm_disturbance
     zwfs_ns = bldr.reset_telemetry( zwfs_ns )
@@ -611,15 +641,43 @@ for cnt, kiTT in enumerate( [0.9]) :
     zwfs_ns.ctrl.TT_ctrl.kp = 0 * np.ones( len(zwfs_ns.ctrl.TT_ctrl.kp) )
     for i in range(100):
         print(f'iteration {i}')
-        if i > close_after : 
+        if i == close_after : 
             zwfs_ns.ctrl.HO_ctrl.ki = 0.95 * np.ones( len(zwfs_ns.ctrl.HO_ctrl.ki) )
             zwfs_ns.ctrl.HO_ctrl.kp = 0.2 * np.ones( len(zwfs_ns.ctrl.HO_ctrl.kp) )
 
             zwfs_ns.ctrl.TT_ctrl.kp = kpTT * np.ones( len(zwfs_ns.ctrl.TT_ctrl.kp) )
             zwfs_ns.ctrl.TT_ctrl.ki = kiTT * np.ones( len(zwfs_ns.ctrl.TT_ctrl.ki) )
             
-        bldr.AO_iteration( opd_input, amp_input, opd_internal, zwfs_ns.reco.I0,  zwfs_ns, dm_disturbance, record_telemetry=True ,detector=zwfs_ns.detector)
-    
+        if dynamic:
+            # roll screen
+            if np.mod(i, 1) == 0:
+                scrn.add_row()
+            # first stage AO
+            if np.mod(it, 1) == 0: # only update the AO every few iterations to simulate latency 
+                _ , reco_1 = bldr.first_stage_ao( scrn, Nmodes_removed , basis  , phase_scaling_factor = phase_scaling_factor, return_reconstructor = True )   
+                
+            ao_1 =  basis[0] * (phase_scaling_factor * scrn.scrn - reco_1)
+
+            # opd after first stage AO
+            opd_ao_1 = zwfs_ns.pyZelda.pupil * zwfs_ns.optics.wvl0 / (2*np.pi) * ao_1
+        else:
+            opd_ao_1 = opd_input
+        # add vibrations OPD
+        opd_vibrations = np.zeros( ao_1.shape )
+                
+        # put them all together to get the input to the second stage AO
+        bldr_opd_map = np.sum( [  opd_ao_1, opd_vibrations, opd_internal] , axis=0 )
+        
+        # second stage AO (uses opd_input + current DM command to get signal, then updates current DM command based on control law
+        bldr.AO_iteration( opd_input = bldr_opd_map, amp_input=amp_input, opd_internal = opd_internal, I0 = zwfs_ns.reco.I0,  zwfs_ns=zwfs_ns, dm_disturbance = dm_disturbance, record_telemetry=True , detector=zwfs_ns.detector)
+
+        # keep these seperate from telemetry because in real system you would not have access to these    
+        Strehl_0 = np.exp( - np.var( phase_scaling_factor * scrn.scrn[zwfs_ns.pyZelda.pupil>0.5]) ) # atmospheric strehl 
+        Strehl_1 = np.exp( - np.var( ao_1[zwfs_ns.pyZelda.pupil>0.5]) ) 
+
+        Strehl_0_list.append( Strehl_0 )
+        Strehl_1_list.append( Strehl_1 )
+        
     _ = bldr.save_telemetry( zwfs_ns, savename=fig_path + f'SIM_CL_TT_kiTT-{kiTT}_kpTT-{1}_{tstamp}.fits' )
     # Generate some data
 
