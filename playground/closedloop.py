@@ -111,14 +111,14 @@ class my_lin_fit:
 
 tstamp = datetime.datetime.now().strftime("%d-%m-%YT%H.%M.%S")
 
-proj_path =  '/home/rtc/Documents/BaldrApp/'#'/home/benja/Documents/BALDR/BaldrApp/'
+proj_path =  '/home/benja/Documents/BALDR/BaldrApp/' #'/home/rtc/Documents/BaldrApp/'
 
 # initialize our ZWFS instrument
 wvl0=1.25e-6
 config_ini = proj_path  + 'configurations/BALDR_UT_J3.ini'#'/home/benja/Documents/BALDR/BaldrApp/configurations/BALDR_UT_J3.ini'
 zwfs_ns = bldr.init_zwfs_from_config_ini( config_ini=config_ini , wvl0=wvl0)
 
-fig_path = f'/home/rtc/Documents/act_cross_coupling_{zwfs_ns.dm.actuator_coupling_factor}_{tstamp}/'#f'/home/benja/Downloads/act_cross_coupling_{zwfs_ns.dm.actuator_coupling_factor}_{tstamp}/'
+fig_path = f'/home/benja/Downloads/act_cross_coupling_{zwfs_ns.dm.actuator_coupling_factor}_{tstamp}/' #f'/home/rtc/Documents/act_cross_coupling_{zwfs_ns.dm.actuator_coupling_factor}_{tstamp}/'
 if os.path.exists(fig_path) == False:
     os.makedirs(fig_path) 
     
@@ -229,265 +229,74 @@ zwfs_ns = bldr.build_IM( zwfs_ns ,  calibration_opd_input = 0*opd_internal , cal
 # from IM register the DM in the detector pixelspace 
 zwfs_ns = bldr.register_DM_in_pixelspace_from_IM( zwfs_ns, plot_intermediate_results=True  )
 
+
 # build control matrices from IM 
 zwfs_ns = bldr.construct_ctrl_matricies_from_IM( zwfs_ns,  method = 'Eigen_TT-HO', Smax = 60, TT_vectors = DM_basis.get_tip_tilt_vectors() )
 
-# example to interpolate any detected image onto the DM actuator grid
-DM_registration.interpolate_pixel_intensities(image = I0, pixel_coords = zwfs_ns.dm2pix_registration.actuator_coord_list_pixel_space)
+# or we create fit a linear zonal model to the IM
+zwfs_ns = bldr.fit_linear_zonal_model( zwfs_ns, opd_internal, iterations = 100, photon_flux_per_pixel_at_vlti = photon_flux_per_pixel_at_vlti , \
+    pearson_R_threshold = 0.6, phase_scaling_factor=0.2,   plot_intermediate=True , fig_path = None)
 
+
+# example to interpolate any detected image onto the DM actuator grid
+#DM_registration.interpolate_pixel_intensities(image = I0, pixel_coords = zwfs_ns.dm2pix_registration.actuator_coord_list_pixel_space)
 
 # add controllers 
-zwfs_ns = bldr.add_controllers( zwfs_ns, TT = 'PID', HO = 'leaky')
+zwfs_ns = bldr.add_controllers_for_MVM_TT_HO( zwfs_ns, TT = 'PID', HO = 'leaky')
+#zwfs_ns = bldr.add_controllers_for_MVM_TT_HO( zwfs_ns, TT = 'PID', HO = 'leaky')
 
 if plot_intermediate_results:
     bldr.plot_eigenmodes( zwfs_ns , descr_label = f'dm_interactuator_coupling-{zwfs_ns.dm.actuator_coupling_factor}', save_path = fig_path )
-
-_ = bldr.construct_ctrl_matricies_from_IM( zwfs_ns,  method = 'Eigen_TT-HO', Smax = 60, TT_vectors = DM_basis.get_tip_tilt_vectors() )
 
 ### 
 # DM registration 
 ###
 
-# get inner corners for estiamting DM center in pixel space (have to deal seperately with pinned actuator basis)
-if zwfs_ns.reco.IM.shape[0] == 100: # outer actuators are pinned, 
-    corner_indicies = DM_registration.get_inner_square_indices(outer_size=10, inner_offset=3, without_outer_corners=False)
+# # get inner corners for estiamting DM center in pixel space (have to deal seperately with pinned actuator basis)
+# if zwfs_ns.reco.IM.shape[0] == 100: # outer actuators are pinned, 
+#     corner_indicies = DM_registration.get_inner_square_indices(outer_size=10, inner_offset=3, without_outer_corners=False)
     
-elif zwfs_ns.reco.IM.shape[0] == 140: # outer acrtuators are free 
-    print(140)
-    corner_indicies = DM_registration.get_inner_square_indices(outer_size=12, inner_offset=4, without_outer_corners=True)
-else:
-    print("CASE NOT MATCHED  d['I2M'].data.shape = { d['I2M'].data.shape}")
+# elif zwfs_ns.reco.IM.shape[0] == 140: # outer acrtuators are free 
+#     print(140)
+#     corner_indicies = DM_registration.get_inner_square_indices(outer_size=12, inner_offset=4, without_outer_corners=True)
+# else:
+#     print("CASE NOT MATCHED  d['I2M'].data.shape = { d['I2M'].data.shape}")
     
-img_4_corners = []
-dm_4_corners = []
-for i in corner_indicies:
-    dm_4_corners.append( np.where( M2C_0[i] )[0][0] )
-    #dm2px.get_DM_command_in_2D( d['M2C'].data[:,i]  # if you want to plot it 
+# img_4_corners = []
+# dm_4_corners = []
+# for i in corner_indicies:
+#     dm_4_corners.append( np.where( M2C_0[i] )[0][0] )
+#     #dm2px.get_DM_command_in_2D( d['M2C'].data[:,i]  # if you want to plot it 
 
-    tmp = np.zeros( zwfs_ns.pupil_regions.pupil_filt.shape )
-    tmp.reshape(-1)[zwfs_ns.pupil_regions.pupil_filt.reshape(-1)] = zwfs_ns.reco.IM[i] 
+#     tmp = np.zeros( zwfs_ns.pupil_regions.pupil_filt.shape )
+#     tmp.reshape(-1)[zwfs_ns.pupil_regions.pupil_filt.reshape(-1)] = zwfs_ns.reco.IM[i] 
 
-    #plt.imshow( tmp ); plt.show()
-    img_4_corners.append( abs(tmp ) )
+#     #plt.imshow( tmp ); plt.show()
+#     img_4_corners.append( abs(tmp ) )
 
-#plt.imshow( np.sum( tosee, axis=0 ) ); plt.show()
+# #plt.imshow( np.sum( tosee, axis=0 ) ); plt.show()
 
-# dm_4_corners should be an array of length 4 corresponding to the actuator index in the (flattened) DM command space
-# img_4_corners should be an array of length 4xNxM where NxM are the image dimensions.
-# !!! It is very important that img_4_corners are registered in the same order as dm_4_corners !!!
-transform_dict = DM_registration.calibrate_transform_between_DM_and_image( dm_4_corners, img_4_corners, debug=plot_intermediate_results, fig_path = None )
+# # dm_4_corners should be an array of length 4 corresponding to the actuator index in the (flattened) DM command space
+# # img_4_corners should be an array of length 4xNxM where NxM are the image dimensions.
+# # !!! It is very important that img_4_corners are registered in the same order as dm_4_corners !!!
+# transform_dict = DM_registration.calibrate_transform_between_DM_and_image( dm_4_corners, img_4_corners, debug=plot_intermediate_results, fig_path = None )
 
-interpolated_intensities = DM_registration.interpolate_pixel_intensities(image = I0, pixel_coords = transform_dict['actuator_coord_list_pixel_space'])
+# interpolated_intensities = DM_registration.interpolate_pixel_intensities(image = I0, pixel_coords = transform_dict['actuator_coord_list_pixel_space'])
 
 
 # interpolate these fields onto the registered actuator grid
-b0_dm = DM_registration.interpolate_pixel_intensities(image = I0, pixel_coords = transform_dict['actuator_coord_list_pixel_space'])
-I0_dm = DM_registration.interpolate_pixel_intensities(image = b0, pixel_coords = transform_dict['actuator_coord_list_pixel_space'])
-N0_dm = DM_registration.interpolate_pixel_intensities(image = N0, pixel_coords = transform_dict['actuator_coord_list_pixel_space'])
+b0_dm = DM_registration.interpolate_pixel_intensities(image = I0, pixel_coords = zwfs_ns.dm2pix_registration.actuator_coord_list_pixel_space) #DM_registration.interpolate_pixel_intensities(image = I0, pixel_coords = transform_dict['actuator_coord_list_pixel_space'])
+I0_dm = DM_registration.interpolate_pixel_intensities(image = b0, pixel_coords = zwfs_ns.dm2pix_registration.actuator_coord_list_pixel_space) #DM_registration.interpolate_pixel_intensities(image = b0, pixel_coords = transform_dict['actuator_coord_list_pixel_space'])
+N0_dm = DM_registration.interpolate_pixel_intensities(image = N0, pixel_coords = zwfs_ns.dm2pix_registration.actuator_coord_list_pixel_space) #DM_registration.interpolate_pixel_intensities(image = N0, pixel_coords = transform_dict['actuator_coord_list_pixel_space'])
 
 # calibrate a model to map a subset of pixel intensities to Strehl Ratio 
 # should eventually come back and debug for model_type = lin_comb - since it seemed to work better intially
-strehl_model = bldr.calibrate_strehl_model( zwfs_ns, save_results_path = fig_path, train_fraction = 0.6, correlation_threshold = 0.6, \
-    number_of_screen_initiations = 60, scrn_scaling_grid = np.logspace(-2, -0.5, 5), model_type = 'PixelWiseStrehlModel' ) #lin_comb') 
+#strehl_model = bldr.calibrate_strehl_model( zwfs_ns, save_results_path = fig_path, train_fraction = 0.6, correlation_threshold = 0.6, \
+#    number_of_screen_initiations = 60, scrn_scaling_grid = np.logspace(-2, -0.5, 5), model_type = 'PixelWiseStrehlModel' ) #lin_comb') 
 
 # or read one in  
-#strehl_model_file = proj_path  + 'configurations/strehl_model_config-BALDR_UT_J3_2024-10-19T09.28.27.pkl'
-#strehl_model = load_model_from_pickle(filename=strehl_model_file)
-
-###
-### FITTING LINEAR ZONAL MODEL FROM APPLYING KOLMOGOROV PHASE SCREENS TO DM COMMANDS
-#### 
-
-telemetry = {
-    'I0':[I0],
-    'I0_dm':[I0_dm],
-    'N0':[N0],
-    'N0_dm':[N0_dm],
-    'b0':[b0],
-    'b0_dm':[b0_dm],
-    'dm_cmd':[],
-    'b':[],
-    'b_est':[],
-    'b_dm_est':[],
-    'i':[],
-    'Ic':[],
-    'i_dm':[],
-    's':[],
-    'strehl_0':[],
-    'strehl_1':[],
-    'strehl_2':[],
-    'strehl_2_est':[],
-
-}
-
-telem_ns = SimpleNamespace(**telemetry)
-
-zwfs_ns.dm.current_cmd = zwfs_ns.dm.dm_flat.copy()  
-for it in range(100):
-    
-    print( it )
-    
-    # roll screen
-    for _ in range(10):
-        scrn.add_row()
-    
-    
-    zwfs_ns.dm.current_cmd =  util.create_phase_screen_cmd_for_DM( scrn,  scaling_factor=0.2 , drop_indicies = [0, 11, 11 * 12, -1] , plot_cmd=False) 
-    
-    # first stage AO
-    if np.mod(it, 1) == 0: # only update the AO every few iterations to simulate latency 
-        _ , reco_1 = bldr.first_stage_ao( scrn, Nmodes_removed , basis  , phase_scaling_factor = phase_scaling_factor, return_reconstructor = True )   
-         
-    ao_1 =  basis[0] * (phase_scaling_factor * scrn.scrn - reco_1)
-    
-    # opd after first stage AO
-    opd_ao_1 = zwfs_ns.pyZelda.pupil * zwfs_ns.optics.wvl0 / (2*np.pi) * ao_1
-    
-    # add vibrations OPD
-    opd_vibrations = np.zeros( ao_1.shape )
-    
-    # add BALDR DM OPD 
-    opd_current_dm = bldr.get_dm_displacement( command_vector= zwfs_ns.dm.current_cmd   , gain=zwfs_ns.dm.opd_per_cmd, \
-                sigma= zwfs_ns.grid.dm_coord.act_sigma_wavesp, X=zwfs_ns.grid.wave_coord.X, Y=zwfs_ns.grid.wave_coord.Y,\
-                    x0=zwfs_ns.grid.dm_coord.act_x0_list_wavesp, y0=zwfs_ns.grid.dm_coord.act_y0_list_wavesp )
-    
-    # sum all opd contributions in the Baldr input pupil plane 
-    # set opd_ao_1 = 0 if rolling phasescreen on DM 
-    bldr_opd_map = np.sum( [ 0 * opd_ao_1, opd_vibrations, opd_internal, opd_current_dm ] , axis=0)
-    
-    
-    # propagate to the detector plane
-    Ic = photon_flux_per_pixel_at_vlti * zwfs_ns.pyZelda.propagate_opd_map( bldr_opd_map , wave = zwfs_ns.optics.wvl0 )
-    
-    # detect the intensity
-    i = bldr.detect( Ic, binning = (zwfs_ns.detector.binning, zwfs_ns.detector.binning), qe=zwfs_ns.detector.qe , dit=zwfs_ns.detector.dit,\
-        ron= zwfs_ns.detector.ron, include_shotnoise=True, spectral_bandwidth = zwfs_ns.stellar.bandwidth )
-
-    # estimate the Strehl ratio after baldr (why we use index = 2 : second stage ao)
-    Strehl_2_est = strehl_model.apply_model( np.array( [i / np.mean( N0[strehl_model.detector_pupilmask] ) ] ) )
-    
-    # get the real strehl ratios at various points (for tracking performance) 
-    Strehl_0 = np.exp( - np.var( phase_scaling_factor * scrn.scrn[zwfs_ns.pyZelda.pupil>0.5]) ) # atmospheric strehl 
-    Strehl_1 = np.exp( - np.var( ao_1[zwfs_ns.pyZelda.pupil>0.5]) ) # strehl after first stage AO 
-    Strehl_2 = np.exp( - np.var( ao_1[zwfs_ns.pyZelda.pupil>0.5]) ) # strehl after baldr 
-    
-    # interpolate signals onto registered actuator grid
-    i_dm = DM_registration.interpolate_pixel_intensities(image = i, pixel_coords = transform_dict['actuator_coord_list_pixel_space'])
-    
-    # get the real optical gain and also estimate the optical gain 
-    b, _ = ztools.create_reference_wave_beyond_pupil_with_aberrations(bldr_opd_map, zwfs_ns.pyZelda.mask_diameter, zwfs_ns.pyZelda.mask_depth, zwfs_ns.pyZelda.mask_substrate, zwfs_ns.pyZelda.mask_Fratio,
-                                            zwfs_ns.pyZelda.pupil_diameter, zwfs_ns.pyZelda.pupil, zwfs_ns.optics.wvl0, clear=np.array([]), 
-                                            sign_mask=np.array([]), cpix=False)
-    b_est = np.sqrt( Strehl_2_est ) * b0
-    
-    b_dm_est = np.sqrt( Strehl_2_est ) * b0_dm
-    
-    # interpolate signals onto registered actuator grid
-    
-    # estimate the ZWFS signal 
-    s = i_dm / ( b_dm_est * N0_dm) - I0_dm / (b0_dm * N0_dm) 
-    
-            
-    # apply BALDR phase reconstruction 
-    # learn a model 
-    
-    # update BALDR DM command 
-    
-    
-    # get telemetry 
-    
-    telem_ns.i.append( i )
-    telem_ns.Ic.append( Ic )
-    telem_ns.i_dm.append(i_dm )
-    telem_ns.strehl_0.append( Strehl_0 )
-    telem_ns.strehl_1.append( Strehl_1 )
-    telem_ns.strehl_2.append( Strehl_2 )
-    telem_ns.strehl_2_est.append(Strehl_2_est )
-    telem_ns.b.append( b )
-    telem_ns.b_est.append( b_est )
-    telem_ns.b_dm_est.append( b_dm_est )
-    telem_ns.dm_cmd.append( zwfs_ns.dm.current_cmd )
-
-
-# save fits 
-# plot the  interpolated intensity on DM and the DM command
-if plot_intermediate_results:
-    bldr.save_telemetry( telem_ns , savename = fig_path + f'telem_with_dm_interactuator_coupling-{zwfs_ns.dm.actuator_coupling_factor}.fits', overwrite=True, return_fits = False)
-
-
-
-
-# let have a dybnamic plot of the telemetry
-image_lists = [[ util.get_DM_command_in_2D( a ) for a in telem_ns.i_dm], \
-    [ util.get_DM_command_in_2D( a ) for a in telem_ns.dm_cmd], \
-     telem_ns.Ic] 
-util.display_images_with_slider(image_lists = image_lists,\
-    plot_titles=['intensity interp dm', 'dm cmd', 'intensity wavespace'], cbar_labels=None)
-       
-# make a movie
-util.display_images_as_movie( image_lists = image_lists,\
-    plot_titles=['intensity interp dm', 'dm cmd', 'intensity wavespace'], cbar_labels=None, save_path = fig_path + 'zonal_model_calibration_dm_interactuator_coupling-{zwfs_ns.dm.actuator_coupling_factor}.mp4', fps=5) 
-                             
-                            
-# plot the  interpolated intensity on DM and the DM command
-if 1:
-    act=65
-    plt.figure()
-    plt.plot(  np.array( telem_ns.dm_cmd ).T[act], np.array( telem_ns.i_dm ).T[act],'.')
-    plt.xlabel('dm cmd')
-    plt.ylabel('intensity interp dm')
-    if plot_intermediate_results:
-        plt.savefig(fig_path + f'dmcmd_vs_dmIntensity_actuator-{act}_dm_interactuator_coupling-{zwfs_ns.dm.actuator_coupling_factor}.png')
-    plt.show()
-
-    # look at the correlation between the DM command and the interpolated intensity (Pearson R) 
-    R_list = []
-    for act in range(140):
-        R_list.append( pearsonr([a[act] for a in telem_ns.i_dm ], [a[act] for a in telem_ns.dm_cmd]).statistic )
-
-    plt.figure() 
-    plt.imshow( util.get_DM_command_in_2D( R_list ) )
-    plt.colorbar(label='Pearson R') 
-    plt.title( 'Pearson R between DM command and \ninterpolated intensity onto DM actuator space')
-    #plt.savefig(fig_path + f'pearson_r_dmcmd_dmIntensity_dm_interactuator_coupling-{zwfs_ns.dm.actuator_coupling_factor}.png')
-    plt.show()  
-
-
-act_filt = np.array( R_list ) > 0.65
-util.nice_heatmap_subplots( [util.get_DM_command_in_2D(act_filt) ] )
-plt.show()
-
-# define X, Y for fitting model to go from interpolated intensity to DM command
-X = np.array( telem_ns.i_dm  ) #[act_filt]
-#X = ( np.array( telem_ns.i_dm  )/ np.array( telem_ns.N0_dm ) ).T[act_filt]
-#X = ( np.array( telem_ns.i_dm  )/ np.array( telem_ns.b_dm_est ) - np.array( telem_ns.I0_dm  )/np.array( telem_ns.b0_dm  ) ).T[act_filt]
-Y = np.array( telem_ns.dm_cmd ) #[act_filt]
-
-#B = multivariate_polynomial_fit( X = X.T , Y = Y.T , model="first" , train_split=0.9)
-
-
-
-# Assuming telem_ns contains the necessary data
-X = np.array(telem_ns.i_dm)  # Input features (samples x features)
-Y = np.array(telem_ns.dm_cmd)  # Target values (samples x features)
-
-# Initialize the linear fit model
-model_1 = my_lin_fit(model_name='pixelwise_first')
-
-# Fit the model to X and Y
-model_1.fit(X=X, Y=Y)
-
-# Apply the model to make predictions
-Y_pred = model_1.apply(X)
-
-# Select an actuator/feature to plot
-act = 65  # Example actuator/feature index
-
-# Plot the true values vs. the model predictions for the selected feature
-plt.plot(X[:, act], Y_pred[:, act], '.', label='Model Prediction')
-plt.plot(X[:, act], Y[:, act], '.', label='True Data')
-plt.legend()
-plt.show()
+strehl_model_file = proj_path  + 'configurations/strehl_model_config-BALDR_UT_J3_2024-10-19T09.28.27.pkl'
+strehl_model = load_model_from_pickle(filename=strehl_model_file)
 
 
 
@@ -497,12 +306,24 @@ plt.show()
 # Compare reconstructors between linear zonal model and linear modal model 
 
 # for eigenmodes just add proportional gain to the model at unity
-zwfs_ns.ctrl.HO_ctrl.kp = np.ones( zwfs_ns.ctrl.HO_ctrl.kp.shape ) 
-zwfs_ns.ctrl.TT_ctrl.kp = np.ones( zwfs_ns.ctrl.TT_ctrl.kp.shape ) 
+# zwfs_ns.ctrl.HO_ctrl.kp = np.ones( zwfs_ns.ctrl.HO_ctrl.kp.shape ) 
+# zwfs_ns.ctrl.TT_ctrl.kp = np.ones( zwfs_ns.ctrl.TT_ctrl.kp.shape ) 
+# zwfs_ns.ctrl.zonal_ctrl.kp = np.ones( zwfs_ns.ctrl.TT_ctrl.kp.shape ) 
+zonal_ctrl_dict = bldr.add_controllers_for_zonal_interp_no_projection( zwfs_ns ,  HO = 'PID' , return_controller =True)
+MVM_TT_HO_ctrl_dict = bldr.add_controllers_for_MVM_TT_HO( zwfs_ns ,  TT='PID', HO = 'PID' , return_controller =True)
+
+for k,v in MVM_TT_HO_ctrl_dict.items():
+    v.kp = np.ones( v.kp.shape )
+    
+for k,v in zonal_ctrl_dict.items():
+    v.kp = np.ones( v.kp.shape )
+    
 # try simple static reconstruction 
 zwfs_ns.dm.current_cmd = zwfs_ns.dm.dm_flat.copy() 
 dm_cmd_est = np.zeros( 140 )
 phase_scaling_factor = 0.1
+
+N0_dm = DM_registration.interpolate_pixel_intensities(image = N0, pixel_coords = zwfs_ns.dm2pix_registration.actuator_coord_list_pixel_space) #DM_registration.interpolate_pixel_intensities(image = N0, pixel_coords = transform_dict['actuator_coord_list_pixel_space'])
 
 if 1:
     it = 0    
@@ -549,43 +370,63 @@ if 1:
     i = bldr.detect( Ic, binning = (zwfs_ns.detector.binning, zwfs_ns.detector.binning), qe=zwfs_ns.detector.qe , dit=zwfs_ns.detector.dit,\
         ron= zwfs_ns.detector.ron, include_shotnoise=True, spectral_bandwidth = zwfs_ns.stellar.bandwidth )
 
+
+    ### ZONAL MODEL
     
-    # interpolate signals onto registered actuator grid
-    i_dm = DM_registration.interpolate_pixel_intensities(image = i, pixel_coords = transform_dict['actuator_coord_list_pixel_space'])
 
+    kwargs = {"N0_dm":N0_dm, "HO_ctrl": zonal_ctrl_dict['HO_ctrl']  } 
+    delta_cmd = bldr.process_zwfs_intensity( i, zwfs_ns, method = 'zonal_interp_no_projection', record_telemetry = True , **kwargs )
+    # # interpolate signals onto registered actuator grid
+    #i_dm = DM_registration.interpolate_pixel_intensities(image = i, pixel_coords = zwfs_ns.dm2pix_registration.actuator_coord_list_pixel_space)
 
-    dm_cmd_est[act_filt] =  model_1.apply(i_dm)[act_filt]
+    # #dm_cmd_est[act_filt] =  model_1.apply(i_dm/ np.mean(N0[ N0 > np.mean( N0 ) ] ))[act_filt]
+    # act_filt = zwfs_ns.reco.linear_zonal_model.act_filt_recommended 
+    # sig = zwfs_ns.reco.linear_zonal_model.process_signal( i_dm, N0_dm, act_filt)
+    # dm_cmd_est[act_filt] = zwfs_ns.reco.linear_zonal_model.apply(sig)[act_filt]
 
+    ### EIGEN MODEL
+    kwargs = {"I0":I0 , "HO_ctrl": MVM_TT_HO_ctrl_dict['HO_ctrl'], "TT_ctrl": MVM_TT_HO_ctrl_dict['TT_ctrl'] }
+    delta_cmd_1 = bldr.process_zwfs_intensity( i, zwfs_ns, method = 'MVM-TT-HO', record_telemetry = True , **kwargs )
+    # # now doing the same with the eigenmode model
+    # sig = bldr.process_zwfs_signal( i, I0, zwfs_ns.pupil_regions.pupil_filt ) # I0_theory/ np.mean(I0_theory) #
 
-    sig = bldr.process_zwfs_signal( i, I0, zwfs_ns.pupil_regions.pupil_filt ) # I0_theory/ np.mean(I0_theory) #
+    # e_TT = zwfs_ns.reco.I2M_TT @ sig
 
-    e_TT = zwfs_ns.reco.I2M_TT @ sig
+    # u_TT = zwfs_ns.ctrl.TT_ctrl.process( e_TT )
 
-    u_TT = zwfs_ns.ctrl.TT_ctrl.process( e_TT )
+    # c_TT = zwfs_ns.reco.M2C_TT @ u_TT 
 
-    c_TT = zwfs_ns.reco.M2C_TT @ u_TT 
+    # e_HO = zwfs_ns.reco.I2M_HO @ sig
 
-    e_HO = zwfs_ns.reco.I2M_HO @ sig
+    # u_HO = zwfs_ns.ctrl.HO_ctrl.process( e_HO )
 
-    u_HO = zwfs_ns.ctrl.HO_ctrl.process( e_HO )
+    # c_HO = zwfs_ns.reco.M2C_HO @ u_HO 
 
-    c_HO = zwfs_ns.reco.M2C_HO @ u_HO 
 
     # using zonal model
-    opd_current_dm = bldr.get_dm_displacement( command_vector= zwfs_ns.dm.current_cmd +  dm_cmd_est  , gain=zwfs_ns.dm.opd_per_cmd, \
+    opd_current_dm = bldr.get_dm_displacement( command_vector= delta_cmd  , gain=zwfs_ns.dm.opd_per_cmd, \
                 sigma= zwfs_ns.grid.dm_coord.act_sigma_wavesp, X=zwfs_ns.grid.wave_coord.X, Y=zwfs_ns.grid.wave_coord.Y,\
                     x0=zwfs_ns.grid.dm_coord.act_x0_list_wavesp, y0=zwfs_ns.grid.dm_coord.act_y0_list_wavesp )
     
     # using eigenmode model
-    opd_current_dm_1 = bldr.get_dm_displacement( command_vector= c_HO + c_HO  , gain=zwfs_ns.dm.opd_per_cmd, \
+    opd_current_dm_1 = bldr.get_dm_displacement( command_vector= delta_cmd_1 , gain=zwfs_ns.dm.opd_per_cmd, \
                 sigma= zwfs_ns.grid.dm_coord.act_sigma_wavesp, X=zwfs_ns.grid.wave_coord.X, Y=zwfs_ns.grid.wave_coord.Y,\
                     x0=zwfs_ns.grid.dm_coord.act_x0_list_wavesp, y0=zwfs_ns.grid.dm_coord.act_y0_list_wavesp )
+    # # using zonal model
+    # opd_current_dm = bldr.get_dm_displacement( command_vector= zwfs_ns.dm.current_cmd +  dm_cmd_est  , gain=zwfs_ns.dm.opd_per_cmd, \
+    #             sigma= zwfs_ns.grid.dm_coord.act_sigma_wavesp, X=zwfs_ns.grid.wave_coord.X, Y=zwfs_ns.grid.wave_coord.Y,\
+    #                 x0=zwfs_ns.grid.dm_coord.act_x0_list_wavesp, y0=zwfs_ns.grid.dm_coord.act_y0_list_wavesp )
+    
+    # # using eigenmode model
+    # opd_current_dm_1 = bldr.get_dm_displacement( command_vector= c_HO + c_HO  , gain=zwfs_ns.dm.opd_per_cmd, \
+    #             sigma= zwfs_ns.grid.dm_coord.act_sigma_wavesp, X=zwfs_ns.grid.wave_coord.X, Y=zwfs_ns.grid.wave_coord.Y,\
+    #                 x0=zwfs_ns.grid.dm_coord.act_x0_list_wavesp, y0=zwfs_ns.grid.dm_coord.act_y0_list_wavesp )
     
     opd_current_dm -= np.mean( opd_current_dm[zwfs_ns.pyZelda.pupil>0.5] ) # remove piston
     opd_current_dm_1 -= np.mean( opd_current_dm[zwfs_ns.pyZelda.pupil>0.5] ) # remove piston
     
-util.nice_heatmap_subplots( [opd_ao_1, Ic, util.get_DM_command_in_2D( i_dm ), util.get_DM_command_in_2D( dm_cmd_est ), zwfs_ns.pyZelda.pupil *( opd_ao_1 - opd_current_dm ) ]  )
-plt.show( )
+#util.nice_heatmap_subplots( [opd_ao_1, Ic, util.get_DM_command_in_2D( i_dm ), util.get_DM_command_in_2D( dm_cmd_est ), zwfs_ns.pyZelda.pupil *( opd_ao_1 - opd_current_dm ) ]  )
+#plt.show( )
 
 std_before = np.std( ( opd_ao_1 )[zwfs_ns.pyZelda.pupil>0.5] )
 std_after = np.std( ( opd_ao_1 - opd_current_dm )[zwfs_ns.pyZelda.pupil>0.5] )
@@ -598,17 +439,247 @@ print( f'WITH EIGENMODE strehl before = {np.exp(- (2*np.pi/ zwfs_ns.optics.wvl0 
 
 
 
+###
+### TRY OPTIMIZE GAINS
+#### 
+
+
+
+
+
+
+
+
+
 
 ###
 ### CLOSED LOOP SIMULATION
 #### 
 
 
+### with zonal 
+
+# kp = 1 * np.ones( np.sum(act_filt))
+# ki = 0.2 * np.ones( np.sum(act_filt))
+# kd = 0. * np.ones( np.sum(act_filt) )
+# setpoint = np.zeros( np.sum(act_filt) )
+# lower_limit_pid = -100 * np.ones( np.sum(act_filt) )
+# upper_limit_pid = 100 * np.ones( np.sum(act_filt) )
+
+# HO_ctrl = bldr.PIDController(kp, ki, kd, upper_limit_pid, lower_limit_pid, setpoint)
+
+#HO_ctrl.reset()
+zonal_ctrl_dict = bldr.add_controllers_for_zonal_interp_no_projection( zwfs_ns ,  HO = 'PID' , return_controller =True)
+# init all gains to 0
+
+amp_input = photon_flux_per_pixel_at_vlti**0.5 * zwfs_ns.pyZelda.pupil
+dm_disturbance = np.zeros( 140 )
 
 
-dynamic  = False
+zwfs_ns.dm.current_cmd = zwfs_ns.dm.dm_flat.copy() 
+zwfs_ns = bldr.reset_telemetry( zwfs_ns )
 
-phase_scaling_factor = 0.1
+N0_dm = DM_registration.interpolate_pixel_intensities(image = N0, pixel_coords = zwfs_ns.dm2pix_registration.actuator_coord_list_pixel_space) #DM_registration.interpolate_pixel_intensities(image = N0, pixel_coords = transform_dict['actuator_coord_list_pixel_space'])
+
+kwargs = {"N0_dm":N0_dm, "HO_ctrl": zonal_ctrl_dict['HO_ctrl']  } 
+
+Strehl_0_list = []
+Strehl_1_list = []
+Strehl_2_list = []
+
+close_after = 20
+iterations = 40 
+for it in range(iterations) :
+
+    print( it )
+    
+    if it == close_after:
+
+        kwargs["HO_ctrl"].kp = 1 * np.ones( v.kp.shape )
+        kwargs["HO_ctrl"].ki = 0 * np.ones( v.ki.shape )
+        kwargs["HO_ctrl"].kd = 0 * np.ones( v.kd.shape )
+    
+    # roll screen
+    #for _ in range(10):
+    scrn.add_row()
+    
+    # first stage AO
+    if np.mod(it, 1) == 0: # only update the AO every few iterations to simulate latency 
+        _ , reco_1 = bldr.first_stage_ao( scrn, Nmodes_removed , basis  , phase_scaling_factor = phase_scaling_factor, return_reconstructor = True )   
+         
+    ao_1 =  basis[0] * (phase_scaling_factor * scrn.scrn - reco_1)
+    
+    # opd after first stage AO
+    opd_ao_1 = zwfs_ns.pyZelda.pupil * zwfs_ns.optics.wvl0 / (2*np.pi) * ao_1
+    
+    # add vibrations OPD
+    opd_vibrations = np.zeros( ao_1.shape )
+    
+    # add BALDR DM OPD 
+    opd_current_dm = bldr.get_dm_displacement( command_vector= zwfs_ns.dm.current_cmd   , gain=zwfs_ns.dm.opd_per_cmd, \
+                sigma= zwfs_ns.grid.dm_coord.act_sigma_wavesp, X=zwfs_ns.grid.wave_coord.X, Y=zwfs_ns.grid.wave_coord.Y,\
+                    x0=zwfs_ns.grid.dm_coord.act_x0_list_wavesp, y0=zwfs_ns.grid.dm_coord.act_y0_list_wavesp )
+    
+    # sum all opd contributions in the Baldr input pupil plane 
+    # set opd_ao_1 = 0 if rolling phasescreen on DM 
+    bldr_opd_map = np.sum( [  opd_ao_1, opd_vibrations, opd_internal, opd_current_dm ] , axis=0 )
+    bldr_opd_map-= np.mean( bldr_opd_map[zwfs_ns.pyZelda.pupil>0.5] ) # remove piston  
+    
+    ao_2 = zwfs_ns.pyZelda.pupil * (2*np.pi) / zwfs_ns.optics.wvl0  *  bldr_opd_map # phase radians 
+    
+    # get the real strehl ratios at various points (for tracking performance) 
+    Strehl_0 = np.exp( - np.var( phase_scaling_factor * scrn.scrn[zwfs_ns.pyZelda.pupil>0.5]) ) # atmospheric strehl 
+    Strehl_1 = np.exp( - np.var( ao_1[zwfs_ns.pyZelda.pupil>0.5]) ) # strehl after first stage AO 
+    Strehl_2 = np.exp( - np.var( ao_2[zwfs_ns.pyZelda.pupil>0.5]) ) # strehl after baldr     
+
+    
+    bldr.AO_iteration( opd_input=bldr_opd_map, amp_input=amp_input, opd_internal=0*opd_internal, zwfs_ns=zwfs_ns, dm_disturbance = np.zeros(140),\
+        record_telemetry=True, method='zonal_interp_no_projection', detector=zwfs_ns.detector, obs_intermediate_field=True, \
+            use_pyZelda = True, include_shotnoise=True, **kwargs)
+
+    # propagate to the detector plane
+    # Ic = photon_flux_per_pixel_at_vlti * zwfs_ns.pyZelda.propagate_opd_map( bldr_opd_map , wave = zwfs_ns.optics.wvl0 )
+    
+    # # detect the intensity
+    # i = bldr.detect( Ic, binning = (zwfs_ns.detector.binning, zwfs_ns.detector.binning), qe=zwfs_ns.detector.qe , dit=zwfs_ns.detector.dit,\
+    #     ron= zwfs_ns.detector.ron, include_shotnoise=True, spectral_bandwidth = zwfs_ns.stellar.bandwidth )
+
+
+    #delta_cmd = bldr.process_zwfs_intensity( i, zwfs_ns, method = 'zonal_interp_no_projection', record_telemetry = True , **kwargs )
+    
+    # interpolate signals onto registered actuator grid
+    # i_dm = DM_registration.interpolate_pixel_intensities(image = i, pixel_coords = zwfs_ns.dm2pix_registration.actuator_coord_list_pixel_space)
+
+    # e_HO  = model_1.apply(i_dm/ np.mean(N0[ N0 > np.mean( N0 ) ] ))[act_filt]
+     
+    # u_HO = HO_ctrl.process( e_HO )
+    
+    # dm_cmd_est[act_filt] =  u_HO - np.mean( u_HO ) #model_1.apply(i_dm/ np.mean(N0[ N0 > np.mean( N0 ) ] ))[act_filt]
+
+        
+    Strehl_0_list.append( Strehl_0 )
+    Strehl_1_list.append( Strehl_1 )
+    Strehl_2_list.append( Strehl_2 )
+
+    print( Strehl_2 )
+
+i = -1
+#im_dm_dist = np.array( [util.get_DM_command_in_2D( a ) for a in zwfs_ns.telem.dm_disturb_list] )
+im_phase = np.array( zwfs_ns.telem.field_phase ) 
+im_int = np.array( zwfs_ns.telem.i_list  ) 
+im_cmd = np.array( [util.get_DM_command_in_2D( a ) for a in (np.array(zwfs_ns.telem.c_TT_list) + np.array(zwfs_ns.telem.c_HO_list)  ) ] )
+
+
+#line_x = np.linspace(0, i, i)
+# line_eHO = np.array( zwfs_ns.telem.e_HO_list ) [:i]
+# line_eTT = np.array( zwfs_ns.telem.e_TT_list )[:i]
+# line_S = np.array( zwfs_ns.telem.strehl )[:i]
+# line_rmse = np.array( zwfs_ns.telem.rmse_list )[:i]
+line_eHO = np.array( zwfs_ns.telem.e_HO_list ) 
+line_eTT = np.array( zwfs_ns.telem.e_TT_list )
+line_S = np.array( zwfs_ns.telem.strehl )
+line_rmse = np.array( zwfs_ns.telem.rmse_list )
+
+# Define plot data
+#image_list =  [im_phase[-1], im_phase[-1], im_int[-1], im_cmd[-1]]
+image_list =  [ zwfs_ns.telem.field_phase, im_phase, im_int, im_cmd]
+image_title_list =  ['DM disturbance', 'input phase', 'intensity', 'reco. command']
+image_colorbar_list = ['DM units', 'radians', 'adu', 'DM units']
+
+plot_list = [ line_eHO, line_eTT, line_S, line_rmse ] 
+plot_ylabel_list = ['e_HO', 'e_TT', 'Strehl', 'rmse']
+plot_xlabel_list = ['iteration' for _ in plot_list]
+plot_title_list = ['' for _ in plot_list]
+
+#vlims = [(0, 1), (0, 1), (0, 1)]  # Set vmin and vmax for each image
+
+util.create_telem_mosaic([a[-1] for a in image_list], image_title_list, image_colorbar_list, 
+                plot_list, plot_title_list, plot_xlabel_list, plot_ylabel_list)
+
+util.display_images_with_slider(image_lists = image_list)
+       
+
+
+
+
+
+### with eigenmodes 
+dynamic  = True
+
+phase_scaling_factor = 0.2
+
+if dynamic:
+    scrn = ps.PhaseScreenKolmogorov(nx_size=zwfs_ns.grid.dim, pixel_scale=dx, r0=zwfs_ns.atmosphere.r0, L0=zwfs_ns.atmosphere.l0, random_seed=1)
+    opd_input =  zwfs_ns.pyZelda.pupil * zwfs_ns.optics.wvl0 / (2*np.pi) *  scrn.scrn
+else:# static 
+    opd_input = 1 * zwfs_ns.pyZelda.pupil * zwfs_ns.optics.wvl0 / (2*np.pi) *  (basis[5] + basis[10])
+
+amp_input = photon_flux_per_pixel_at_vlti**0.5 * zwfs_ns.pyZelda.pupil
+dm_disturbance = np.zeros( 140 )
+
+zwfs_ns.dm.current_cmd = zwfs_ns.dm.dm_flat + dm_disturbance
+zwfs_ns = bldr.reset_telemetry( zwfs_ns ) # initialize telemetry to empty list 
+
+close_after = 10
+
+Strehl_0_list = []
+Strehl_1_list = []
+
+kpTT = 1
+ki_grid = np.linspace(0, 0.9, 15)
+for cnt, kiTT in enumerate( [0.9]) :
+    zwfs_ns.dm.current_cmd = zwfs_ns.dm.dm_flat + dm_disturbance
+    zwfs_ns = bldr.reset_telemetry( zwfs_ns )
+    zwfs_ns.ctrl.TT_ctrl.reset()
+    zwfs_ns.ctrl.TT_ctrl.ki = 0 * np.zeros( len(zwfs_ns.ctrl.TT_ctrl.ki) )
+    zwfs_ns.ctrl.TT_ctrl.kp = 0 * np.ones( len(zwfs_ns.ctrl.TT_ctrl.kp) )
+    for i in range(100):
+        print(f'iteration {i}')
+        if i == close_after : 
+            zwfs_ns.ctrl.HO_ctrl.ki = 0.99 * np.ones( len(zwfs_ns.ctrl.HO_ctrl.ki) )
+            zwfs_ns.ctrl.HO_ctrl.kp = 0.3 * np.ones( len(zwfs_ns.ctrl.HO_ctrl.kp) )
+
+            zwfs_ns.ctrl.TT_ctrl.kp = kpTT * np.ones( len(zwfs_ns.ctrl.TT_ctrl.kp) )
+            zwfs_ns.ctrl.TT_ctrl.ki = kiTT * np.ones( len(zwfs_ns.ctrl.TT_ctrl.ki) )
+            
+        if dynamic:
+            # roll screen
+            if np.mod(i, 1) == 0:
+                scrn.add_row()
+            # first stage AO
+            if np.mod(it, 1) == 0: # only update the AO every few iterations to simulate latency 
+                _ , reco_1 = bldr.first_stage_ao( scrn, Nmodes_removed , basis  , phase_scaling_factor = phase_scaling_factor, return_reconstructor = True )   
+                
+            ao_1 =  basis[0] * (phase_scaling_factor * scrn.scrn - reco_1)
+
+            # opd after first stage AO
+            opd_ao_1 = zwfs_ns.pyZelda.pupil * zwfs_ns.optics.wvl0 / (2*np.pi) * ao_1
+        else:
+            opd_ao_1 = opd_input
+        # add vibrations OPD
+        opd_vibrations = np.zeros( ao_1.shape )
+                
+        # put them all together to get the input to the second stage AO
+        bldr_opd_map = np.sum( [  opd_ao_1, opd_vibrations, opd_internal] , axis=0 )
+        
+        # second stage AO (uses opd_input + current DM command to get signal, then updates current DM command based on control law
+        bldr.AO_iteration( opd_input = bldr_opd_map, amp_input=amp_input, opd_internal = opd_internal, I0 = zwfs_ns.reco.I0,  zwfs_ns=zwfs_ns, dm_disturbance = dm_disturbance, record_telemetry=True , detector=zwfs_ns.detector)
+
+        # keep these seperate from telemetry because in real system you would not have access to these    
+        Strehl_0 = np.exp( - np.var( phase_scaling_factor * scrn.scrn[zwfs_ns.pyZelda.pupil>0.5]) ) # atmospheric strehl 
+        Strehl_1 = np.exp( - np.var( ao_1[zwfs_ns.pyZelda.pupil>0.5]) ) 
+
+        Strehl_0_list.append( Strehl_0 )
+        Strehl_1_list.append( Strehl_1 )
+        
+    _ = bldr.save_telemetry( zwfs_ns, savename=fig_path + f'SIM_CL_TT_kiTT-{kiTT}_kpTT-{1}_{tstamp}.fits' )
+    # Generate some data
+
+
+### with eigenmodes 
+dynamic  = True
+
+phase_scaling_factor = 0.2
 
 if dynamic:
     scrn = ps.PhaseScreenKolmogorov(nx_size=zwfs_ns.grid.dim, pixel_scale=dx, r0=zwfs_ns.atmosphere.r0, L0=zwfs_ns.atmosphere.l0, random_seed=1)
@@ -642,8 +713,8 @@ for cnt, kiTT in enumerate( [0.9]) :
     for i in range(100):
         print(f'iteration {i}')
         if i == close_after : 
-            zwfs_ns.ctrl.HO_ctrl.ki = 0.95 * np.ones( len(zwfs_ns.ctrl.HO_ctrl.ki) )
-            zwfs_ns.ctrl.HO_ctrl.kp = 0.2 * np.ones( len(zwfs_ns.ctrl.HO_ctrl.kp) )
+            zwfs_ns.ctrl.HO_ctrl.ki = 0.99 * np.ones( len(zwfs_ns.ctrl.HO_ctrl.ki) )
+            zwfs_ns.ctrl.HO_ctrl.kp = 0.3 * np.ones( len(zwfs_ns.ctrl.HO_ctrl.kp) )
 
             zwfs_ns.ctrl.TT_ctrl.kp = kpTT * np.ones( len(zwfs_ns.ctrl.TT_ctrl.kp) )
             zwfs_ns.ctrl.TT_ctrl.ki = kiTT * np.ones( len(zwfs_ns.ctrl.TT_ctrl.ki) )
@@ -811,7 +882,7 @@ for it in range(10):
 
     
     # interpolate signals onto registered actuator grid
-    i_dm = DM_registration.interpolate_pixel_intensities(image = i, pixel_coords = transform_dict['actuator_coord_list_pixel_space'])
+    i_dm = DM_registration.interpolate_pixel_intensities(image = i, pixel_coords = zwfs_ns.dm2pix_registration.actuator_coord_list_pixel_space)
 
 
     dm_cmd_est[act_filt] = model_1.apply(i_dm)[act_filt]  #B[0] + i_dm[act_filt] @ B[1]   

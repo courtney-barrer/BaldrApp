@@ -113,6 +113,7 @@ class LeakyIntegrator:
             self.upper_limit = np.array(upper_limit)
             self.kp = np.array(kp)  # kp is a vector now
         self.ctrl_type = 'Leaky'
+        
     def process(self, input_vector):
         input_vector = np.array(input_vector)
 
@@ -443,9 +444,15 @@ def reset_ctrl( zwfs_ns ):
 
 
 def init_telem_dict(): 
-    
+    # i_list is intensity measured on the detector
+    # i_dm_list is intensity interpolated onto DM actuators - it is used only in zonal_interp control methods 
+    # s_list is processed intensity signal used in the control loop (e.g. I - I0)
+    # e_* is control error signals 
+    # u_* is control signals (e.g. after PID control)
+    # c_* is DM command signals 
     telemetry_dict = {
         "i_list" : [],
+        "i_dm_list":[], 
         "s_list" : [],
         "e_TT_list" : [],
         "u_TT_list" : [],
@@ -2417,7 +2424,52 @@ def construct_ctrl_matricies_from_IM(zwfs_ns,  method = 'Eigen_TT-HO', Smax = 50
     return zwfs_ns
 
 
-def add_controllers( zwfs_ns , TT='PID', HO = 'leaky'):
+def add_controllers_for_zonal_interp_no_projection( zwfs_ns ,  HO = 'leaky' , return_controller = False):
+    
+    N = np.sum( zwfs_ns.reco.linear_zonal_model.act_filt_recommended) 
+    if HO == 'leaky':
+        ki_leak = 0 * np.ones( N )
+        kp_leak = 0 * np.ones( N )
+        lower_limit_leak = -100 * np.ones(N )
+        upper_limit_leak = 100 * np.ones( N)
+
+        HO_ctrl = LeakyIntegrator(ki=ki_leak, kp=kp_leak, lower_limit=lower_limit_leak, upper_limit=upper_limit_leak )
+    
+    elif HO == 'PID':    
+        kp = 0. * np.ones( N)
+        ki = 0. * np.ones( N )
+        kd = 0. * np.ones( N )
+        setpoint = np.zeros( N )
+        lower_limit_pid = -100 * np.ones( N )
+        upper_limit_pid = 100 * np.ones( N )
+
+        HO_ctrl = PIDController(kp, ki, kd, upper_limit_pid, lower_limit_pid, setpoint)
+        
+    controller_dict = {
+        "HO_ctrl" : HO_ctrl
+    }
+    
+    
+    if not return_controller : # then we append to the zwfs_ns and return it 
+    
+        control_ns = SimpleNamespace(**controller_dict)
+            
+        telemetry_dict = init_telem_dict()
+
+       
+        tele_ns = SimpleNamespace(**telemetry_dict)
+
+        zwfs_ns.ctrl = control_ns
+        zwfs_ns.telem = tele_ns
+
+        zwfs_ns.dm.current_cmd = zwfs_ns.dm.dm_flat
+
+        return zwfs_ns
+    
+    else:  
+        return controller_dict
+
+def add_controllers_for_MVM_TT_HO( zwfs_ns , TT='PID', HO = 'leaky',return_controller = False):
  
     if HO == 'leaky':
         ki_leak = 0 * np.ones( zwfs_ns.reco.I2M_HO.shape[0] )
@@ -2460,20 +2512,29 @@ def add_controllers( zwfs_ns , TT='PID', HO = 'leaky'):
         "HO_ctrl" : HO_ctrl
     }
 
-    telemetry_dict = init_telem_dict()
+    
+    if not return_controller : # then we append to the zwfs_ns and return it 
+        
+        control_ns = SimpleNamespace(**controller_dict)
+        
+        telemetry_dict = init_telem_dict()
 
-    control_ns = SimpleNamespace(**controller_dict)
-    tele_ns = SimpleNamespace(**telemetry_dict)
+       
+        tele_ns = SimpleNamespace(**telemetry_dict)
 
-    zwfs_ns.ctrl = control_ns
-    zwfs_ns.telem = tele_ns
+        zwfs_ns.ctrl = control_ns
+        zwfs_ns.telem = tele_ns
 
-    zwfs_ns.dm.current_cmd = zwfs_ns.dm.dm_flat
+        zwfs_ns.dm.current_cmd = zwfs_ns.dm.dm_flat
 
-    return zwfs_ns
-
-
-def AO_iteration( opd_input, amp_input, opd_internal, I0,  zwfs_ns, dm_disturbance = np.zeros(140), record_telemetry=True, detector=None, obs_intermediate_field=True, use_pyZelda = True):
+        return zwfs_ns
+    
+    else:  
+        return controller_dict
+    
+def AO_iteration( opd_input, amp_input, opd_internal, zwfs_ns, dm_disturbance = np.zeros(140), record_telemetry=True, method='MVM-TT-HO', detector=None, obs_intermediate_field=True, use_pyZelda = True,include_shotnoise=True, **kwargs):
+    
+    # got rid of I0 and should get rid of detector (since it is in zwfs_ns
     # single iteration of AO in closed loop 
     
     # propagates opd over DM and get intensity
@@ -2487,7 +2548,7 @@ def AO_iteration( opd_input, amp_input, opd_internal, I0,  zwfs_ns, dm_disturban
         phi = zwfs_ns.grid.pupil_mask  *  2*np.pi / zwfs_ns.optics.wvl0 * ( opd_input + opd_internal + opd_current_dm  )
         
         i = get_frame(  opd_input  = opd_input + opd_current_dm ,   amp_input = amp_input,\
-                opd_internal = opd_internal,  zwfs_ns= zwfs_ns , detector= detector, use_pyZelda = use_pyZelda )
+                opd_internal = opd_internal,  zwfs_ns= zwfs_ns , detector= detector, use_pyZelda = use_pyZelda , include_shotnoise=include_shotnoise)
         
         # if use_pyZelda :
         #     i = get_frame(  opd_input  = opd_input + opd_current_dm ,   amp_input = amp_input,\
@@ -2506,43 +2567,50 @@ def AO_iteration( opd_input, amp_input, opd_internal, I0,  zwfs_ns, dm_disturban
         i = get_frame(  opd_input  = opd_input ,   amp_input = amp_input,\
         opd_internal = opd_internal,  zwfs_ns= zwfs_ns , detector= detector, use_pyZelda = use_pyZelda )
 
-    sig = process_zwfs_signal( i, I0, zwfs_ns.pupil_regions.pupil_filt ) # I0_theory/ np.mean(I0_theory) #
+    #kwargs <--- contains controllers , what is required in this dictionary depends on the method used
+    delta_cmd = process_zwfs_intensity( i, zwfs_ns, method = method, record_telemetry = record_telemetry , **kwargs )
+    
+    # put this in function specific for how to process the signal and apply controller 
+    # sig = process_zwfs_signal( i, I0, zwfs_ns.pupil_regions.pupil_filt ) # I0_theory/ np.mean(I0_theory) #
 
-    e_TT = zwfs_ns.reco.I2M_TT @ sig
+    # e_TT = zwfs_ns.reco.I2M_TT @ sig
 
-    u_TT = zwfs_ns.ctrl.TT_ctrl.process( e_TT )
+    # u_TT = zwfs_ns.ctrl.TT_ctrl.process( e_TT )
 
-    c_TT = zwfs_ns.reco.M2C_TT @ u_TT 
+    # c_TT = zwfs_ns.reco.M2C_TT @ u_TT 
 
-    e_HO = zwfs_ns.reco.I2M_HO @ sig
+    # e_HO = zwfs_ns.reco.I2M_HO @ sig
 
-    u_HO = zwfs_ns.ctrl.HO_ctrl.process( e_HO )
+    # u_HO = zwfs_ns.ctrl.HO_ctrl.process( e_HO )
 
-    c_HO = zwfs_ns.reco.M2C_HO @ u_HO 
+    # c_HO = zwfs_ns.reco.M2C_HO @ u_HO 
 
-    # safety 
-    if np.max( c_TT + c_HO ) > 0.8: 
-        print( ' going badly.. ')
+    # # safety 
+    # if np.max( c_TT + c_HO ) > 0.8: 
+    #     print( ' going badly.. ')
         
+    # delta_cmd  = c_TT + c_HO
+    
+    
     # SEND DM COMMAND 
-    zwfs_ns.dm.current_cmd =  zwfs_ns.dm.dm_flat +  dm_disturbance - c_HO - c_TT
+    zwfs_ns.dm.current_cmd =  zwfs_ns.dm.dm_flat +  dm_disturbance - delta_cmd # c_HO - c_TT
 
     # only measure residual in the registered pupil on DM 
-    residual =  (dm_disturbance - c_HO - c_TT)
+    residual =  (dm_disturbance - delta_cmd ) # c_HO - c_TT)
     rmse = np.nanstd( residual )
      
 
     # telemetry 
     if record_telemetry :
-        zwfs_ns.telem.i_list.append( i )
-        zwfs_ns.telem.s_list.append( sig )
-        zwfs_ns.telem.e_TT_list.append( e_TT )
-        zwfs_ns.telem.u_TT_list.append( u_TT )
-        zwfs_ns.telem.c_TT_list.append( c_TT )
+        # zwfs_ns.telem.i_list.append( i )
+        # zwfs_ns.telem.s_list.append( sig )
+        # zwfs_ns.telem.e_TT_list.append( e_TT )
+        # zwfs_ns.telem.u_TT_list.append( u_TT )
+        # zwfs_ns.telem.c_TT_list.append( c_TT )
 
-        zwfs_ns.telem.e_HO_list.append( e_HO )
-        zwfs_ns.telem.u_HO_list.append( u_HO )
-        zwfs_ns.telem.c_HO_list.append( c_HO )
+        # zwfs_ns.telem.e_HO_list.append( e_HO )
+        # zwfs_ns.telem.u_HO_list.append( u_HO )
+        # zwfs_ns.telem.c_HO_list.append( c_HO )
 
         #atm_disturb_list.append( scrn.scrn )
         zwfs_ns.telem.dm_disturb_list.append( dm_disturbance )
@@ -2556,8 +2624,373 @@ def AO_iteration( opd_input, amp_input, opd_internal, I0,  zwfs_ns, dm_disturban
             
 
 
+class my_lin_fit:
+    # Rows are samples, columns are features
+    def __init__(self, model_name='pixelwise_first'):
+        """
+        Initialize the linear fit model.
+        
+        Parameters:
+        - model_name: str, the name/type of model (currently supports 'pixelwise_first')
+        """
+        self.model_name = model_name
+        self.models = None
+        
+    def process_signal(self, i_dm, N0_dm, act_filt) :
+        """_summary_
+
+        Args:
+            i_dm (_type_): ZWFS intensity interpolated onto DM actuator space 
+            N0_dm (_type_): clear pupil (no phasemask) intensity interpolated onto DM actuator space
+            act_filt (_type_): filter for active pupil on DM (in DM space).
+
+        Returns:
+            _type_: signal that should be used for fitting the model 
+        """
+        #i_dm = DM_registration.interpolate_pixel_intensities(image = image, pixel_coords = zwfs_ns.dm2pix_registration.actuator_coord_list_pixel_space)
+        
+        sig = i_dm / np.mean( N0_dm[ act_filt ] )
+        
+        return sig 
+    
+    
+    def fit(self, X, Y):
+        """
+        Fit the model based on the input features X and target Y.
+        
+        Parameters:
+        - X: np.ndarray, shape (N, P), input data matrix (N samples, P features)
+        - Y: np.ndarray, shape (N, P), target data matrix (same shape as X)
+        
+        Returns:
+        - coe: list of model coefficients for each feature
+        """
+        if self.model_name == 'pixelwise_first':
+            coe = []
+            # Fit a first-order polynomial (linear) for each feature (each column)
+            for v in range(X.shape[1]):
+                coe.append(np.polyfit(X[:, v], Y[:, v], 1))  # Linear fit for each feature
+            self.models = coe
+            return coe 
+        
+    def apply(self, X):
+        """
+        Apply the fitted model to new input data X to make predictions.
+        
+        Parameters:
+        - X: np.ndarray, input data for which to predict Y.
+        
+        Returns:
+        - Y_pred: np.ndarray, predicted values based on the fitted models
+        """
+        if self.model_name == 'pixelwise_first':
+            Y_pred = []
+            # Apply the model to each feature
+            for v in range(len(self.models)):
+                a_i, b_i = self.models[v]
+                if len(X.shape) == 1:
+                    # X is 1D (single sample)
+                    assert len(X) == len(self.models), "Dimension mismatch: X does not match model dimensions."
+                    Y_pred.append(a_i * X[v] + b_i)
+                elif len(X.shape) == 2:
+                    # X is 2D (multiple samples)
+                    assert X.shape[1] == len(self.models), "Dimension mismatch: X columns do not match model dimensions."
+                    Y_pred.append(a_i * X[:, v] + b_i)
+            return np.array(Y_pred).T  # Transpose to match the input shape
+        else:
+            return None
+        
+        
+def fit_linear_zonal_model( zwfs_ns, opd_internal, iterations = 100, photon_flux_per_pixel_at_vlti = 200, \
+    pearson_R_threshold = 0.6, phase_scaling_factor=0.2,   plot_intermediate=True , fig_path = None):
+    
+    
+    #zwfs_ns.dm2pix_registration.actuator_coord_list_pixel_space
+    # zwfs_ns.grid
+    # zwfs_ns.detector
+    # zwfs_ns.dm
+    # zwfs_ns.pyZelda
+    
+
+    # init phase screen object 
+    dx = zwfs_ns.grid.D / zwfs_ns.grid.N
+    # This screen is to put on the DM : assumes diameter covers entire DM - encoded in pixelscale
+    scrn = phasescreens.PhaseScreenKolmogorov(nx_size=2*zwfs_ns.dm.Nact_x, pixel_scale=zwfs_ns.grid.D / (2*zwfs_ns.dm.Nact_x), r0=zwfs_ns.atmosphere.r0, L0=zwfs_ns.atmosphere.l0, random_seed=1)
+
+    opd_flat_dm = get_dm_displacement( command_vector= zwfs_ns.dm.dm_flat  , gain=zwfs_ns.dm.opd_per_cmd, \
+                sigma= zwfs_ns.grid.dm_coord.act_sigma_wavesp, X=zwfs_ns.grid.wave_coord.X, Y=zwfs_ns.grid.wave_coord.Y,\
+                    x0=zwfs_ns.grid.dm_coord.act_x0_list_wavesp, y0=zwfs_ns.grid.dm_coord.act_y0_list_wavesp )
+    
+    
+    b0_wsp, _ = ztools.create_reference_wave_beyond_pupil_with_aberrations(opd_internal + opd_flat_dm , zwfs_ns.pyZelda.mask_diameter, zwfs_ns.pyZelda.mask_depth, zwfs_ns.pyZelda.mask_substrate, zwfs_ns.pyZelda.mask_Fratio,
+                                       zwfs_ns.pyZelda.pupil_diameter, zwfs_ns.pyZelda.pupil, zwfs_ns.optics.wvl0, clear=np.array([]), \
+                                       sign_mask=np.array([]), cpix=False)
+    
+    
+    # to put in pixel space (we just average with the same binning as the bldr detector)
+    b0 = average_subarrays( abs(b0_wsp) , (zwfs_ns.detector.binning, zwfs_ns.detector.binning) )
+
+    I0 = get_I0( opd_input = 0 * zwfs_ns.pyZelda.pupil ,  amp_input = photon_flux_per_pixel_at_vlti**0.5 * zwfs_ns.pyZelda.pupil, opd_internal=zwfs_ns.pyZelda.pupil * (opd_internal + opd_flat_dm), \
+        zwfs_ns=zwfs_ns, detector=zwfs_ns.detector, include_shotnoise=True , use_pyZelda = True)
+
+    N0 = get_N0( opd_input = 0 * zwfs_ns.pyZelda.pupil ,  amp_input = photon_flux_per_pixel_at_vlti**0.5 * zwfs_ns.pyZelda.pupil, opd_internal=zwfs_ns.pyZelda.pupil * (opd_internal + opd_flat_dm), \
+        zwfs_ns=zwfs_ns, detector=zwfs_ns.detector, include_shotnoise=True , use_pyZelda = True)
+
+    b0_dm = DM_registration.interpolate_pixel_intensities(image = I0, pixel_coords = zwfs_ns.dm2pix_registration.actuator_coord_list_pixel_space) #DM_registration.interpolate_pixel_intensities(image = I0, pixel_coords = transform_dict['actuator_coord_list_pixel_space'])
+    I0_dm = DM_registration.interpolate_pixel_intensities(image = b0, pixel_coords = zwfs_ns.dm2pix_registration.actuator_coord_list_pixel_space) #DM_registration.interpolate_pixel_intensities(image = b0, pixel_coords = transform_dict['actuator_coord_list_pixel_space'])
+    N0_dm = DM_registration.interpolate_pixel_intensities(image = N0, pixel_coords = zwfs_ns.dm2pix_registration.actuator_coord_list_pixel_space) #DM_registration.interpolate_pixel_intensities(image = N0, pixel_coords = transform_dict['actuator_coord_list_pixel_space'])
+
+    telemetry = {
+        'I0':[I0],
+        'I0_dm':[I0_dm],
+        'N0':[N0],
+        'N0_dm':[N0_dm],
+        'b0':[b0],
+        'b0_dm':[b0_dm],
+        'dm_cmd':[],
+        'b':[],
+        'b_est':[],
+        'b_dm_est':[],
+        'i':[],
+        'Ic':[],
+        'i_dm':[],
+        's':[],
+        'strehl_0':[],
+        'strehl_1':[],
+        'strehl_2':[],
+        'strehl_2_est':[],
+    }
+
+    telem_ns = SimpleNamespace(**telemetry)
+
+    zwfs_ns.dm.current_cmd = zwfs_ns.dm.dm_flat.copy()  
+    
+    
+    for it in range(iterations):
+        
+        print( it )
+        
+        # roll screen
+        for _ in range(10):
+            scrn.add_row()
+        
+        
+        zwfs_ns.dm.current_cmd =  util.create_phase_screen_cmd_for_DM( scrn,  scaling_factor= phase_scaling_factor, drop_indicies = [0, 11, 11 * 12, -1] , plot_cmd=False) 
+
+        # add BALDR DM OPD (onto wavespace)
+        opd_current_dm = get_dm_displacement( command_vector= zwfs_ns.dm.current_cmd   , gain=zwfs_ns.dm.opd_per_cmd, \
+                    sigma= zwfs_ns.grid.dm_coord.act_sigma_wavesp, X=zwfs_ns.grid.wave_coord.X, Y=zwfs_ns.grid.wave_coord.Y,\
+                        x0=zwfs_ns.grid.dm_coord.act_x0_list_wavesp, y0=zwfs_ns.grid.dm_coord.act_y0_list_wavesp )
+        
+        # sum all opd contributions in the Baldr input pupil plane 
+        bldr_opd_map = np.sum( [  opd_internal, opd_current_dm ] , axis=0)
+
+        # get the real strehl ratio applied by DM
+        Strehl_0 = np.exp( -np.var( 2*np.pi/zwfs_ns.optics.wvl0 * bldr_opd_map[zwfs_ns.pyZelda.pupil>0.5]) ) # atmospheric strehl 
+        
+        # propagate to the detector plane
+        Ic = photon_flux_per_pixel_at_vlti * zwfs_ns.pyZelda.propagate_opd_map( bldr_opd_map , wave = zwfs_ns.optics.wvl0 )
+        
+        # detect the intensity
+        i = detect( Ic, binning = (zwfs_ns.detector.binning, zwfs_ns.detector.binning), qe=zwfs_ns.detector.qe , dit=zwfs_ns.detector.dit,\
+            ron= zwfs_ns.detector.ron, include_shotnoise=True, spectral_bandwidth = zwfs_ns.stellar.bandwidth )
+ 
+
+        # interpolate signals onto registered actuator grid
+        i_dm = DM_registration.interpolate_pixel_intensities(image = i, pixel_coords = zwfs_ns.dm2pix_registration.actuator_coord_list_pixel_space)
+        
+        # get the optical gain (just incase we want to look - not required)
+        #b, _ = ztools.create_reference_wave_beyond_pupil_with_aberrations(bldr_opd_map, zwfs_ns.pyZelda.mask_diameter, zwfs_ns.pyZelda.mask_depth, zwfs_ns.pyZelda.mask_substrate, zwfs_ns.pyZelda.mask_Fratio,
+        #                                        zwfs_ns.pyZelda.pupil_diameter, zwfs_ns.pyZelda.pupil, zwfs_ns.optics.wvl0, clear=np.array([]), 
+        #                                        sign_mask=np.array([]), cpix=False)
+        
+        
+        telem_ns.i.append( i )
+        telem_ns.Ic.append( Ic )
+        telem_ns.i_dm.append( i_dm )
+        telem_ns.strehl_0.append( Strehl_0 )
+        #telem_ns.b.append( b )
+        telem_ns.dm_cmd.append( zwfs_ns.dm.current_cmd )
 
 
+
+    # save fits 
+    # plot the  interpolated intensity on DM and the DM command
+    #if save_telemetry:
+    #    save_telemetry( telem_ns , savename = fig_path + f'telem_with_dm_interactuator_coupling-{zwfs_ns.dm.actuator_coupling_factor}.fits', overwrite=True, return_fits = False)
+
+
+    if plot_intermediate:
+        # let have a dybnamic plot of the telemetry
+        image_lists = [[ util.get_DM_command_in_2D( a ) for a in telem_ns.i_dm], \
+            [ util.get_DM_command_in_2D( a ) for a in telem_ns.dm_cmd], \
+            telem_ns.Ic] 
+        
+        util.display_images_with_slider(image_lists = image_lists,\
+            plot_titles=['intensity interp dm', 'dm cmd', 'intensity wavespace'], cbar_labels=None)
+            
+        # make a movie
+        #util.display_images_as_movie( image_lists = image_lists,\
+        #    plot_titles=['intensity interp dm', 'dm cmd', 'intensity wavespace'], cbar_labels=None, save_path = fig_path + 'zonal_model_calibration_dm_interactuator_coupling-{zwfs_ns.dm.actuator_coupling_factor}.mp4', fps=5) 
+                                    
+        act=65
+        plt.figure()
+        plt.plot(  np.array( telem_ns.dm_cmd ).T[act], np.array( telem_ns.i_dm ).T[act],'.')
+        plt.xlabel('dm cmd')
+        plt.ylabel('intensity interp dm')
+        
+        if fig_path is not None:
+            plt.savefig(fig_path + f'dmcmd_vs_dmIntensity_actuator-{act}_dm_interactuator_coupling-{zwfs_ns.dm.actuator_coupling_factor}.png')
+        plt.show()                                
+
+    # look at the correlation between the DM command and the interpolated intensity (Pearson R) 
+    R_list = []
+    for act in range(140):
+        R_list.append( pearsonr([a[act] for a in telem_ns.i_dm ], [a[act] for a in telem_ns.dm_cmd]).statistic )
+
+    if plot_intermediate:
+        plt.figure() 
+        plt.imshow( util.get_DM_command_in_2D( R_list ) )
+        plt.colorbar(label='Pearson R') 
+        plt.title( 'Pearson R between DM command and \ninterpolated intensity onto DM actuator space')
+        #plt.savefig(fig_path + f'pearson_r_dmcmd_dmIntensity_dm_interactuator_coupling-{zwfs_ns.dm.actuator_coupling_factor}.png')
+        plt.show()  
+
+
+    act_filt = np.array( R_list ) > pearson_R_threshold
+    
+    telem_ns.act_filt = act_filt
+    telem_ns.pearson_R = np.array( R_list ) 
+    
+    if plot_intermediate:
+        util.nice_heatmap_subplots( [util.get_DM_command_in_2D(act_filt) ] )
+        plt.show()
+
+
+    # Initialize the linear fit model
+    model_1 = my_lin_fit(model_name='pixelwise_first')
+    
+    # Assuming telem_ns contains the necessary data
+    # note act_filt just used for filtering what pixels to use to calculate average of N0_dm 
+    X = model_1.process_signal( np.array( telem_ns.i_dm ) , N0_dm,  act_filt)  #np.array(telem_ns.i_dm / np.mean(N0_dm[ N0_dm > np.mean( N0_dm ) ] ) ) # / ( np.array(telem_ns.b_dm_est) * np.mean( N0_dm )   - I0_dm/ b0_dm)  # Input features (samples x features)
+    
+    Y = np.array(telem_ns.dm_cmd)  # Target values (samples x features)
+
+
+    # Fit the model to X and Y
+    model_1.fit(X=X, Y=Y)
+
+    model_1.act_filt_recommended = act_filt 
+    model_1.N0_dm = N0_dm
+    model_1.I0_dm = I0_dm
+    model_1.pearson_R_dm =  np.array( R_list ) 
+    
+    if plot_intermediate:
+        # Apply the model to make predictions
+        Y_pred = model_1.apply(X)
+        # Select an actuator/feature to plot
+        act = 65  # Example actuator/feature index
+        # Plot the true values vs. the model predictions for the selected feature
+        plt.plot(X[:, act], Y_pred[:, act], '.', label='Model Prediction')
+        plt.plot(X[:, act], Y[:, act], '.', label='True Data')
+        plt.xlabel('I0/<N0>')
+        plt.ylabel('DM Command')
+        plt.legend()
+        plt.show()
+
+    zwfs_ns.reco.linear_zonal_model = model_1
+    
+    return zwfs_ns     
+                           
+
+def process_zwfs_intensity( i, zwfs_ns, method, record_telemetry = False , **kwargs ):
+    ### NOTE here we don't use zwfs_ns.ctrl namespace , instead we append controllers to kwargs depending on method!!
+    if method == 'MVM-TT-HO':
+        
+        I0 = kwargs['I0']
+        TT_ctrl = kwargs["TT_ctrl"] #pid or leakyintegrator 
+        HO_ctrl = kwargs["HO_ctrl"] #pid or leakyintegrator 
+        
+        # matrix vector multiplication for TT and HO control on some modal basis 
+        sig = process_zwfs_signal( i, I0, zwfs_ns.pupil_regions.pupil_filt ) # I0_theory/ np.mean(I0_theory) #
+
+        e_TT = zwfs_ns.reco.I2M_TT @ sig
+
+        u_TT = TT_ctrl.process( e_TT )
+
+        c_TT = zwfs_ns.reco.M2C_TT @ u_TT 
+
+        e_HO = zwfs_ns.reco.I2M_HO @ sig
+
+        u_HO = HO_ctrl.process( e_HO )
+
+        c_HO = zwfs_ns.reco.M2C_HO @ u_HO 
+
+        delta_cmd = c_TT + c_HO
+        # safety 
+        if np.max( delta_cmd ) > 0.8: 
+            print( ' going badly.. ')
+      
+        # telemetry 
+        if record_telemetry :
+            zwfs_ns.telem.i_list.append( i )
+            zwfs_ns.telem.s_list.append( sig )
+            zwfs_ns.telem.e_TT_list.append( e_TT )
+            zwfs_ns.telem.u_TT_list.append( u_TT )
+            zwfs_ns.telem.c_TT_list.append( c_TT )
+
+            zwfs_ns.telem.e_HO_list.append( e_HO )
+            zwfs_ns.telem.u_HO_list.append( u_HO )
+            zwfs_ns.telem.c_HO_list.append( c_HO )
+
+        return delta_cmd
+            
+    elif method == 'zonal_interp_no_projection':
+          
+        N0_dm = kwargs['N0_dm']
+        HO_ctrl = kwargs["HO_ctrl"] #pid or leakyintegrator 
+        
+        i_dm = DM_registration.interpolate_pixel_intensities(image = i, pixel_coords = zwfs_ns.dm2pix_registration.actuator_coord_list_pixel_space)
+
+        # this should really be repeated each time its called - could be input 
+        #N0_dm = DM_registration.interpolate_pixel_intensities(image = N0, pixel_coords = zwfs_ns.dm2pix_registration.actuator_coord_list_pixel_space)
+        # act_filt_recommended here is used to filter N0 pixels to calculate average for normalization 
+        sig = zwfs_ns.reco.linear_zonal_model.process_signal( i_dm, N0_dm, zwfs_ns.reco.linear_zonal_model.act_filt_recommended )  #reco.i_dm / np.mean( N0[ N0 > np.mean( N0 ) ] )
+        
+        e_HO = zwfs_ns.reco.linear_zonal_model.apply( sig )[zwfs_ns.reco.linear_zonal_model.act_filt_recommended]
+     
+        u_HO = HO_ctrl.process( e_HO )
+        
+        # forcefully remove piston 
+        u_HO -= np.mean( u_HO )
+        
+        ## how best to build mode to command matrix for interpolation method when using select actuators (what happens to the rest?)
+        delta_cmd = np.zeros( len(zwfs_ns.dm.dm_flat ) )
+        delta_cmd[ zwfs_ns.reco.linear_zonal_model.act_filt_recommended ] = u_HO
+        ### -- we shoudl aim for something like this::: 
+        #zwfs_ns.reco.M2C_HO @ u_HO
+        
+        # telemetry 
+        if record_telemetry :
+            zwfs_ns.telem.i_list.append( i )
+            zwfs_ns.telem.i_dm_list.append( i_dm )
+            zwfs_ns.telem.s_list.append( sig )
+            zwfs_ns.telem.e_TT_list.append( np.zeros( len(e_HO) ) )
+            zwfs_ns.telem.u_TT_list.append( np.zeros( len(e_HO) ) )
+            zwfs_ns.telem.c_TT_list.append( np.zeros( len(delta_cmd) ) )
+
+            zwfs_ns.telem.e_HO_list.append( e_HO )
+            zwfs_ns.telem.u_HO_list.append( u_HO )
+            zwfs_ns.telem.c_HO_list.append( delta_cmd )
+            
+        return delta_cmd
+        
+    else:
+        raise TypeError('process_zwfs_intensity method name NOT FOUND!!!! ')
+        
+    
+    
+     
 # #### 
 
 # grid_dict = {

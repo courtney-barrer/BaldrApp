@@ -465,8 +465,8 @@ TT_vectors = gen_basis.get_tip_tilt_vectors()
 #zwfs_ns = bldr.construct_ctrl_matricies_from_IM(zwfs_ns,  method = 'Eigen_TT-HO', Smax = 50, TT_vectors = TT_vectors )
 zwfs_ns = bldr.construct_ctrl_matricies_from_IM(zwfs_ns,  method = 'Eigen_TT-HO', Smax = 20, TT_vectors = TT_vectors )
 
-#zwfs_ns = bldr.add_controllers( zwfs_ns, TT = 'PID', HO = 'leaky')
-zwfs_ns = bldr.add_controllers( zwfs_ns, TT = 'PID', HO = 'leaky')
+#zwfs_ns = bldr.add_controllers_for_MVM_TT_HO( zwfs_ns, TT = 'PID', HO = 'leaky')
+zwfs_ns = bldr.add_controllers_for_MVM_TT_HO( zwfs_ns, TT = 'PID', HO = 'leaky')
 
 #zwfs_ns = init_CL_simulation( zwfs_ns,  opd_internal, amp_input , basis, Nmodes, poke_amp, Smax )
             
@@ -482,6 +482,7 @@ zwfs_ns.ctrl.TT_ctrl.set_all_gains_to_zero()
 zwfs_ns.ctrl.HO_ctrl.set_all_gains_to_zero()
 
 close_after = 20
+kwargs = {"I0":zwfs_ns.reco.I0, "HO_ctrl": zwfs_ns.ctrl.HO_ctrl, "TT_ctrl": zwfs_ns.ctrl.TT_ctrl }
 for i in range(100):
     print(f'iteration {i}')
     if i > close_after : 
@@ -491,7 +492,8 @@ for i in range(100):
         zwfs_ns.ctrl.TT_ctrl.kp = 1 * np.ones( len(zwfs_ns.ctrl.TT_ctrl.kp) )
         zwfs_ns.ctrl.TT_ctrl.ki = 0.8 * np.ones( len(zwfs_ns.ctrl.TT_ctrl.ki) )
         
-    bldr.AO_iteration( opd_input, amp_input, opd_internal, zwfs_ns.reco.I0,  zwfs_ns, dm_disturbance, record_telemetry=True ,detector=detector)
+    
+    bldr.AO_iteration( opd_input, amp_input, opd_internal,  zwfs_ns, dm_disturbance,  record_telemetry=True , method = 'MVM-TT-HO', detector=detector, **kwargs)
 
 # Generate some data
 
@@ -662,8 +664,10 @@ class AOControlApp(QtWidgets.QWidget):
         self.run_loop()
 
     def run_AO_iteration(self):
+        
+        kwargs = {"I0":zwfs_ns.reco.I0, "HO_ctrl": zwfs_ns.ctrl.HO_ctrl, "TT_ctrl": zwfs_ns.ctrl.TT_ctrl }
         # Call the AO iteration function from your module
-        bldr.AO_iteration( opd_input, amp_input, opd_internal, zwfs_ns.reco.I0,  zwfs_ns, dm_disturbance, record_telemetry=True ,detector=detector)
+        bldr.AO_iteration( opd_input, amp_input, opd_internal,  zwfs_ns, dm_disturbance, record_telemetry=True , method = 'MVM-TT-HO', detector=detector, **kwargs)
 
 
         # Retrieve telemetry data

@@ -504,8 +504,9 @@ class AOControlApp(QtWidgets.QWidget):
          
          
         # Call the AO iteration function from your module
-        bldr.AO_iteration( opd_input, amp_input, opd_internal, zwfs_ns.reco.I0,  zwfs_ns, dm_disturbance, \
-            record_telemetry=True ,detector=detector, use_pyZelda=use_pyZelda)
+        kwargs = {"I0":zwfs_ns.reco.I0, "HO_ctrl": zwfs_ns.ctrl.HO_ctrl, "TT_ctrl": zwfs_ns.ctrl.TT_ctrl }
+        bldr.AO_iteration( opd_input, amp_input, opd_internal,  zwfs_ns, dm_disturbance, \
+            record_telemetry=True , method = 'MVM-TT-HO', detector=detector, use_pyZelda=use_pyZelda, **kwargs )
 
         # Retrieve telemetry data
         im_dm_dist = util.get_DM_command_in_2D(zwfs_ns.telem.dm_disturb_list[-1])
@@ -804,8 +805,8 @@ if __name__ == "__main__":
     #zwfs_ns = bldr.construct_ctrl_matricies_from_IM(zwfs_ns,  method = 'Eigen_TT-HO', Smax = 50, TT_vectors = TT_vectors )
     zwfs_ns = bldr.construct_ctrl_matricies_from_IM(zwfs_ns,  method = 'Eigen_TT-HO', Smax = 20, TT_vectors = TT_vectors )
 
-    #zwfs_ns = bldr.add_controllers( zwfs_ns, TT = 'PID', HO = 'pid')
-    zwfs_ns = bldr.add_controllers( zwfs_ns, TT = 'PID', HO = 'leaky')
+    #zwfs_ns = bldr.add_controllers_for_MVM_TT_HO( zwfs_ns, TT = 'PID', HO = 'pid')
+    zwfs_ns = bldr.add_controllers_for_MVM_TT_HO( zwfs_ns, TT = 'PID', HO = 'leaky')
 
     #zwfs_ns = init_CL_simulation( zwfs_ns,  opd_internal, amp_input , basis, Nmodes, poke_amp, Smax )
       
