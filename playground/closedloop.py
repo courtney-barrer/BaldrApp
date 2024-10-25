@@ -487,16 +487,16 @@ Strehl_0_list = []
 Strehl_1_list = []
 Strehl_2_list = []
 
-close_after = 20
-iterations = 40 
+close_after = 10
+iterations = 100
 for it in range(iterations) :
 
     print( it )
-    
+    print( kwargs['HO_ctrl'].integrals )
     if it == close_after:
 
-        kwargs["HO_ctrl"].kp = 1 * np.ones( v.kp.shape )
-        kwargs["HO_ctrl"].ki = 0 * np.ones( v.ki.shape )
+        kwargs["HO_ctrl"].kp = 0. * np.ones( v.kp.shape )
+        kwargs["HO_ctrl"].ki = 0.3 * np.ones( v.ki.shape )
         kwargs["HO_ctrl"].kd = 0 * np.ones( v.kd.shape )
     
     # roll screen
@@ -565,7 +565,7 @@ for it in range(iterations) :
 
 i = -1
 #im_dm_dist = np.array( [util.get_DM_command_in_2D( a ) for a in zwfs_ns.telem.dm_disturb_list] )
-im_phase = np.array( zwfs_ns.telem.field_phase ) 
+im_phase = np.array( [util.get_DM_command_in_2D(a) for a  in zwfs_ns.telem.i_dm_list ] ) # zwfs_ns.telem.field_phase ) 
 im_int = np.array( zwfs_ns.telem.i_list  ) 
 im_cmd = np.array( [util.get_DM_command_in_2D( a ) for a in (np.array(zwfs_ns.telem.c_TT_list) + np.array(zwfs_ns.telem.c_HO_list)  ) ] )
 
@@ -599,8 +599,11 @@ util.create_telem_mosaic([a[-1] for a in image_list], image_title_list, image_co
 util.display_images_with_slider(image_lists = image_list)
        
 
-
-
+# check with actuators go bad 
+tmpcmd = np.zeros(140)
+tmpcmd[zwfs_ns.reco.linear_zonal_model.act_filt_recommended] = zwfs_ns.telem.e_HO_list[-1]
+plt.imshow( util.get_DM_command_in_2D( tmpcmd ) )
+plt.imshow( util.get_DM_command_in_2D( tmpcmd ) ); plt.show()
 
 
 ### with eigenmodes 

@@ -68,8 +68,10 @@ class PIDController:
 
         for i in range(size):
             error = measured[i] - self.setpoint[i]  # same as rtc
-            self.integrals[i] += error
-            self.integrals[i] = np.clip(self.integrals[i], self.lower_limit[i], self.upper_limit[i])
+            
+            if self.ki[i] != 0: # ONLY INTEGRATE IF KI IS NONZERO!! 
+                self.integrals[i] += error
+                self.integrals[i] = np.clip(self.integrals[i], self.lower_limit[i], self.upper_limit[i])
 
             derivative = error - self.prev_errors[i]
             self.output[i] = (self.kp[i] * error +
@@ -2594,7 +2596,8 @@ def AO_iteration( opd_input, amp_input, opd_internal, zwfs_ns, dm_disturbance = 
     
     # SEND DM COMMAND 
     zwfs_ns.dm.current_cmd =  zwfs_ns.dm.dm_flat +  dm_disturbance - delta_cmd # c_HO - c_TT
-
+    #zwfs_ns.dm.current_cmd += dm_disturbance - delta_cmd
+    
     # only measure residual in the registered pupil on DM 
     residual =  (dm_disturbance - delta_cmd ) # c_HO - c_TT)
     rmse = np.nanstd( residual )
@@ -2857,7 +2860,8 @@ def fit_linear_zonal_model( zwfs_ns, opd_internal, iterations = 100, photon_flux
         plt.show()  
 
 
-    act_filt = np.array( R_list ) > pearson_R_threshold
+    # we filter a little tighter (4 actuator radius) because edge effects are bad 
+    act_filt = ( np.array( R_list ) > pearson_R_threshold ) * np.array( [x**2 + y**2 < 4**2 for x,y in zwfs_ns.grid.dm_coord.dm_coords])
     
     telem_ns.act_filt = act_filt
     telem_ns.pearson_R = np.array( R_list ) 
