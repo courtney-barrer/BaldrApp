@@ -482,6 +482,7 @@ zwfs_ns = bldr.reset_telemetry( zwfs_ns )
 N0_dm = DM_registration.interpolate_pixel_intensities(image = N0, pixel_coords = zwfs_ns.dm2pix_registration.actuator_coord_list_pixel_space) #DM_registration.interpolate_pixel_intensities(image = N0, pixel_coords = transform_dict['actuator_coord_list_pixel_space'])
 
 kwargs = {"N0_dm":N0_dm, "HO_ctrl": zonal_ctrl_dict['HO_ctrl']  } 
+phase_scaling_factor  = 0.2
 
 Strehl_0_list = []
 Strehl_1_list = []
@@ -495,9 +496,9 @@ for it in range(iterations) :
     print( kwargs['HO_ctrl'].integrals )
     if it == close_after:
 
-        kwargs["HO_ctrl"].kp = 0. * np.ones( v.kp.shape )
-        kwargs["HO_ctrl"].ki = 0.3 * np.ones( v.ki.shape )
-        kwargs["HO_ctrl"].kd = 0 * np.ones( v.kd.shape )
+        kwargs["HO_ctrl"].kp = 0. * np.ones( zonal_ctrl_dict['HO_ctrl'].kp.shape )
+        kwargs["HO_ctrl"].ki = 0.3 * np.ones( zonal_ctrl_dict['HO_ctrl'].ki.shape )
+        kwargs["HO_ctrl"].kd = 0 * np.ones( zonal_ctrl_dict['HO_ctrl'].kd.shape )
     
     # roll screen
     #for _ in range(10):
@@ -561,7 +562,7 @@ for it in range(iterations) :
     Strehl_1_list.append( Strehl_1 )
     Strehl_2_list.append( Strehl_2 )
 
-    print( Strehl_2 )
+    print( round(Strehl_0,2),round(Strehl_1,2) , round(Strehl_2,2) )
 
 i = -1
 #im_dm_dist = np.array( [util.get_DM_command_in_2D( a ) for a in zwfs_ns.telem.dm_disturb_list] )
