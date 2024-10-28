@@ -1,5 +1,5 @@
 
-import numpy as np
+import numpy as np #(version 2.1.1 works but incompatiple with numba)
 import matplotlib.pyplot as plt
 from matplotlib.widgets import Slider
 from scipy.stats import pearsonr
@@ -9,6 +9,7 @@ from sklearn.linear_model import LinearRegression
 import importlib # reimport package after edits: importlib.reload(bldr)
 import os
 import datetime
+import scipy.interpolate as interpolate
 # from courtney-barrer's fork of pyzelda
 import pyzelda.zelda as zelda
 import pyzelda.ztools as ztools
@@ -442,13 +443,109 @@ print( f'WITH EIGENMODE strehl before = {np.exp(- (2*np.pi/ zwfs_ns.optics.wvl0 
 ###
 ### TRY OPTIMIZE GAINS
 #### 
+from scipy.signal import welch, TransferFunction, bode, csd
+from scipy.optimize import minimize
+
+# get open loop data (get timestamps too)
+OL_data = bldr.roll_screen_on_dm( zwfs_ns=zwfs_ns,  Nmodes_removed=14, ph_scale = 0.2, \
+    actuators_per_iteration = 0.5, number_of_screen_initiations= 1000, opd_internal=opd_internal)
+
+
+# project to modes 
+zonal_ctrl_dict = bldr.add_controllers_for_zonal_interp_no_projection( zwfs_ns ,  HO = 'PID' , return_controller =True) # HO = 'leaky'
+zonal_ctrl_dict['HO_ctrl'].kp = np.ones( len( zonal_ctrl_dict['HO_ctrl'].kp ) ) # set kp to one (ki, kd to zero) so u_HO = e_HO.
+N0_dm = DM_registration.interpolate_pixel_intensities(image = OL_data.N0[0], pixel_coords = zwfs_ns.dm2pix_registration.actuator_coord_list_pixel_space) #DM_registration.interpolate_pixel_intensities(image = N0, pixel_coords = transform_dict['actuator_coord_list_pixel_space'])
+kwargs = {"N0_dm":N0_dm, "HO_ctrl": zonal_ctrl_dict['HO_ctrl']  } 
+bldr.reset_telemetry( zwfs_ns )
+for i in OL_data.i: # from the intensities we can process the control signals which are appended to the telemetry namespace in zwfs_ns
+    _ = bldr.process_zwfs_intensity(  i, zwfs_ns=zwfs_ns, method='zonal_interp_no_projection', record_telemetry = True, **kwargs )
+
+# read in telemetry data
+dm_cmd_filt = np.array( [c[zwfs_ns.reco.linear_zonal_model.act_filt_recommended ] for c in np.array( OL_data.dm_cmd) ])
+e_HO = np.array( zwfs_ns.telem.e_HO_list ) 
+t_dm0 = np.array( OL_data.t_dm0 ) # before DM command sent 
+t_dm1 = np.array( OL_data.t_dm1 ) # after DM command sent 
+t_i0 = np.array( OL_data.t_i0 ) # before readout command sent 
+t_i1 = np.array( OL_data.t_i1 ) # after readout command sent
+
+print( f'average time spent putting DM shape on wavespace : {np.mean( t_dm1 - t_dm0  )}')
+print( f'average time spent detecting the field : {np.mean( t_i1 - t_i0) }')
+print( f'mean processing time to propagate to detector plane through ZWFS : {np.mean(t_i0 - t_dm1)}') # mean processing time to propagate to detector plane through ZWFS 
+
+# timestamps interpoalte to commoon grid
+
+t0 = np.min( [ t_dm0, t_dm1, t_i0, t_i1 ] )
+t1 = np.max( [ t_dm0, t_dm1, t_i0, t_i1 ] )
+dt = np.min( [ np.diff(t_dm0), np.diff(t_dm1), np.diff( t_i0), np.diff(t_i1) ] )
+
+t = np.arange( t0, t1, dt )
+dt = np.mean( np.diff( t ) )
+fs = 1 / dt 
+
+e_HO_interp = np.zeros( e_HO.shape )
+dm_cmd_interp = np.zeros( dm_cmd_filt.shape )
+for i in range( e_HO.shape[1] ):
+    fdm = interpolate.interp1d( t_dm0, dm_cmd_filt[:,i], bounds_error=None, fill_value='extrapolate' )
+    fi = interpolate.interp1d( t_i0, e_HO[:,i] , bounds_error=None, fill_value='extrapolate')
+    e_HO_interp[:,i] = fi( e_HO[:,i]  )
+    dm_cmd_interp[:,i] = fdm( dm_cmd_filt[:,i] )
+# iterpolate onto same even sized grid 
 
 
 
+# zonal_ctrl_dict = bldr.add_controllers_for_zonal_interp_no_projection( zwfs_ns ,  HO = 'PID' , return_controller =True) # HO = 'leaky'
+# zonal_ctrl_dict['HO_ctrl'].kp = 1 * np.ones( len( zonal_ctrl_dict['HO_ctrl'].kp ) ) 
+# zonal_ctrl_dict['HO_ctrl'].ki = 0.1 * np.ones( len( zonal_ctrl_dict['HO_ctrl'].kp ) ) 
+# zonal_ctrl_dict['HO_ctrl'].plot_bode( mode_index=10 )
+
+
+i = 1
+f, cpsd = csd(dm_cmd_filt[:,i], e_HO[:,i], fs=fs)
+_, psd_in = welch(dm_cmd_filt[:,i], fs=fs)
+
+plt.loglog ( f, abs(cpsd)**2 ); plt.show()
+
+
+KP, KI = np.meshgrid( np.linspace( 0. , 1 , 100), np.linspace( 0 , 1 , 100))
+kd = 0
+fs = 1
+delay = 0.1
+err = []
+
+
+for kp, ki in zip( KP.reshape(-1), KI.reshape(-1) ):
+
+    # plant TF  
+    G = cpsd / psd_in #response_psd[1] / disturbance_psd[1]
+    
+    # feedback TF  Interpolate model magnitude to match disturbance frequencies for comparison
+    num = [kd, kp, ki]  # PID terms in s-domain
+    den = [1, 0]        # Integral term in s-domain
+    tf_pid = TransferFunction(num, den)
+    w, mag, phase = bode( tf_pid )
+    
+    
+    H_mag = np.interp(f, w/(2*np.pi), 10**(mag/20) )
+    H_phase = np.interp(f, w/(2*np.pi), np.pi * phase/180 )
+
+    H = H_mag * np.exp(1j * H_phase)
+    
+    S_TF = 1 / ( 1 + G * H )  # sensitivity TF 
+    N_TF = G / ( 1 + G * H ) # Noise Transfer Function (N)*
+    # Mean squared error between model PSD and actual response PSD
+    error = np.sum( psd_in * abs( S_TF )**2 ) 
+    err.append( error )
+
+kp_opt, ki_opt = np.unravel_index( np.argmin( err ) , KP.shape )
+plt.figure(); plt.semilogy( err );plt.show()
+plt.figure(); plt.imshow( np.log10( np.array(err).reshape( KP.shape) )) ;plt.colorbar(); plt.show()
+plt.loglog( f, abs( CL_TF )**2 ); plt.show()
 
 
 
+# calculate the plant transfer function
 
+# add pure delay to the plant transfer function 
 
 
 
@@ -469,7 +566,7 @@ print( f'WITH EIGENMODE strehl before = {np.exp(- (2*np.pi/ zwfs_ns.optics.wvl0 
 # HO_ctrl = bldr.PIDController(kp, ki, kd, upper_limit_pid, lower_limit_pid, setpoint)
 
 #HO_ctrl.reset()
-zonal_ctrl_dict = bldr.add_controllers_for_zonal_interp_no_projection( zwfs_ns ,  HO = 'PID' , return_controller =True)
+zonal_ctrl_dict = bldr.add_controllers_for_zonal_interp_no_projection( zwfs_ns ,  HO = 'PID' , return_controller =True) # HO = 'leaky'
 # init all gains to 0
 
 amp_input = photon_flux_per_pixel_at_vlti**0.5 * zwfs_ns.pyZelda.pupil
@@ -482,23 +579,28 @@ zwfs_ns = bldr.reset_telemetry( zwfs_ns )
 N0_dm = DM_registration.interpolate_pixel_intensities(image = N0, pixel_coords = zwfs_ns.dm2pix_registration.actuator_coord_list_pixel_space) #DM_registration.interpolate_pixel_intensities(image = N0, pixel_coords = transform_dict['actuator_coord_list_pixel_space'])
 
 kwargs = {"N0_dm":N0_dm, "HO_ctrl": zonal_ctrl_dict['HO_ctrl']  } 
-phase_scaling_factor  = 0.2
+phase_scaling_factor  = 0.001
 
 Strehl_0_list = []
 Strehl_1_list = []
 Strehl_2_list = []
+Strehl_est_list = []
 
-close_after = 10
+close_after = 5
 iterations = 100
+
+# open / close with strehl estimate 
+# project out piston / tip/tilt
+# optimize gains!!! 
 for it in range(iterations) :
 
     print( it )
-    print( kwargs['HO_ctrl'].integrals )
+    #print( kwargs['HO_ctrl'].integrals ) # <- this was the bug previously
     if it == close_after:
 
         kwargs["HO_ctrl"].kp = 0. * np.ones( zonal_ctrl_dict['HO_ctrl'].kp.shape )
-        kwargs["HO_ctrl"].ki = 0.3 * np.ones( zonal_ctrl_dict['HO_ctrl'].ki.shape )
-        kwargs["HO_ctrl"].kd = 0 * np.ones( zonal_ctrl_dict['HO_ctrl'].kd.shape )
+        kwargs["HO_ctrl"].ki = 0.8 * np.ones( zonal_ctrl_dict['HO_ctrl'].ki.shape )
+        #kwargs["HO_ctrl"].kd = 0 * np.ones( zonal_ctrl_dict['HO_ctrl'].kd.shape )
     
     # roll screen
     #for _ in range(10):
@@ -534,15 +636,22 @@ for it in range(iterations) :
     Strehl_2 = np.exp( - np.var( ao_2[zwfs_ns.pyZelda.pupil>0.5]) ) # strehl after baldr     
 
     
-    bldr.AO_iteration( opd_input=bldr_opd_map, amp_input=amp_input, opd_internal=0*opd_internal, zwfs_ns=zwfs_ns, dm_disturbance = np.zeros(140),\
+    i = bldr.AO_iteration( opd_input=bldr_opd_map, amp_input=amp_input, opd_internal=0*opd_internal, zwfs_ns=zwfs_ns, dm_disturbance = np.zeros(140),\
         record_telemetry=True, method='zonal_interp_no_projection', detector=zwfs_ns.detector, obs_intermediate_field=True, \
             use_pyZelda = True, include_shotnoise=True, **kwargs)
 
+    S_est = strehl_model.apply_model( np.array( [i / np.mean( N0[ strehl_model.detector_pupilmask ] )] ) ) 
+    Strehl_est_list.append( S_est )
+    
+    if  S_est < 0.2:
+        zonal_ctrl_dict['HO_ctrl'].reset()
+        zwfs_ns.dm.current_cmd = zwfs_ns.dm.dm_flat.copy()
+    
     # propagate to the detector plane
-    # Ic = photon_flux_per_pixel_at_vlti * zwfs_ns.pyZelda.propagate_opd_map( bldr_opd_map , wave = zwfs_ns.optics.wvl0 )
+    #Ic = photon_flux_per_pixel_at_vlti * zwfs_ns.pyZelda.propagate_opd_map( bldr_opd_map , wave = zwfs_ns.optics.wvl0 )
     
     # # detect the intensity
-    # i = bldr.detect( Ic, binning = (zwfs_ns.detector.binning, zwfs_ns.detector.binning), qe=zwfs_ns.detector.qe , dit=zwfs_ns.detector.dit,\
+    #i = bldr.detect( Ic, binning = (zwfs_ns.detector.binning, zwfs_ns.detector.binning), qe=zwfs_ns.detector.qe , dit=zwfs_ns.detector.dit,\
     #     ron= zwfs_ns.detector.ron, include_shotnoise=True, spectral_bandwidth = zwfs_ns.stellar.bandwidth )
 
 
@@ -562,7 +671,8 @@ for it in range(iterations) :
     Strehl_1_list.append( Strehl_1 )
     Strehl_2_list.append( Strehl_2 )
 
-    print( round(Strehl_0,2),round(Strehl_1,2) , round(Strehl_2,2) )
+    print( round(Strehl_0,2), round(Strehl_1,2) , round(Strehl_2,2), 'S2 est ', S_est )
+
 
 i = -1
 #im_dm_dist = np.array( [util.get_DM_command_in_2D( a ) for a in zwfs_ns.telem.dm_disturb_list] )

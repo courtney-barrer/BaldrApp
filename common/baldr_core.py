@@ -1,10 +1,13 @@
-import numpy as np
+import numpy as np ##(version 2.1.1 works but incompatiple with numba)
+from numba import njit
 import os
 import matplotlib.pyplot as plt
 from types import SimpleNamespace
 from scipy.stats import pearsonr
+from scipy.signal import TransferFunction, bode
 import datetime 
 from astropy.io import fits 
+import time
 import pickle
 import pyzelda.zelda as zelda
 import pyzelda.ztools as ztools
@@ -91,7 +94,61 @@ class PIDController:
         self.prev_errors.fill(0.0)
         self.output.fill(0.0)
         
+    def get_transfer_function(self, mode_index=0):
+        """
+        Returns the transfer function for the specified mode index.
+
+        Parameters:
+        - mode_index: Index of the mode for which to get the transfer function (default is 0).
         
+        Returns:
+        - scipy.signal.TransferFunction: Transfer function object.
+        """
+        if mode_index >= len(self.kp):
+            raise IndexError("Mode index out of range.")
+        
+        # Extract gains for the selected mode
+        kp = self.kp[mode_index]
+        ki = self.ki[mode_index]
+        kd = self.kd[mode_index]
+        
+        # Numerator and denominator for the PID transfer function: G(s) = kp + ki/s + kd*s
+        # Which can be expressed as G(s) = (kd*s^2 + kp*s + ki) / s
+        num = [kd, kp, ki]  # coefficients of s^2, s, and constant term
+        den = [1, 0]        # s term in the denominator for integral action
+        
+        return TransferFunction(num, den)
+
+    def plot_bode(self, mode_index=0):
+        """
+        Plots the Bode plot for the transfer function of a specified mode.
+
+        Parameters:
+        - mode_index: Index of the mode for which to plot the Bode plot (default is 0).
+        """
+        # Get transfer function
+        tf = self.get_transfer_function(mode_index)
+
+        # Generate Bode plot data
+        w, mag, phase = bode(tf)
+        
+        # Plot magnitude and phase
+        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(8, 6))
+        
+        # Magnitude plot
+        ax1.semilogx(w, mag)  # Bode magnitude plot
+        ax1.set_title(f"Bode Plot for Mode {mode_index}")
+        ax1.set_ylabel("Magnitude (dB)")
+        ax1.grid(True, which="both", linestyle="--", linewidth=0.5)
+
+        # Phase plot
+        ax2.semilogx(w, phase)  # Bode phase plot
+        ax2.set_xlabel("Frequency (rad/s)")
+        ax2.set_ylabel("Phase (degrees)")
+        ax2.grid(True, which="both", linestyle="--", linewidth=0.5)
+
+        plt.tight_layout()
+        plt.show()
 
 class LeakyIntegrator:
     def __init__(self, ki=None, lower_limit=None, upper_limit=None, kp=None):
@@ -157,7 +214,8 @@ class LeakyIntegrator:
     def reset(self):
         self.output = np.zeros(len(self.ki))
 
-
+        
+        
 class detector :
     def __init__(self, dit, ron, qe, binning):
         """_summary_
@@ -551,10 +609,105 @@ def save_telemetry( telemetry_ns , savename = None, overwrite=True, return_fits 
         if return_fits:
             return hdul
 
+
+def roll_screen_on_dm( zwfs_ns,  Nmodes_removed, ph_scale = 0.2,  actuators_per_iteration = 0.5, number_of_screen_initiations= 100, opd_internal=None):
+
+    t0 = time.time()
+    
+    print( f'Rolling screen on DM with {Nmodes_removed} modes removed')
+    # flux from configuration
+    photon_flux_per_pixel_at_vlti = zwfs_ns.throughput.vlti_throughput * (np.pi * (zwfs_ns.grid.D/2)**2) / (np.pi * zwfs_ns.pyZelda.pupil_diameter/2)**2 * util.magnitude_to_photon_flux(magnitude=zwfs_ns.stellar.magnitude, band = zwfs_ns.stellar.waveband, wavelength= 1e9*zwfs_ns.optics.wvl0)
+    
+    amp_input = photon_flux_per_pixel_at_vlti**0.5 * zwfs_ns.pyZelda.pupil
+    
+    if opd_internal is None:
+        opd_internal = 0* amp_input
+        
+
+    nx_size = int( zwfs_ns.dm.Nact_x / actuators_per_iteration )
+    
+    scrn = phasescreens.PhaseScreenKolmogorov(nx_size=nx_size, pixel_scale = zwfs_ns.grid.D / nx_size, r0=zwfs_ns.atmosphere.r0, L0=zwfs_ns.atmosphere.l0, random_seed=None)
+    opd_input = 0*amp_input
+    I0 = get_I0(opd_input ,  amp_input, opd_internal, zwfs_ns,  detector=zwfs_ns.detector, include_shotnoise=True , use_pyZelda = True)
+    
+    N0 = get_N0(opd_input , amp_input, opd_internal, zwfs_ns,  detector=zwfs_ns.detector, include_shotnoise=True , use_pyZelda = True) 
+    
+    # first stage AO 
+    basis_cropped = ztools.zernike.zernike_basis(nterms=Nmodes_removed+2, npix=zwfs_ns.pyZelda.pupil_diameter)
+    # we have padding around telescope pupil (check zwfs_ns.pyZelda.pupil.shape and zwfs_ns.pyZelda.pupil_diameter) 
+    # so we need to put basis in the same frame  
+    basis_template = np.zeros( zwfs_ns.pyZelda.pupil.shape )
+    basis = np.array( [ util.insert_concentric( np.nan_to_num(b, 0), basis_template) for b in basis_cropped] )
+
+    pupil_disk = basis[0] # we define a disk pupil without secondary - useful for removing Zernike modes later
+
+    telemetry = {
+        'I0':[I0],
+        'N0':[N0],
+        'dm_cmd':[],
+        'i':[],
+        't_dm0':[],
+        't_dm1':[],
+        't_i0':[],
+        't_i1':[]
+    }
+    
+    
+    telem_ns = SimpleNamespace(**telemetry)
+
+    for it in range( number_of_screen_initiations):
+
+        print( f'Iteration {it} of {number_of_screen_initiations}')
+        scrn.add_row()
+        
+        telem_ns.t_dm0.append( time.time() - t0 )
+        #scaling_factor=0.05, drop_indicies = [0, 11, 11 * 12, -1] , plot_cmd=False
+        zwfs_ns.dm.current_cmd =  util.create_phase_screen_cmd_for_DM(scrn,  scaling_factor=ph_scale , drop_indicies = [0, 11, 11 * 12, -1] , plot_cmd=False) 
+        
+        opd_current_dm = get_dm_displacement( command_vector= zwfs_ns.dm.current_cmd   , gain=zwfs_ns.dm.opd_per_cmd, \
+            sigma= zwfs_ns.grid.dm_coord.act_sigma_wavesp, X=zwfs_ns.grid.wave_coord.X, Y=zwfs_ns.grid.wave_coord.Y,\
+                x0=zwfs_ns.grid.dm_coord.act_x0_list_wavesp, y0=zwfs_ns.grid.dm_coord.act_y0_list_wavesp )
+        
+        phi = zwfs_ns.grid.pupil_mask  *  2*np.pi / zwfs_ns.optics.wvl0 * (  opd_current_dm   )
+        
+        pupil_disk_cropped, atm_in_pupil = util.crop_pupil(pupil_disk, phi)
+            
+        # test project onto Zernike modes 
+        mode_coefficients = np.array( ztools.zernike.opd_expand(atm_in_pupil * pupil_disk_cropped,\
+            nterms=len(basis), aperture = pupil_disk_cropped))
+
+        # do the reconstruction for N modes
+        reco = np.sum( mode_coefficients[:Nmodes_removed,np.newaxis, np.newaxis] * basis[:Nmodes_removed,:,:] ,axis = 0) 
+
+        # remove N modes 
+        ao_1 =  pupil_disk * (phi - reco) 
+    
+        # convert to OPD map
+        opd_map = zwfs_ns.pyZelda.pupil * zwfs_ns.optics.wvl0 / (2*np.pi) * (ao_1  + opd_internal) 
+
+        telem_ns.t_dm1.append( time.time() - t0 )
+        
+        Ic = photon_flux_per_pixel_at_vlti * zwfs_ns.pyZelda.propagate_opd_map( opd_map , wave = zwfs_ns.optics.wvl0 )
+        
+        telem_ns.t_i0.append( time.time() - t0 )
+        i = detect( Ic, binning = (zwfs_ns.detector.binning, zwfs_ns.detector.binning), qe=zwfs_ns.detector.qe , \
+                dit=zwfs_ns.detector.dit, ron= zwfs_ns.detector.ron, include_shotnoise=True, spectral_bandwidth = zwfs_ns.stellar.bandwidth )
+        telem_ns.t_i1.append( time.time() - t0 )
+        
+        telem_ns.i.append( i )
+        telem_ns.dm_cmd.append( zwfs_ns.dm.current_cmd )
+        
+    return telem_ns
+
+
+
+
 def calibrate_strehl_model( zwfs_ns, save_results_path = None, train_fraction = 0.6, correlation_threshold = 0.5,\
     number_of_screen_initiations = 50, scrn_scaling_grid = np.logspace(-1,0.2,5) , model_type = 'PixelWiseStrehlModel'):
     """_summary_
 
+    TO DO - did not include internal aberrations here 
+    
     Training a linear model to map a subset of pixel intensities to Strehl Ratio in a Zernike wavefront sensor. 
     The model is trained by applying various instances of scaled Kolmogorov phasescreens on the DM and measuring the ZWFS intensity response
     The pixel intensities are normalized by the average clear (no phasemask) pupil intensity measured in the detector within the active pupil region.   
@@ -753,7 +906,6 @@ def calibrate_strehl_model( zwfs_ns, save_results_path = None, train_fraction = 
 
     # SNR 
     SNR = np.mean( telem_ns.i ,axis=0 ) / np.std( telem_ns.i ,axis=0  )
-
 
     if save_results_path is not None:
         util.nice_heatmap_subplots( im_list = [ correlation_map ] , cbar_label_list = ['Pearson R'] , \
@@ -1046,14 +1198,115 @@ def get_grids( wavelength = 1.65e-6 , F_number = 21.2, mask_diam = 1.2, diameter
     return pupil_padded, mask  
 
 
-
-
-# Define Gaussian function for actuator displacement
+@njit
 def gaussian_displacement(c_i, sigma_i, x, y, x0, y0):
     """Compute Gaussian displacement for a single actuator."""
     return c_i * np.exp(-((x - x0)**2 + (y - y0)**2) / sigma_i**2)
+    #return c_i / (1 + ((x - x0)**2 + (y - y0)**2) / (0.7*sigma_i)**2) #lorentzian approximation to speed things up - good blanace accuracy and speed
+    #return np.clip(c_i * (1 - ((x - x0)**2 + (y - y0)**2)/ (1.2 * sigma_i**2)), a_min=0, a_max=None) #quadratic
+    #return c_i * ( (x - x0)**2 + (y - y0)**2 <= sigma_i**2 ) # box profile'
 
+# t0 = time.time()
+# OL_data = bldr.roll_screen_on_dm( zwfs_ns=zwfs_ns,  Nmodes_removed=14, ph_scale = 0.2, actuators_per_iteration = 0.5, number_of_screen_initiations= 200, opd_internal=opd_internal)
+# t1 = time.time()
+# print( t1- t0)
+# x = np.linspace(-10,10, 100)
+# c_i=1; x0=0; y = 0; y0 = 0; sigma_i = 2
+# x = np.linspace(-10,10, 100)
+# plt.figure();
+# plt.plot( x , c_i / (1 + ((x - x0)**2 + (y - y0)**2) / (0.7*sigma_i)**2) , label='lorentizian approx') 
+# plt.plot( x , c_i * np.exp(-((x - x0)**2 + (y - y0)**2) / sigma_i**2) , label='gaussian') 
+# plt.plot( x , np.clip(c_i * (1 - ((x - x0)**2 + (y - y0)**2)/ ( sigma_i**2) ) , a_min=0, a_max=None) ,label = 'quadratic')
+# plt.plot( x , c_i * ( (x - x0)**2 + (y - y0)**2 <= sigma_i**2 ) ,label = 'box profile')
+# plt.legend()
+# plt.show()
 
+# WE USE GLOBAL LOOKUP TABLES TO MAKE DM INFLUENCE FUNCTION CALCULATION FASTER!!! 
+# RE-CONFIGURE USING  update_sigma(new_sigma) (e.g. bldr.update_sigma( zwfs_ns.dm.actuator_coupling_factor ))
+
+# # Global parameters for the Gaussian
+# SIGMA = 1.0            # Standard deviation for Gaussian
+# MAX_RADIUS = 5.0 * SIGMA      # Max radius for lookup table
+# RESOLUTION = 100       # Resolution of lookup table
+
+# # Global variable for the lookup table
+# LOOKUP_DICT = None
+
+# def initialize_lookup_table():
+#     """Initialize or reinitialize the global lookup table based on current parameters."""
+#     global LOOKUP_DICT
+#     MAX_RADIUS = 5.0 * SIGMA
+#     LOOKUP_DICT = generate_gaussian_lookup_dict(SIGMA, MAX_RADIUS, RESOLUTION)
+
+# def generate_gaussian_lookup_dict(sigma, max_radius, resolution=100):
+#     """
+#     Generate a dictionary-based lookup table for Gaussian values over squared distances.
+    
+#     Args:
+#         sigma (float): The standard deviation of the Gaussian.
+#         max_radius (float): The maximum radius to calculate values for.
+#         resolution (int): Number of points in the radius grid. Higher values improve accuracy.
+
+#     Returns:
+#         dict: Dictionary with squared radius as keys and Gaussian values as values.
+#     """
+#     radius_values = np.linspace(0, max_radius, resolution)
+#     squared_radius_values = radius_values**2
+#     gaussian_values = np.exp(-squared_radius_values / (2 * sigma**2))
+    
+#     lookup_dict = {round(sq_radius, 5): value for sq_radius, value in zip(squared_radius_values, gaussian_values)}
+#     return lookup_dict
+
+# def get_nearest_gaussian_value(sq_distance):
+#     """
+#     Get the Gaussian value from the global lookup dictionary for a given squared distance.
+    
+#     Args:
+#         sq_distance (float): Squared distance.
+
+#     Returns:
+#         float: Gaussian value for the nearest squared distance in the lookup.
+#     """
+#     rounded_distance = round(sq_distance, 5)
+#     if rounded_distance in LOOKUP_DICT:
+#         return LOOKUP_DICT[rounded_distance]
+#     return LOOKUP_DICT[min(LOOKUP_DICT.keys(), key=lambda k: abs(k - rounded_distance))]
+
+# def get_dm_displacement(command_vector, gain, X, Y, x0, y0, sigma=None):
+#     """
+#     Calculate a displacement map for a deformable mirror using a dictionary lookup for Gaussian values.
+    
+#     Args:
+#         command_vector (1D array): Commands for each actuator.
+#         gain (float): Scaling factor for commands.
+#         X (2D array): X coordinates of the space you want the DM to be in (e.g. pixel space)
+#         Y (2D array): Y coordinates of the space you want the DM to be in (e.g. pixel space)
+#         x0 (1D array): X-coordinates of actuator centers.
+#         y0 (1D array): Y-coordinates of actuator centers.
+#         sigma is the standard deviation of the Gaussian. If None, use the global SIGMA value.
+        
+#         # TO DO - WE DID NOT INCLUDE IF sigma != None ...
+        
+#     Returns:
+#         2D array: Displacement map of DM in X, Y space.
+#     """
+#     displacement_map = np.zeros(X.shape)
+#     for i in range(len(command_vector)):
+#         sq_distances = (X - x0[i])**2 + (Y - y0[i])**2
+#         for j in range(X.shape[0]):
+#             for k in range(X.shape[1]):
+#                 displacement_map[j, k] += gain * command_vector[i] * get_nearest_gaussian_value(sq_distances[j, k])
+#     return displacement_map
+
+# # Initialize the lookup table once on module load
+# initialize_lookup_table()
+
+# # Example usage of changing SIGMA and reinitializing
+# def update_sigma(new_sigma):
+#     """Update SIGMA and regenerate the lookup table."""
+#     global SIGMA
+#     SIGMA = new_sigma
+#     initialize_lookup_table()
 
 
 
@@ -1223,7 +1476,7 @@ def convert_to_serializable(obj):
         return obj  # Base case: return the object itself if it doesn't need conversion
 
 
-
+@njit(parallel=True)
 def get_dm_displacement( command_vector, gain, sigma, X, Y, x0, y0 ):
     """_summary_
 
@@ -1241,8 +1494,9 @@ def get_dm_displacement( command_vector, gain, sigma, X, Y, x0, y0 ):
     """
     displacement_map = np.zeros( X.shape )
     for i in range( len( command_vector )):   
-        #print(i)
-        displacement_map += gaussian_displacement( c_i = gain * command_vector[i] , sigma_i=sigma[i], x=X, y=Y, x0=x0[i], y0=y0[i] )
+       #print(i)
+       displacement_map += gaussian_displacement( c_i = gain * command_vector[i] , sigma_i=sigma[i], x=X, y=Y, x0=x0[i], y0=y0[i] )
+    
     return displacement_map 
 
 
@@ -2605,6 +2859,7 @@ def AO_iteration( opd_input, amp_input, opd_internal, zwfs_ns, dm_disturbance = 
 
     # telemetry 
     if record_telemetry :
+        ## these other ones get don in process_zwfs_intensity
         # zwfs_ns.telem.i_list.append( i )
         # zwfs_ns.telem.s_list.append( sig )
         # zwfs_ns.telem.e_TT_list.append( e_TT )
@@ -2625,7 +2880,7 @@ def AO_iteration( opd_input, amp_input, opd_internal, zwfs_ns, dm_disturbance = 
             zwfs_ns.telem.field_phase.append( phi )
             zwfs_ns.telem.strehl.append( strehl )
             
-
+    return i
 
 class my_lin_fit:
     # Rows are samples, columns are features
@@ -2861,7 +3116,7 @@ def fit_linear_zonal_model( zwfs_ns, opd_internal, iterations = 100, photon_flux
 
 
     # we filter a little tighter (4 actuator radius) because edge effects are bad 
-    act_filt = ( np.array( R_list ) > pearson_R_threshold ) * np.array( [x**2 + y**2 < 4**2 for x,y in zwfs_ns.grid.dm_coord.dm_coords])
+    act_filt = ( np.array( R_list ) > pearson_R_threshold ) #* np.array( [x**2 + y**2 < 4**2 for x,y in zwfs_ns.grid.dm_coord.dm_coords])
     
     telem_ns.act_filt = act_filt
     telem_ns.pearson_R = np.array( R_list ) 
@@ -2990,7 +3245,7 @@ def process_zwfs_intensity( i, zwfs_ns, method, record_telemetry = False , **kwa
         return delta_cmd
         
     else:
-        raise TypeError('process_zwfs_intensity method name NOT FOUND!!!! ')
+        raise TypeError('process_zwfs_intensity method name NOT FOUND!!!!')
         
     
     

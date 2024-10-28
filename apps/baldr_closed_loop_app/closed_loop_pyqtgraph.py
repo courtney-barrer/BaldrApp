@@ -505,7 +505,7 @@ class AOControlApp(QtWidgets.QWidget):
          
         # Call the AO iteration function from your module
         kwargs = {"I0":zwfs_ns.reco.I0, "HO_ctrl": zwfs_ns.ctrl.HO_ctrl, "TT_ctrl": zwfs_ns.ctrl.TT_ctrl }
-        bldr.AO_iteration( opd_input, amp_input, opd_internal,  zwfs_ns, dm_disturbance, \
+        _ = bldr.AO_iteration( opd_input, amp_input, opd_internal,  zwfs_ns, dm_disturbance, \
             record_telemetry=True , method = 'MVM-TT-HO', detector=detector, use_pyZelda=use_pyZelda, **kwargs )
 
         # Retrieve telemetry data
