@@ -1,5 +1,5 @@
 import numpy as np ##(version 2.1.1 works but incompatiple with numba)
-from numba import njit
+#from numba import njit
 import os
 import matplotlib.pyplot as plt
 from types import SimpleNamespace
@@ -1198,7 +1198,7 @@ def get_grids( wavelength = 1.65e-6 , F_number = 21.2, mask_diam = 1.2, diameter
     return pupil_padded, mask  
 
 
-@njit
+#@njit
 def gaussian_displacement(c_i, sigma_i, x, y, x0, y0):
     """Compute Gaussian displacement for a single actuator."""
     return c_i * np.exp(-((x - x0)**2 + (y - y0)**2) / sigma_i**2)
@@ -1476,7 +1476,7 @@ def convert_to_serializable(obj):
         return obj  # Base case: return the object itself if it doesn't need conversion
 
 
-@njit(parallel=True)
+#@njit(parallel=True)
 def get_dm_displacement( command_vector, gain, sigma, X, Y, x0, y0 ):
     """_summary_
 

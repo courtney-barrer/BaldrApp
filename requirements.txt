@@ -55,7 +55,9 @@ pyqtgraph==0.13.7
 python-dateutil==2.9.0.post0
 pytz==2024.2
 PyYAML==6.0.2
--e git+https://github.com/courtney-barrer/pyZELDA.git@7060cfda29bfbc9d7cf130c9c1872e9266bccd0d#egg=pyzelda
+-e git+https://github.com/courtney-barrer/pyZELDA.git@932c8dada35b4073549cbd19f10b6ee4566cfd74#egg=pyzelda
+#-e git+https://github.com/courtney-barrer/pyZELDA.git@c4f26c708d9ad49de88e94f7db08d6b2703e56b3#egg=pyzelda
+#-e git+https://github.com/courtney-barrer/pyZELDA.git@7060cfda29bfbc9d7cf130c9c1872e9266bccd0d#egg=pyzelda
 referencing==0.35.1
 requests==2.32.3
 rich==13.8.1

@@ -756,7 +756,7 @@ if __name__ == "__main__":
     use_pyZelda = False
 
     wvl0=1.25e-6
-    config_ini = '/home/benja/Documents/BALDR/BaldrApp/configurations/BALDR_UT_J3.ini'
+    config_ini = 'configurations/BALDR_UT_J3.ini'#'/home/benja/Documents/BALDR/BaldrApp/configurations/BALDR_UT_J3.ini'
     zwfs_ns = bldr.init_zwfs_from_config_ini( config_ini=config_ini , wvl0=wvl0)
 
     opd_input = 0 * zwfs_ns.grid.pupil_mask *  np.random.randn( *zwfs_ns.grid.pupil_mask.shape)
