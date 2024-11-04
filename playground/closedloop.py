@@ -112,7 +112,7 @@ class my_lin_fit:
 
 tstamp = datetime.datetime.now().strftime("%d-%m-%YT%H.%M.%S")
 
-proj_path =  '/home/benja/Documents/BALDR/BaldrApp/' #'/home/rtc/Documents/BaldrApp/'
+proj_path =  os.getcwd() #'/home/benja/Documents/BALDR/BaldrApp/' #'/home/rtc/Documents/BaldrApp/'
 
 # initialize our ZWFS instrument
 wvl0=1.25e-6
