@@ -286,8 +286,8 @@ if plot_intermediate_results:
 
 
 # interpolate these fields onto the registered actuator grid
-b0_dm = DM_registration.interpolate_pixel_intensities(image = I0, pixel_coords = zwfs_ns.dm2pix_registration.actuator_coord_list_pixel_space) #DM_registration.interpolate_pixel_intensities(image = I0, pixel_coords = transform_dict['actuator_coord_list_pixel_space'])
-I0_dm = DM_registration.interpolate_pixel_intensities(image = b0, pixel_coords = zwfs_ns.dm2pix_registration.actuator_coord_list_pixel_space) #DM_registration.interpolate_pixel_intensities(image = b0, pixel_coords = transform_dict['actuator_coord_list_pixel_space'])
+b0_dm = DM_registration.interpolate_pixel_intensities(image = b0, pixel_coords = zwfs_ns.dm2pix_registration.actuator_coord_list_pixel_space) #DM_registration.interpolate_pixel_intensities(image = I0, pixel_coords = transform_dict['actuator_coord_list_pixel_space'])
+I0_dm = DM_registration.interpolate_pixel_intensities(image = I0, pixel_coords = zwfs_ns.dm2pix_registration.actuator_coord_list_pixel_space) #DM_registration.interpolate_pixel_intensities(image = b0, pixel_coords = transform_dict['actuator_coord_list_pixel_space'])
 N0_dm = DM_registration.interpolate_pixel_intensities(image = N0, pixel_coords = zwfs_ns.dm2pix_registration.actuator_coord_list_pixel_space) #DM_registration.interpolate_pixel_intensities(image = N0, pixel_coords = transform_dict['actuator_coord_list_pixel_space'])
 
 # calibrate a model to map a subset of pixel intensities to Strehl Ratio 
@@ -373,7 +373,6 @@ if 1:
 
 
     ### ZONAL MODEL
-    
 
     kwargs = {"N0_dm":N0_dm, "HO_ctrl": zonal_ctrl_dict['HO_ctrl']  } 
     delta_cmd = bldr.process_zwfs_intensity( i, zwfs_ns, method = 'zonal_interp_no_projection', record_telemetry = True , **kwargs )
@@ -579,15 +578,18 @@ zwfs_ns = bldr.reset_telemetry( zwfs_ns )
 N0_dm = DM_registration.interpolate_pixel_intensities(image = N0, pixel_coords = zwfs_ns.dm2pix_registration.actuator_coord_list_pixel_space) #DM_registration.interpolate_pixel_intensities(image = N0, pixel_coords = transform_dict['actuator_coord_list_pixel_space'])
 
 kwargs = {"N0_dm":N0_dm, "HO_ctrl": zonal_ctrl_dict['HO_ctrl']  } 
-phase_scaling_factor  = 0.2
+phase_scaling_factor  = 0.1
+
+kp=0
+ki=0.5
 
 Strehl_0_list = []
 Strehl_1_list = []
 Strehl_2_list = []
 Strehl_est_list = []
 
-close_after = 5
-iterations = 20
+close_after = 10
+iterations = 100
 
 # open / close with strehl estimate 
 # project out piston / tip/tilt
@@ -598,8 +600,8 @@ for it in range(iterations) :
     #print( kwargs['HO_ctrl'].integrals ) # <- this was the bug previously
     if it == close_after:
 
-        kwargs["HO_ctrl"].kp = 0. * np.ones( zonal_ctrl_dict['HO_ctrl'].kp.shape )
-        kwargs["HO_ctrl"].ki = 0.8 * np.ones( zonal_ctrl_dict['HO_ctrl'].ki.shape )
+        kwargs["HO_ctrl"].kp = kp * np.ones( zonal_ctrl_dict['HO_ctrl'].kp.shape )
+        kwargs["HO_ctrl"].ki = ki * np.ones( zonal_ctrl_dict['HO_ctrl'].ki.shape )
         #kwargs["HO_ctrl"].kd = 0 * np.ones( zonal_ctrl_dict['HO_ctrl'].kd.shape )
     
     # roll screen
@@ -694,7 +696,7 @@ line_rmse = np.array( zwfs_ns.telem.rmse_list )
 # Define plot data
 #image_list =  [im_phase[-1], im_phase[-1], im_int[-1], im_cmd[-1]]
 image_list =  [ zwfs_ns.telem.field_phase, im_phase, im_int, im_cmd]
-image_title_list =  ['DM disturbance', 'input phase', 'intensity', 'reco. command']
+image_title_list =  [ 'input phase', 'DM interpolated intensity', 'ZWFS intensity', 'reco. command']
 image_colorbar_list = ['DM units', 'radians', 'adu', 'DM units']
 
 plot_list = [ line_eHO, line_eTT, line_S, line_rmse ] 
@@ -707,8 +709,24 @@ plot_title_list = ['' for _ in plot_list]
 util.create_telem_mosaic([a[-1] for a in image_list], image_title_list, image_colorbar_list, 
                 plot_list, plot_title_list, plot_xlabel_list, plot_ylabel_list)
 
-util.display_images_with_slider(image_lists = image_list)
-       
+util.display_images_with_slider(image_lists = image_list,  plot_titles=image_title_list, cbar_labels=image_colorbar_list)
+util.display_images_with_slider(image_lists = image_list+[zwfs_ns.telem.strehl] ) #,  plot_titles=image_title_list, cbar_labels=image_colorbar_list)
+
+
+
+### good movie 
+
+field_phase_list=[]
+for ff in zwfs_ns.telem.field_phase:
+    ff[zwfs_ns.pyZelda.pupil==0] = np.nan
+    field_phase_list.append( ff )
+
+
+image_list =  [ field_phase_list, zwfs_ns.telem.i_list , [util.get_DM_command_in_2D( a ) for a in (np.array(zwfs_ns.telem.c_TT_list) + np.array(zwfs_ns.telem.c_HO_list)  ) ], zwfs_ns.telem.strehl]
+image_title_list =  [ 'input phase', 'ZWFS intensity', 'reco. command', 'Strehl Ratio']
+image_colorbar_list = [ 'radians', 'adu', 'DM units','']
+
+util.display_images_as_movie( image_lists = image_list, plot_titles=image_title_list, cbar_labels=image_colorbar_list  , save_path="output_movie.mp4", fps=25 )
 
 # check with actuators go bad 
 tmpcmd = np.zeros(140)

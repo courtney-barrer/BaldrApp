@@ -294,8 +294,8 @@ if plot_intermediate_results:
 
 
 # interpolate these fields onto the registered actuator grid
-b0_dm = DM_registration.interpolate_pixel_intensities(image = I0, pixel_coords = zwfs_ns.dm2pix_registration.actuator_coord_list_pixel_space) #DM_registration.interpolate_pixel_intensities(image = I0, pixel_coords = transform_dict['actuator_coord_list_pixel_space'])
-I0_dm = DM_registration.interpolate_pixel_intensities(image = b0, pixel_coords = zwfs_ns.dm2pix_registration.actuator_coord_list_pixel_space) #DM_registration.interpolate_pixel_intensities(image = b0, pixel_coords = transform_dict['actuator_coord_list_pixel_space'])
+b0_dm = DM_registration.interpolate_pixel_intensities(image = b0, pixel_coords = zwfs_ns.dm2pix_registration.actuator_coord_list_pixel_space) #DM_registration.interpolate_pixel_intensities(image = I0, pixel_coords = transform_dict['actuator_coord_list_pixel_space'])
+I0_dm = DM_registration.interpolate_pixel_intensities(image = I0, pixel_coords = zwfs_ns.dm2pix_registration.actuator_coord_list_pixel_space) #DM_registration.interpolate_pixel_intensities(image = b0, pixel_coords = transform_dict['actuator_coord_list_pixel_space'])
 N0_dm = DM_registration.interpolate_pixel_intensities(image = N0, pixel_coords = zwfs_ns.dm2pix_registration.actuator_coord_list_pixel_space) #DM_registration.interpolate_pixel_intensities(image = N0, pixel_coords = transform_dict['actuator_coord_list_pixel_space'])
 
 #calibrate a model to map a subset of pixel intensities to Strehl Ratio 
@@ -503,6 +503,12 @@ zwfs_ns = bldr.reset_telemetry( zwfs_ns )
 
 N0_dm = DM_registration.interpolate_pixel_intensities(image = N0, pixel_coords = zwfs_ns.dm2pix_registration.actuator_coord_list_pixel_space) #DM_registration.interpolate_pixel_intensities(image = N0, pixel_coords = transform_dict['actuator_coord_list_pixel_space'])
 
+
+static_aberrations_opd =  1e-7 * np.sum( [ b * a for a,b in zip( [0.5, 0.5, 0.2, 0.1, 0.1], basis[1:5])  ] , axis=0) 
+print(  f'using { 1e9 * np.std(  static_aberrations_opd[zwfs_ns.pyZelda.pupil > 0.5] )}nm rms static aberrations' )
+close_after = 5
+iterations = 20
+
 kwargs = {"N0_dm":N0_dm, "HO_ctrl": zonal_ctrl_dict['HO_ctrl']  } 
 
 Strehl_0_list = []
@@ -512,7 +518,8 @@ Strehl_2_list = []
 Strehl_est_list = []
 
 kp = 0.0
-ki = 0.6 
+ki = 0.4 
+
 #
 for it in range(iterations) :
 

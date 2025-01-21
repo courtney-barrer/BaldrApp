@@ -36,6 +36,9 @@ setup(
     author_email="benjamin.courtney-barrer@anu.edu.au",
     url="https://github.com/your_username/your_project",
     packages=find_packages(),
+    scripts=[
+        "apps/baldr_closed_loop_app/closed_loop_pyqtgraph.py"
+    ],
     install_requires=read_requirements(),  # Include requirements dynamically
     classifiers=[
         "Programming Language :: Python :: 3",

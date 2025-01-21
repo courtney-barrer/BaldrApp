@@ -1,4 +1,4 @@
-
+#!/usr/bin/env python3
 import numpy as np
 import matplotlib.pyplot as plt
 from types import SimpleNamespace
@@ -15,6 +15,11 @@ import pyqtgraph as pg
 import traceback
 
 
+## Testing pip installation locally (for developers)
+# python setup.py sdist bdist_wheel
+# pip install dist/BaldrApp-0.1.0-py3-none-any.whl  --force-reinstall
+# pip install pyzelda@git+https://github.com/courtney-barrer/pyZELDA.git@b42aaea5c8a47026783a15391df5e058360ea15e
+# closed_loop_pyqtgraph.py <--- check it runs
 
 def add_project_root_to_sys_path(project_root_name="BaldrApp"):
     """

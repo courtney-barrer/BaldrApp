@@ -10,3 +10,5 @@ __pycache__/
 *.mp4
 dist/
 temp_build_env/
+build/
+BaldrApp.egg-info/

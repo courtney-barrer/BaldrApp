@@ -8,6 +8,7 @@ BaldrApp.egg-info/SOURCES.txt
 BaldrApp.egg-info/dependency_links.txt
 BaldrApp.egg-info/requires.txt
 BaldrApp.egg-info/top_level.txt
+apps/baldr_closed_loop_app/closed_loop_pyqtgraph.py
 common/DM_basis.py
 common/DM_registration.py
 common/__init__.py
