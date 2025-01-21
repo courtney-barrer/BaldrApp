@@ -687,7 +687,7 @@ def roll_screen_on_dm( zwfs_ns,  Nmodes_removed, ph_scale = 0.2,  actuators_per_
 
         telem_ns.t_dm1.append( time.time() - t0 )
         
-        Ic = photon_flux_per_pixel_at_vlti * zwfs_ns.pyZelda.propagate_opd_map( opd_map , wave = zwfs_ns.optics.wvl0 )
+        Ic = photon_flux_per_pixel_at_vlti * zwfs_ns.pyZelda.propagate_opd_map( opd_map , wave = zwfs_ns.optics.wvl0)
         
         telem_ns.t_i0.append( time.time() - t0 )
         i = detect( Ic, binning = (zwfs_ns.detector.binning, zwfs_ns.detector.binning), qe=zwfs_ns.detector.qe , \
@@ -837,10 +837,10 @@ def calibrate_strehl_model( zwfs_ns, save_results_path = None, train_fraction = 
             if it==0:
                 
                 N0_wsp = photon_flux_per_pixel_at_vlti * ztools.propagate_opd_map(0*opd_map, zwfs_ns.pyZelda.mask_diameter, 0*zwfs_ns.pyZelda.mask_depth, zwfs_ns.pyZelda.mask_substrate,
-                                                zwfs_ns.pyZelda.mask_Fratio, zwfs_ns.pyZelda.pupil_diameter, zwfs_ns.pyZelda.pupil, wave=zwfs_ns.optics.wvl0)
+                                                zwfs_ns.pyZelda.mask_Fratio, zwfs_ns.pyZelda.pupil_diameter, zwfs_ns.pyZelda.pupil, wave=zwfs_ns.optics.wvl0,fourier_filter_diam=zwfs_ns.pyZelda.fourier_filter_diam)
 
                 I0_wsp = photon_flux_per_pixel_at_vlti * ztools.propagate_opd_map(0*opd_map, zwfs_ns.pyZelda.mask_diameter, zwfs_ns.pyZelda.mask_depth, zwfs_ns.pyZelda.mask_substrate,
-                                                zwfs_ns.pyZelda.mask_Fratio, zwfs_ns.pyZelda.pupil_diameter, zwfs_ns.pyZelda.pupil, wave=zwfs_ns.optics.wvl0)
+                                                zwfs_ns.pyZelda.mask_Fratio, zwfs_ns.pyZelda.pupil_diameter, zwfs_ns.pyZelda.pupil, wave=zwfs_ns.optics.wvl0,fourier_filter_diam=zwfs_ns.pyZelda.fourier_filter_diam)
                 
                 # bin to detector pixelspace 
                 I0 = detect( I0_wsp, binning = (zwfs_ns.detector.binning, zwfs_ns.detector.binning), qe=zwfs_ns.detector.qe , dit=zwfs_ns.detector.dit, ron= zwfs_ns.detector.ron, include_shotnoise=True, spectral_bandwidth = zwfs_ns.stellar.bandwidth )
@@ -2147,7 +2147,7 @@ def get_I0(  opd_input,  amp_input, opd_internal,  zwfs_ns, detector=None, inclu
         
     if use_pyZelda:
         Intensity = ztools.propagate_opd_map( zwfs_ns.pyZelda.pupil * opd_map, zwfs_ns.pyZelda.mask_diameter, zwfs_ns.pyZelda.mask_depth, zwfs_ns.pyZelda.mask_substrate, \
-                                            zwfs_ns.pyZelda.mask_Fratio, zwfs_ns.pyZelda.pupil_diameter, amp_input * zwfs_ns.pyZelda.pupil, wave=zwfs_ns.optics.wvl0)
+                                            zwfs_ns.pyZelda.mask_Fratio, zwfs_ns.pyZelda.pupil_diameter, amp_input * zwfs_ns.pyZelda.pupil, wave=zwfs_ns.optics.wvl0, fourier_filter_diam=zwfs_ns.pyZelda.fourier_filter_diam)
         #Intensity =  amp_input**2 * zwfs_ns.pyZelda.propagate_opd_map( opd_map , wave = zwfs_ns.optics.wvl0 )
         #Intensity =  amp_input**2 * ztools.propagate_opd_map( zwfs_ns.pyZelda.pupil * (opd_map), zwfs_ns.pyZelda.mask_diameter, zwfs_ns.pyZelda.mask_depth, zwfs_ns.pyZelda.mask_substrate,
         #                                    zwfs_ns.pyZelda.mask_Fratio, zwfs_ns.pyZelda.pupil_diameter, zwfs_ns.pyZelda.pupil, wave=zwfs_ns.optics.wvl0)
@@ -2205,7 +2205,7 @@ def get_N0( opd_input,  amp_input ,  opd_internal,  zwfs_ns , detector=None, inc
         
     if use_pyZelda:
         Intensity = ztools.propagate_opd_map( zwfs_ns.pyZelda.pupil * opd_map, 0 * zwfs_ns.pyZelda.mask_diameter, zwfs_ns.pyZelda.mask_depth, zwfs_ns.pyZelda.mask_substrate, \
-                                            zwfs_ns.pyZelda.mask_Fratio, zwfs_ns.pyZelda.pupil_diameter, amp_input *zwfs_ns.pyZelda.pupil, wave=zwfs_ns.optics.wvl0)
+                                            zwfs_ns.pyZelda.mask_Fratio, zwfs_ns.pyZelda.pupil_diameter, amp_input *zwfs_ns.pyZelda.pupil, wave=zwfs_ns.optics.wvl0, fourier_filter_diam=zwfs_ns.pyZelda.fourier_filter_diam)
         #Intensity =  amp_input**2 * ztools.propagate_opd_map(opd_map, zwfs_ns.pyZelda.mask_diameter, 0 * zwfs_ns.pyZelda.mask_depth, zwfs_ns.pyZelda.mask_substrate,
         #                                   zwfs_ns.pyZelda.mask_Fratio, zwfs_ns.pyZelda.pupil_diameter, zwfs_ns.pyZelda.pupil, wave=zwfs_ns.optics.wvl0)
         #
@@ -2266,7 +2266,7 @@ def get_frame( opd_input,  amp_input ,  opd_internal,  zwfs_ns , detector=None, 
     if use_pyZelda:
         
         Intensity = ztools.propagate_opd_map( zwfs_ns.pyZelda.pupil * opd_map, zwfs_ns.pyZelda.mask_diameter, zwfs_ns.pyZelda.mask_depth, zwfs_ns.pyZelda.mask_substrate, \
-                                            zwfs_ns.pyZelda.mask_Fratio, zwfs_ns.pyZelda.pupil_diameter, amp_input*zwfs_ns.pyZelda.pupil, wave=zwfs_ns.optics.wvl0)
+                                            zwfs_ns.pyZelda.mask_Fratio, zwfs_ns.pyZelda.pupil_diameter, amp_input*zwfs_ns.pyZelda.pupil, wave=zwfs_ns.optics.wvl0, fourier_filter_diam=zwfs_ns.pyZelda.fourier_filter_diam)
         #amp_input**2 * zwfs_ns.pyZelda.propagate_opd_map( opd_map , wave = zwfs_ns.optics.wvl0 )
         
     else:
@@ -3047,7 +3047,7 @@ def fit_linear_zonal_model( zwfs_ns, opd_internal, iterations = 100, photon_flux
         Strehl_0 = np.exp( -np.var( 2*np.pi/zwfs_ns.optics.wvl0 * bldr_opd_map[zwfs_ns.pyZelda.pupil>0.5]) ) # atmospheric strehl 
         
         # propagate to the detector plane
-        Ic = photon_flux_per_pixel_at_vlti * zwfs_ns.pyZelda.propagate_opd_map( bldr_opd_map , wave = zwfs_ns.optics.wvl0 )
+        Ic = photon_flux_per_pixel_at_vlti * zwfs_ns.pyZelda.propagate_opd_map( bldr_opd_map , wave = zwfs_ns.optics.wvl0 ) 
         
         # detect the intensity
         i = detect( Ic, binning = (zwfs_ns.detector.binning, zwfs_ns.detector.binning), qe=zwfs_ns.detector.qe , dit=zwfs_ns.detector.dit,\
@@ -3114,7 +3114,7 @@ def fit_linear_zonal_model( zwfs_ns, opd_internal, iterations = 100, photon_flux
         #plt.savefig(fig_path + f'pearson_r_dmcmd_dmIntensity_dm_interactuator_coupling-{zwfs_ns.dm.actuator_coupling_factor}.png')
         plt.show()  
 
-
+ 
     # we filter a little tighter (4 actuator radius) because edge effects are bad 
     act_filt = ( np.array( R_list ) > pearson_R_threshold ) #* np.array( [x**2 + y**2 < 4**2 for x,y in zwfs_ns.grid.dm_coord.dm_coords])
     

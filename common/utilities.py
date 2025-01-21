@@ -647,7 +647,7 @@ def display_images_as_movie(image_lists, plot_titles=None, cbar_labels=None, sav
     num_frames = len(image_lists[0])
 
     # Create figure and axes
-    fig, axes = plt.subplots(nrows=nrows, ncols=ncols, figsize=(5 * ncols, 5 * nrows))
+    fig, axes = plt.subplots(nrows=nrows, ncols=ncols, figsize=(6 * ncols, 6 * nrows))
     plt.subplots_adjust(bottom=0.2)
 
     # Flatten axes array for easier iteration

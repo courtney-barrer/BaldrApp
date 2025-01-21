@@ -175,7 +175,7 @@ def interpolate_and_fit_gaussian(coord, radius, pixel_values, factor=5):
 
 
 
-def plot_fit_results(fit_dict):
+def plot_fit_results(fit_dict, savefig = None):
     """
     Plots the original, interpolated, fitted, and residual images from the fit_dict, with X and Y axes.
     
@@ -231,6 +231,8 @@ def plot_fit_results(fit_dict):
 
     # Display the plots
     plt.tight_layout()
+    if savefig :
+        plt.savefig(savefig) 
     plt.show()
 
 
