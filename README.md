@@ -16,16 +16,16 @@ streamlit run apps/baldr_alignment_app/Baldr_Fresnel_App.py
 
 
 ## Installation
-    ```
-    pip install baldrapp
-    
+```
+pip install baldrapp
+```
 This has a dependancy on a forked version of the pyZELDA package (https://github.com/courtney-barrer/pyZELDA) which must be installed seperately
-    ```
-    pip install pyzelda@git+https://github.com/courtney-barrer/pyZELDA.git@b42aaea5c8a47026783a15391df5e058360ea15e
-    
+```
+pip install pyzelda@git+https://github.com/courtney-barrer/pyZELDA.git@b42aaea5c8a47026783a15391df5e058360ea15e
+```    
 Alternatvely the project can be cloned or forked from the Github:
-   ```bash
-   git clone https://github.com/courtney-barrer/BaldrApp
-
+```bash
+git clone https://github.com/courtney-barrer/BaldrApp
+```
 
 
