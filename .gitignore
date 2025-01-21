@@ -8,3 +8,5 @@ __pycache__/
 .env
 .streamlit/credentials.toml
 *.mp4
+dist/
+temp_build_env/

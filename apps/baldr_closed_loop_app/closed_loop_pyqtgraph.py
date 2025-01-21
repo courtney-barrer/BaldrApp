@@ -8,10 +8,12 @@ from mpl_toolkits.axes_grid1 import make_axes_locatable
 import json
 import sys
 import os 
+import pickle
 #import aotools - removed dependancy: use common/phasescreens.py instead
 from PyQt5 import QtWidgets, QtCore,  QtGui
 import pyqtgraph as pg
 import traceback
+
 
 
 def add_project_root_to_sys_path(project_root_name="BaldrApp"):
@@ -52,10 +54,10 @@ def add_project_root_to_sys_path(project_root_name="BaldrApp"):
 add_project_root_to_sys_path()
 
 from common import baldr_core as bldr
-from common import DM_basis as gen_basis
+from common import DM_basis
 from common import utilities as util
 from common import phasescreens
-
+from common import DM_registration
 
 # Create a class to redirect stdout to the QTextEdit widget
 class OutputRedirector:
@@ -280,16 +282,31 @@ class AOControlApp(QtWidgets.QWidget):
 
     def set_gains_to_zero(self):
         self.pause_loop()
-        zwfs_ns.ctrl.TT_ctrl.set_all_gains_to_zero()
-        zwfs_ns.ctrl.HO_ctrl.set_all_gains_to_zero()
+        try:
+            zwfs_ns.ctrl.TT_ctrl.set_all_gains_to_zero()
+        except:
+            print('no zwfs_ns.ctrl.TT_ctrl found so cannot change gains')
+
+        try:    
+            zwfs_ns.ctrl.HO_ctrl.set_all_gains_to_zero()
+        except:
+            print('no zwfs_ns.ctrl.HO_ctrl found so cannot change gains')
+    
         self.run_loop()
 
     def reset(self ):
         self.pause_loop()
         _ = bldr.reset_telemetry( zwfs_ns )
-        zwfs_ns.ctrl.TT_ctrl.reset()
-        zwfs_ns.ctrl.HO_ctrl.reset()
-        
+        try:
+            zwfs_ns.ctrl.TT_ctrl.reset()
+        except:
+            print('no zwfs_ns.ctrl.TT_ctrl found so cannot reset')
+
+        try:
+            zwfs_ns.ctrl.HO_ctrl.reset()
+        except:
+            print('no zwfs_ns.ctrl.HO_ctrl found so cannot reset')
+
         for plot_item in self.line_plots:
             plot_item.clear()  # This removes all lines from the plot
     
@@ -367,39 +384,43 @@ class AOControlApp(QtWidgets.QWidget):
                 zwfs_ns = bldr.reset_telemetry( zwfs_ns )
                 
                 # Reinitialize zwfs_ns.ctrl.TT_ctrl and zwfs_ns.ctrl.HO_ctrl based on their ctrl_type
-                if zwfs_ns.ctrl.TT_ctrl.ctrl_type == 'PID':
-                    zwfs_ns.ctrl.TT_ctrl = bldr.PIDController(
-                        kp=zwfs_ns.ctrl.TT_ctrl.kp,
-                        ki=zwfs_ns.ctrl.TT_ctrl.ki,
-                        kd=zwfs_ns.ctrl.TT_ctrl.kd,
-                        upper_limit=zwfs_ns.ctrl.TT_ctrl.upper_limit,
-                        lower_limit=zwfs_ns.ctrl.TT_ctrl.lower_limit,
-                        setpoint=zwfs_ns.ctrl.TT_ctrl.setpoint
-                    )
-                elif zwfs_ns.ctrl.TT_ctrl.ctrl_type == 'Leaky':
-                    zwfs_ns.ctrl.TT_ctrl = bldr.LeakyIntegrator(
-                        ki=zwfs_ns.ctrl.TT_ctrl.ki,
-                        lower_limit=zwfs_ns.ctrl.TT_ctrl.lower_limit,
-                        upper_limit=zwfs_ns.ctrl.TT_ctrl.upper_limit,
-                        kp=zwfs_ns.ctrl.TT_ctrl.kp
-                    )
+                if hasattr(zwfs_ns, 'ctrl'):
 
-                if zwfs_ns.ctrl.HO_ctrl.ctrl_type == 'PID':
-                    zwfs_ns.ctrl.HO_ctrl = bldr.PIDController(
-                        kp=zwfs_ns.ctrl.HO_ctrl.kp,
-                        ki=zwfs_ns.ctrl.HO_ctrl.ki,
-                        kd=zwfs_ns.ctrl.HO_ctrl.kd,
-                        upper_limit=zwfs_ns.ctrl.HO_ctrl.upper_limit,
-                        lower_limit=zwfs_ns.ctrl.HO_ctrl.lower_limit,
-                        setpoint=zwfs_ns.ctrl.HO_ctrl.setpoint
-                    )
-                elif zwfs_ns.ctrl.HO_ctrl.ctrl_type == 'Leaky':
-                    zwfs_ns.ctrl.HO_ctrl = bldr.LeakyIntegrator(
-                        ki=zwfs_ns.ctrl.HO_ctrl.ki,
-                        lower_limit=zwfs_ns.ctrl.HO_ctrl.lower_limit,
-                        upper_limit=zwfs_ns.ctrl.HO_ctrl.upper_limit,
-                        kp=zwfs_ns.ctrl.HO_ctrl.kp
-                    )
+                    if hasattr(zwfs_ns.ctrl, 'TT_ctrl'):
+                        if zwfs_ns.ctrl.TT_ctrl.ctrl_type == 'PID':
+                            zwfs_ns.ctrl.TT_ctrl = bldr.PIDController(
+                                kp=zwfs_ns.ctrl.TT_ctrl.kp,
+                                ki=zwfs_ns.ctrl.TT_ctrl.ki,
+                                kd=zwfs_ns.ctrl.TT_ctrl.kd,
+                                upper_limit=zwfs_ns.ctrl.TT_ctrl.upper_limit,
+                                lower_limit=zwfs_ns.ctrl.TT_ctrl.lower_limit,
+                                setpoint=zwfs_ns.ctrl.TT_ctrl.setpoint
+                            )
+                        elif zwfs_ns.ctrl.TT_ctrl.ctrl_type == 'Leaky':
+                            zwfs_ns.ctrl.TT_ctrl = bldr.LeakyIntegrator(
+                                ki=zwfs_ns.ctrl.TT_ctrl.ki,
+                                lower_limit=zwfs_ns.ctrl.TT_ctrl.lower_limit,
+                                upper_limit=zwfs_ns.ctrl.TT_ctrl.upper_limit,
+                                kp=zwfs_ns.ctrl.TT_ctrl.kp
+                            )
+
+                    if hasattr(zwfs_ns.ctrl, 'HO_ctrl'):
+                        if zwfs_ns.ctrl.HO_ctrl.ctrl_type == 'PID':
+                            zwfs_ns.ctrl.HO_ctrl = bldr.PIDController(
+                                kp=zwfs_ns.ctrl.HO_ctrl.kp,
+                                ki=zwfs_ns.ctrl.HO_ctrl.ki,
+                                kd=zwfs_ns.ctrl.HO_ctrl.kd,
+                                upper_limit=zwfs_ns.ctrl.HO_ctrl.upper_limit,
+                                lower_limit=zwfs_ns.ctrl.HO_ctrl.lower_limit,
+                                setpoint=zwfs_ns.ctrl.HO_ctrl.setpoint
+                            )
+                        elif zwfs_ns.ctrl.HO_ctrl.ctrl_type == 'Leaky':
+                            zwfs_ns.ctrl.HO_ctrl = bldr.LeakyIntegrator(
+                                ki=zwfs_ns.ctrl.HO_ctrl.ki,
+                                lower_limit=zwfs_ns.ctrl.HO_ctrl.lower_limit,
+                                upper_limit=zwfs_ns.ctrl.HO_ctrl.upper_limit,
+                                kp=zwfs_ns.ctrl.HO_ctrl.kp
+                            )
 
                 print(f"Loaded zwfs_ns from {file_name}")
             except Exception as e:
@@ -500,14 +521,29 @@ class AOControlApp(QtWidgets.QWidget):
     def run_AO_iteration(self):
         
         if dynamic_opd_input:
-            opd_input = update_opd_input( scrn, scaling_factor=0.1 )
-         
-         
-        # Call the AO iteration function from your module
-        kwargs = {"I0":zwfs_ns.reco.I0, "HO_ctrl": zwfs_ns.ctrl.HO_ctrl, "TT_ctrl": zwfs_ns.ctrl.TT_ctrl }
-        _ = bldr.AO_iteration( opd_input, amp_input, opd_internal,  zwfs_ns, dm_disturbance, \
-            record_telemetry=True , method = 'MVM-TT-HO', detector=detector, use_pyZelda=use_pyZelda, **kwargs )
+            atm_opd_input = update_opd_input( scrn, scaling_factor=phase_scaling_factor )
+        else:
+            atm_opd_input = 0 * zwfs_ns.grid.pupil_mask
 
+        opd_current_dm = bldr.get_dm_displacement( command_vector= zwfs_ns.dm.current_cmd   , gain=zwfs_ns.dm.opd_per_cmd, \
+            sigma= zwfs_ns.grid.dm_coord.act_sigma_wavesp, X=zwfs_ns.grid.wave_coord.X, Y=zwfs_ns.grid.wave_coord.Y,\
+                x0=zwfs_ns.grid.dm_coord.act_x0_list_wavesp, y0=zwfs_ns.grid.dm_coord.act_y0_list_wavesp )
+
+        opd_input = np.sum( [  atm_opd_input, opd_current_dm ] , axis=0 )
+        
+        # Call the AO iteration function from your module
+        if method=='zonal_interp_no_projection':
+            kwargs = {"N0_dm":N0_dm, "HO_ctrl": zwfs_ns.ctrl.HO_ctrl } #zonal_ctrl_dict['HO_ctrl']  } 
+            _ = bldr.AO_iteration( opd_input=opd_input, amp_input=amp_input, opd_internal=0*opd_internal, zwfs_ns=zwfs_ns, dm_disturbance = dm_disturbance ,\
+                record_telemetry=True, method='zonal_interp_no_projection', detector=zwfs_ns.detector, obs_intermediate_field=True, \
+                use_pyZelda = use_pyZelda, include_shotnoise=True, **kwargs)
+            
+        elif method=='MVM-TT-HO':
+            kwargs = {"I0":zwfs_ns.reco.I0, "HO_ctrl": zwfs_ns.ctrl.HO_ctrl, "TT_ctrl": zwfs_ns.ctrl.TT_ctrl }
+            _ = bldr.AO_iteration( opd_input, amp_input, opd_internal,  zwfs_ns, dm_disturbance=dm_disturbance, \
+                record_telemetry=True , method = 'MVM-TT-HO', detector=zwfs_ns.detector, use_pyZelda=use_pyZelda, **kwargs )
+        else:
+            raise UserWarning('no valid method input. try "MVM-TT-HO"')
         # Retrieve telemetry data
         im_dm_dist = util.get_DM_command_in_2D(zwfs_ns.telem.dm_disturb_list[-1])
         im_phase = zwfs_ns.telem.field_phase[-1]
@@ -678,6 +714,22 @@ def deserialize_object(obj):
     # If none of the above cases match, return the object as is (or raise an error)
     return obj
 
+# Function to load the model from a pickle file
+def load_model_from_pickle(filename):
+    """
+    Loads the StrehlModel object from a pickle file.
+    
+    Args:
+        filename (str): The file path from where the model should be loaded.
+    
+    Returns:
+        StrehlModel: The loaded StrehlModel instance.
+    """
+    with open(filename, 'rb') as file:
+        model = pickle.load(file)
+        
+    return model
+
 # def deserialize_object(obj, path="root"):
 #     """
 #     Recursively deserialize an object, converting lists back to tuples where needed
@@ -753,84 +805,215 @@ if __name__ == "__main__":
 
     # zwfs_ns = bldr.init_zwfs(grid_ns, optics_ns, dm_ns)
 
-    use_pyZelda = False
+   
 
+    # # initialize our ZWFS instrument
+    #method='MVM-TT-HO' 
+    method='zonal_interp_no_projection'
+    proj_path = os.getcwd()
     wvl0=1.25e-6
-    config_ini = 'configurations/BALDR_UT_J3.ini'#'/home/benja/Documents/BALDR/BaldrApp/configurations/BALDR_UT_J3.ini'
+    use_pyZelda=False #True
+    plot_intermediate=False # plotting calibration results?
+    config_ini = proj_path  + '/configurations/BALDR_UT_J3.ini'#'/home/benja/Documents/BALDR/BaldrApp/configurations/BALDR_UT_J3.ini'
     zwfs_ns = bldr.init_zwfs_from_config_ini( config_ini=config_ini , wvl0=wvl0)
 
-    opd_input = 0 * zwfs_ns.grid.pupil_mask *  np.random.randn( *zwfs_ns.grid.pupil_mask.shape)
+    # #######################################################
+    # # try with zonal method
 
-    opd_internal = 10e-9 * zwfs_ns.grid.pupil_mask * np.random.randn( *zwfs_ns.grid.pupil_mask.shape)
+    # short hand for pupil dimensions (pixels)
+    #dim = zwfs_ns.grid.N * zwfs_ns.grid.padding_factor # should match zwfs_ns.pyZelda.pupil_dim
+    # spatial differential in pupil space 
+    dx = zwfs_ns.grid.D / zwfs_ns.grid.N
+    # get required simulation sampling rate to match physical parameters 
+    dt = dx * zwfs_ns.atmosphere.pixels_per_iteration / zwfs_ns.atmosphere.v # s # simulation sampling rate
 
-    amp_input = 1e4 * zwfs_ns.grid.pupil_mask
+    print(f'current parameters have effective wind velocity = {round(zwfs_ns.atmosphere.v )}m/s')
+    scrn = phasescreens.PhaseScreenKolmogorov(nx_size=zwfs_ns.grid.dim, pixel_scale=dx, r0=zwfs_ns.atmosphere.r0, L0=zwfs_ns.atmosphere.l0, random_seed=1)
 
 
-    #basis_name_list = ['Hadamard', "Zonal", "Zonal_pinned_edges", "Zernike", "Zernike_pinned_edges", "fourier", "fourier_pinned_edges"]
+    # first stage AO 
+    # basis_cropped = ztools.zernike.zernike_basis(nterms=150, npix=zwfs_ns.pyZelda.pupil_diameter)
+    # # we have padding around telescope pupil (check zwfs_ns.pyZelda.pupil.shape and zwfs_ns.pyZelda.pupil_diameter) 
+    # # so we need to put basis in the same frame  
+    # basis_template = np.zeros( zwfs_ns.pyZelda.pupil.shape )
+    # basis = np.array( [ util.insert_concentric( np.nan_to_num(b, 0), basis_template) for b in basis_cropped] )
 
-    # Build IM  and look at Eigenmodes! 
+    # #pupil_disk = basis[0] # we define a disk pupil without secondary - useful for removing Zernike modes later
+
+    # Nmodes_removed = 14 # Default will be to remove Zernike modes 
+
+    # # vibrations 
+    # mode_indicies = [0, 1]
+    # spectrum_type = ['1/f', '1/f']
+    # opd = [50e-9, 50e-9]
+    # vibration_frequencies = [15, 45] #Hz
+
+
+    # input flux scaling (photons / s / wavespace_pixel / nm) 
+    photon_flux_per_pixel_at_vlti = zwfs_ns.throughput.vlti_throughput * (np.pi * (zwfs_ns.grid.D/2)**2) / (np.pi * zwfs_ns.pyZelda.pupil_diameter/2)**2 * util.magnitude_to_photon_flux(magnitude=zwfs_ns.stellar.magnitude, band = zwfs_ns.stellar.waveband, wavelength= 1e9*wvl0)
+
+    amp_input =  photon_flux_per_pixel_at_vlti**0.5 * zwfs_ns.pyZelda.pupil
     
-    
-    # perfect field only with internal opd aberrations 
-    # different poke methods 
+    opd_internal = util.apply_parabolic_scratches(np.zeros( zwfs_ns.grid.pupil_mask.shape ) , dx=dx, dy=dx, list_a= [ 0.1], list_b = [0], list_c = [-2], width_list = [2*dx], depth_list = [100e-9])
+
+    opd_flat_dm = bldr.get_dm_displacement( command_vector= zwfs_ns.dm.dm_flat  , gain=zwfs_ns.dm.opd_per_cmd, \
+                    sigma= zwfs_ns.grid.dm_coord.act_sigma_wavesp, X=zwfs_ns.grid.wave_coord.X, Y=zwfs_ns.grid.wave_coord.Y,\
+                        x0=zwfs_ns.grid.dm_coord.act_x0_list_wavesp, y0=zwfs_ns.grid.dm_coord.act_y0_list_wavesp )
+
+    # quicker way - make sure get frames returns the same as the above!!!! 
+    I0 = bldr.get_I0( opd_input = 0 * zwfs_ns.pyZelda.pupil ,  amp_input = photon_flux_per_pixel_at_vlti**0.5 * zwfs_ns.pyZelda.pupil, opd_internal=zwfs_ns.pyZelda.pupil * (opd_internal + opd_flat_dm), \
+        zwfs_ns=zwfs_ns, detector=zwfs_ns.detector, include_shotnoise=True , use_pyZelda = True)
+
+    N0 = bldr.get_N0( opd_input = 0 * zwfs_ns.pyZelda.pupil ,  amp_input = photon_flux_per_pixel_at_vlti**0.5 * zwfs_ns.pyZelda.pupil, opd_internal=zwfs_ns.pyZelda.pupil * (opd_internal + opd_flat_dm), \
+        zwfs_ns=zwfs_ns, detector=zwfs_ns.detector, include_shotnoise=True , use_pyZelda = True)
+
+
+    # Build a basic Interaction matrix (IM) for the ZWFS
+    basis_name = 'Zonal_pinned_edges'
     Nmodes = 100
-    # ['Hadamard', "Zonal", "Zonal_pinned_edges", "Zernike", "Zernike_pinned_edges", "fourier", "fourier_pinned_edges"]
-    basis = 'Zonal_pinned_edges' #'fourier_pinned_edges' #'Hadamard' #'Zonal_pinned_edges'
-    poke_amp = 0.05
-    Smax = 30
-    detector = zwfs_ns.detector #(4,4) # for binning , zwfs_ns.grid.N is #pixels across pupil diameter (64) therefore division 4 = 16 pixels (between CRed2 and Cred1 )
-    #M2C_0 = gen_basis.construct_command_basis( basis= basis, number_of_modes = Nmodes, without_piston=True).T  
+    #M2C_0 = DM_basis.construct_command_basis( basis= basis_name, number_of_modes = Nmodes, without_piston=True).T  
 
-    #I0 = bldr.get_I0(  opd_input  = 0 *zwfs_ns.grid.pupil_mask ,   amp_input = amp_input,\
-    #    opd_internal = opd_internal,  zwfs_ns= zwfs_ns , detector=None )
-
-    #N0 = bldr.get_N0(  opd_input  = 0 *zwfs_ns.grid.pupil_mask  ,   amp_input = amp_input,\
-    #    opd_internal = opd_internal,  zwfs_ns= zwfs_ns , detector=None )
 
     # we must first define our pupil regions before building 
-    zwfs_ns = bldr.classify_pupil_regions( opd_input,  amp_input ,  opd_internal,  zwfs_ns , detector= detector , use_pyZelda = False) # For now detector is just tuple of pixels to average. useful to know is zwfs_ns.grid.N is number of pixels across pupil. # from this calculate an appropiate binning for detector 
+    zwfs_ns = bldr.classify_pupil_regions( opd_input=0*opd_internal,  amp_input=amp_input ,  opd_internal=opd_internal,  zwfs_ns=zwfs_ns , detector= zwfs_ns.detector , use_pyZelda = False) # For now detector is just tuple of pixels to average. useful to know is zwfs_ns.grid.N is number of pixels across pupil. # from this calculate an appropiate binning for detector 
 
-    zwfs_ns = bldr.build_IM( zwfs_ns,  calibration_opd_input= 0 *zwfs_ns.grid.pupil_mask , calibration_amp_input = amp_input , \
-        opd_internal = opd_internal,  basis = basis, Nmodes =  Nmodes, poke_amp = poke_amp, poke_method = 'double_sided_poke',\
-            imgs_to_mean = 1, detector=detector, use_pyZelda = False )
+    zwfs_ns = bldr.build_IM( zwfs_ns ,  calibration_opd_input = 0*opd_internal , calibration_amp_input = photon_flux_per_pixel_at_vlti**0.5 * zwfs_ns.pyZelda.pupil  , \
+                opd_internal = opd_internal,  basis = basis_name, Nmodes =  Nmodes, poke_amp = 0.05, poke_method = 'double_sided_poke',\
+                    imgs_to_mean = 1, detector=zwfs_ns.detector)
 
-    # look at the eigenmodes in camera, DM and singular values
-    bldr.plot_eigenmodes( zwfs_ns , save_path = None )
-
-    TT_vectors = gen_basis.get_tip_tilt_vectors()
-
-    HO_dm_disturb = gen_basis.construct_command_basis( 'fourier_pinned_edges')
+    # from IM register the DM in the detector pixelspace 
+    zwfs_ns = bldr.register_DM_in_pixelspace_from_IM( zwfs_ns, plot_intermediate_results=plot_intermediate )
 
 
-    #zwfs_ns = bldr.construct_ctrl_matricies_from_IM(zwfs_ns,  method = 'Eigen_TT-HO', Smax = 50, TT_vectors = TT_vectors )
-    zwfs_ns = bldr.construct_ctrl_matricies_from_IM(zwfs_ns,  method = 'Eigen_TT-HO', Smax = 20, TT_vectors = TT_vectors )
+    zwfs_ns = bldr.fit_linear_zonal_model( zwfs_ns, opd_internal, iterations = 100, photon_flux_per_pixel_at_vlti = photon_flux_per_pixel_at_vlti , \
+        pearson_R_threshold = 0.6, phase_scaling_factor=0.2,   plot_intermediate=plot_intermediate , fig_path = None)
 
-    #zwfs_ns = bldr.add_controllers_for_MVM_TT_HO( zwfs_ns, TT = 'PID', HO = 'pid')
-    zwfs_ns = bldr.add_controllers_for_MVM_TT_HO( zwfs_ns, TT = 'PID', HO = 'leaky')
+    #clear pupil on dm 
+    N0_dm = DM_registration.interpolate_pixel_intensities(image = N0, pixel_coords = zwfs_ns.dm2pix_registration.actuator_coord_list_pixel_space) #DM_registration.interpolate_pixel_intensities(image = N0, pixel_coords = transform_dict['actuator_coord_list_pixel_space'])
 
-    #zwfs_ns = init_CL_simulation( zwfs_ns,  opd_internal, amp_input , basis, Nmodes, poke_amp, Smax )
-      
-    dm_disturbance = 0. * TT_vectors.T[0]
-    
-    #scrn = aotools.infinitephasescreen.PhaseScreenVonKarman(nx_size= zwfs_ns.grid.N * zwfs_ns.grid.padding_factor, pixel_scale= zwfs_ns.grid.D / zwfs_ns.grid.N ,r0=0.1,L0=12)
-    #scrn = phasescreens.PhaseScreenVonKarman(nx_size = zwfs_ns.grid.N * zwfs_ns.grid.padding_factor, pixel_scale= zwfs_ns.grid.D / zwfs_ns.grid.N ,r0=0.1,L0=12)
-    scrn = phasescreens.PhaseScreenVonKarman(nx_size = zwfs_ns.grid.dim, pixel_scale= zwfs_ns.grid.D / zwfs_ns.grid.N ,r0=0.1,L0=12)
-    dynamic_opd_input = True
-    
-    #dm_disturbance = 0.1 * HO_dm_disturb.T[3]
-    #zwfs_ns.dm.current_cmd =  zwfs_ns.dm.dm_flat + disturbance_cmd 
+    # calibrate a model to map a subset of pixel intensities to Strehl Ratio 
+    # should eventually come back and debug for model_type = lin_comb - since it seemed to work better intially
+    #strehl_model = bldr.calibrate_strehl_model( zwfs_ns, save_results_path = fig_path, train_fraction = 0.6, correlation_threshold = 0.6, \
+    #    number_of_screen_initiations = 60, scrn_scaling_grid = np.logspace(-2, -0.5, 5), model_type = 'PixelWiseStrehlModel' ) #lin_comb') 
 
+    # or read one in  
+    strehl_model_file = proj_path  + '/configurations/strehl_model_config-BALDR_UT_J3_2024-10-19T09.28.27.pkl'
+    strehl_model = load_model_from_pickle(filename=strehl_model_file)
+
+    #HO_ctrl.reset()
+    #zonal_ctrl_dict = bldr.add_controllers_for_zonal_interp_no_projection( zwfs_ns ,  HO = 'PID' , return_controller = True) # HO = 'leaky'
+    # there was a reason why i made the controller dict seperate... but cant remember why
+    zwfs_ns = bldr.add_controllers_for_zonal_interp_no_projection( zwfs_ns ,  HO = 'PID' , return_controller = False) # HO = 'leaky'
+    # init all gains to 0
+
+    #dm_disturbance = np.random.randn(140) * 1e-7
+    dm_disturbance = np.zeros( 140 )
+
+
+    zwfs_ns.dm.current_cmd = zwfs_ns.dm.dm_flat.copy() 
     zwfs_ns = bldr.reset_telemetry( zwfs_ns )
-    zwfs_ns.ctrl.TT_ctrl.reset()
-    zwfs_ns.ctrl.HO_ctrl.reset()
-    zwfs_ns.ctrl.TT_ctrl.set_all_gains_to_zero()
-    zwfs_ns.ctrl.HO_ctrl.set_all_gains_to_zero()
 
-    zwfs_ns.ctrl.HO_ctrl.ki = 0 * np.ones( len(zwfs_ns.ctrl.HO_ctrl.ki) )
-    zwfs_ns.ctrl.HO_ctrl.kp = 0 * np.ones( len(zwfs_ns.ctrl.HO_ctrl.kp) )
+    kwargs = {"N0_dm":N0_dm, "HO_ctrl": zwfs_ns.ctrl.HO_ctrl }#zonal_ctrl_dict['HO_ctrl']  } 
+    phase_scaling_factor  = 0.07
 
-    zwfs_ns.ctrl.TT_ctrl.kp = 1 * np.ones( len(zwfs_ns.ctrl.TT_ctrl.kp) )
-    zwfs_ns.ctrl.TT_ctrl.ki = 0.5 * np.ones( len(zwfs_ns.ctrl.TT_ctrl.ki) )
+
+    dynamic_opd_input = True
+
+
+    """
+    phase_scaling_factor
+    zwfs_ns.ctrl.HO_ctrl.ki += 0.4
+    dynamic_opd_input=False
+    M2C_0 =  DM_basis.construct_command_basis( basis= "Zernike", number_of_modes = 20, without_piston=True).T  
+    dm_disturbance = dm_disturbance = M2C_0[5]* 1e-1 # check dm gain for idea of scaling to opd
+
+    # lock 
+    zwfs_ns.ctrl.HO_ctrl.ki += 0.4
+
+    """
+
+
+
+    # #######################################################
+    # #### workin code 21-1-25
+    # use_pyZelda = True #False
+
+    # wvl0=1.25e-6
+    # config_ini = 'configurations/BALDR_UT_J3.ini'#'/home/benja/Documents/BALDR/BaldrApp/configurations/BALDR_UT_J3.ini'
+    # zwfs_ns = bldr.init_zwfs_from_config_ini( config_ini=config_ini , wvl0=wvl0)
+
+    # opd_input = 0 * zwfs_ns.grid.pupil_mask *  np.random.randn( *zwfs_ns.grid.pupil_mask.shape)
+
+    # opd_internal = 10e-9 * zwfs_ns.grid.pupil_mask * np.random.randn( *zwfs_ns.grid.pupil_mask.shape)
+
+    # amp_input = 1e4 * zwfs_ns.grid.pupil_mask
+
+
+    # #basis_name_list = ['Hadamard', "Zonal", "Zonal_pinned_edges", "Zernike", "Zernike_pinned_edges", "fourier", "fourier_pinned_edges"]
+
+    # # Build IM  and look at Eigenmodes! 
+    
+    
+    # # perfect field only with internal opd aberrations 
+    # # different poke methods 
+    # Nmodes = 100
+    # # ['Hadamard', "Zonal", "Zonal_pinned_edges", "Zernike", "Zernike_pinned_edges", "fourier", "fourier_pinned_edges"]
+    # basis = 'Zonal_pinned_edges' #'fourier_pinned_edges' #'Hadamard' #'Zonal_pinned_edges'
+    # poke_amp = 0.05
+    # Smax = 30
+    # detector = zwfs_ns.detector #(4,4) # for binning , zwfs_ns.grid.N is #pixels across pupil diameter (64) therefore division 4 = 16 pixels (between CRed2 and Cred1 )
+    # #M2C_0 = gen_basis.construct_command_basis( basis= basis, number_of_modes = Nmodes, without_piston=True).T  
+
+    # #I0 = bldr.get_I0(  opd_input  = 0 *zwfs_ns.grid.pupil_mask ,   amp_input = amp_input,\
+    # #    opd_internal = opd_internal,  zwfs_ns= zwfs_ns , detector=None )
+
+    # #N0 = bldr.get_N0(  opd_input  = 0 *zwfs_ns.grid.pupil_mask  ,   amp_input = amp_input,\
+    # #    opd_internal = opd_internal,  zwfs_ns= zwfs_ns , detector=None )
+
+    # # we must first define our pupil regions before building 
+    # zwfs_ns = bldr.classify_pupil_regions( opd_input,  amp_input ,  opd_internal,  zwfs_ns , detector= detector , use_pyZelda = False) # For now detector is just tuple of pixels to average. useful to know is zwfs_ns.grid.N is number of pixels across pupil. # from this calculate an appropiate binning for detector 
+
+    # zwfs_ns = bldr.build_IM( zwfs_ns,  calibration_opd_input= 0 *zwfs_ns.grid.pupil_mask , calibration_amp_input = amp_input , \
+    #     opd_internal = opd_internal,  basis = basis, Nmodes =  Nmodes, poke_amp = poke_amp, poke_method = 'double_sided_poke',\
+    #         imgs_to_mean = 1, detector=detector, use_pyZelda = use_pyZelda  )
+
+    # # look at the eigenmodes in camera, DM and singular values
+    # bldr.plot_eigenmodes( zwfs_ns , save_path = None )
+
+    # TT_vectors = gen_basis.get_tip_tilt_vectors()
+
+    # HO_dm_disturb = gen_basis.construct_command_basis( 'fourier_pinned_edges')
+
+
+    # #zwfs_ns = bldr.construct_ctrl_matricies_from_IM(zwfs_ns,  method = 'Eigen_TT-HO', Smax = 50, TT_vectors = TT_vectors )
+    # zwfs_ns = bldr.construct_ctrl_matricies_from_IM(zwfs_ns,  method = 'Eigen_TT-HO', Smax = 20, TT_vectors = TT_vectors )
+
+    # #zwfs_ns = bldr.add_controllers_for_MVM_TT_HO( zwfs_ns, TT = 'PID', HO = 'pid')
+    # zwfs_ns = bldr.add_controllers_for_MVM_TT_HO( zwfs_ns, TT = 'PID', HO = 'leaky')
+
+    # #zwfs_ns = init_CL_simulation( zwfs_ns,  opd_internal, amp_input , basis, Nmodes, poke_amp, Smax )
+      
+    # dm_disturbance = 0. * TT_vectors.T[0]
+    
+    # #scrn = aotools.infinitephasescreen.PhaseScreenVonKarman(nx_size= zwfs_ns.grid.N * zwfs_ns.grid.padding_factor, pixel_scale= zwfs_ns.grid.D / zwfs_ns.grid.N ,r0=0.1,L0=12)
+    # #scrn = phasescreens.PhaseScreenVonKarman(nx_size = zwfs_ns.grid.N * zwfs_ns.grid.padding_factor, pixel_scale= zwfs_ns.grid.D / zwfs_ns.grid.N ,r0=0.1,L0=12)
+    # scrn = phasescreens.PhaseScreenVonKarman(nx_size = zwfs_ns.grid.dim, pixel_scale= zwfs_ns.grid.D / zwfs_ns.grid.N ,r0=0.1,L0=12)
+    # dynamic_opd_input = True
+    
+    # #dm_disturbance = 0.1 * HO_dm_disturb.T[3]
+    # #zwfs_ns.dm.current_cmd =  zwfs_ns.dm.dm_flat + disturbance_cmd 
+
+    # zwfs_ns = bldr.reset_telemetry( zwfs_ns )
+    # zwfs_ns.ctrl.TT_ctrl.reset()
+    # zwfs_ns.ctrl.HO_ctrl.reset()
+    # zwfs_ns.ctrl.TT_ctrl.set_all_gains_to_zero()
+    # zwfs_ns.ctrl.HO_ctrl.set_all_gains_to_zero()
+
+    # zwfs_ns.ctrl.HO_ctrl.ki = 0. * np.ones( len(zwfs_ns.ctrl.HO_ctrl.ki) )
+    # zwfs_ns.ctrl.HO_ctrl.kp = 0. * np.ones( len(zwfs_ns.ctrl.HO_ctrl.kp) )
+
+    # zwfs_ns.ctrl.TT_ctrl.kp = 0. * np.ones( len(zwfs_ns.ctrl.TT_ctrl.kp) )
+    # zwfs_ns.ctrl.TT_ctrl.ki = 0. * np.ones( len(zwfs_ns.ctrl.TT_ctrl.ki) )
     
     
     """
