@@ -13,11 +13,11 @@ import pyzelda.zelda as zelda
 import pyzelda.ztools as ztools
 import pyzelda.utils.aperture as aperture
 import pyzelda.utils.imutils as imutils
-from common import phasescreens as ps
-from common import utilities as util
-from common import baldr_core as bldr
+from baldrapp.common import phasescreens as ps
+from baldrapp.common import utilities as util
+from baldrapp.common import baldr_core as bldr
 
-from common.baldr_core import StrehlModel 
+from baldrapp.common.baldr_core import StrehlModel 
 
 """
 Most of the calibration of the Strehl model done in this script has been generalized to a function in the baldr_core module:
@@ -220,7 +220,7 @@ plt.show()
 
 # initialize our ZWFS instrument
 wvl0=1.25e-6
-config_ini = '/home/benja/Documents/BALDR/BaldrApp/configurations/BALDR_UT_J3.ini'
+config_ini = 'BaldrApp/baldrapp/configurations/BALDR_UT_J3.ini'
 zwfs_ns = bldr.init_zwfs_from_config_ini( config_ini=config_ini , wvl0=wvl0)
 
 

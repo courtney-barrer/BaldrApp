@@ -1,1 +1,3 @@
 include requirements.txt
+recursive-include baldrapp/configurations *
+recursive-include baldrapp/data *

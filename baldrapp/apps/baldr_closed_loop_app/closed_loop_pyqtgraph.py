@@ -7,6 +7,7 @@ from matplotlib.gridspec import GridSpec
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 import json
 import sys
+import importlib.resources as resources
 import os 
 import pickle
 #import aotools - removed dependancy: use common/phasescreens.py instead
@@ -16,15 +17,27 @@ import traceback
 
 
 ## Testing pip installation locally (for developers)
+# rm -rf dist build *.egg-info
+# pip install --upgrade pip setuptools wheel twine
 # python setup.py sdist bdist_wheel
-# pip install dist/BaldrApp-0.1.1-py3-none-any.whl  --force-reinstall
+# pip install dist/BaldrApp-0.1.2-py3-none-any.whl  --force-reinstall
 # pip install pyzelda@git+https://github.com/courtney-barrer/pyZELDA.git@b42aaea5c8a47026783a15391df5e058360ea15e
 # closed_loop_pyqtgraph.py <--- check it runs
+# 
 # after or between rebuilds rm -r build  , rm -r dist 
 
 # once happy with the build to upload to pypi (needs to be new version each upload)
 #twine upload dist/*. tokens in $HOME/.pypirc
 
+# clean buiold and uploads that avoids "license-file error"
+#rm -rf dist build *.egg-info
+#rm -rf temp_build_env      
+#python -m venv temp_build_env    
+#source temp_build_env/bin/activate    
+#pip install --upgrade pip setuptools wheel twine
+#python setup.py sdist bdist_wheel
+#twine upload dist/*
+#https://pypi.org/project/BaldrApp/0.1.3/
 
 def add_project_root_to_sys_path(project_root_name="BaldrApp"):
     """
@@ -63,11 +76,15 @@ def add_project_root_to_sys_path(project_root_name="BaldrApp"):
 # Call the function to add the project root
 add_project_root_to_sys_path()
 
-from common import baldr_core as bldr
-from common import DM_basis
-from common import utilities as util
-from common import phasescreens
-from common import DM_registration
+#from baldrapp.common import *  # Forward all imports
+# ^this is necessary if using Strehlmodel or something from common submodules
+from baldrapp.common import baldr_core as bldr
+#from baldrapp.common.baldr_core import PixelWiseStrehlModel
+from baldrapp.common import DM_basis
+from baldrapp.common import utilities as util
+from baldrapp.common import phasescreens
+from baldrapp.common import DM_registration
+#from baldrapp.configurations import BALDR_UT_J3
 
 # Create a class to redirect stdout to the QTextEdit widget
 class OutputRedirector:
@@ -727,6 +744,9 @@ def deserialize_object(obj):
 # Function to load the model from a pickle file
 def load_model_from_pickle(filename):
     """
+
+    #BUG HERE - need to dump in specific model class if environment doesnt know the model.
+
     Loads the StrehlModel object from a pickle file.
     
     Args:
@@ -820,11 +840,21 @@ if __name__ == "__main__":
     # # initialize our ZWFS instrument
     #method='MVM-TT-HO' 
     method='zonal_interp_no_projection'
-    proj_path = os.getcwd()
+    #proj_path = os.getcwd() ###<---avoid this and use resources
     wvl0=1.25e-6
     use_pyZelda=False #True
     plot_intermediate=False # plotting calibration results?
-    config_ini = proj_path  + '/configurations/BALDR_UT_J3.ini'#'/home/benja/Documents/BALDR/BaldrApp/configurations/BALDR_UT_J3.ini'
+
+    # Determine the path to the configuration file relative to this script
+    config_ini = os.path.join(os.path.dirname(__file__), '../../configurations/BALDR_UT_J3.ini')
+
+    # Normalize the path for cross-platform compatibility
+    config_ini = os.path.abspath(config_ini)
+
+    # with resources.path("baldrapp.configurations", "BALDR_UT_J3.ini") as config_path:
+    #     config_ini = str(config_path)
+    #config_ini = proj_path  + '/baldrapp/configurations/BALDR_UT_J3.ini'#'/home/benja/Documents/BALDR/BaldrApp/configurations/BALDR_UT_J3.ini'
+    
     zwfs_ns = bldr.init_zwfs_from_config_ini( config_ini=config_ini , wvl0=wvl0)
 
     # #######################################################
@@ -907,8 +937,9 @@ if __name__ == "__main__":
     #    number_of_screen_initiations = 60, scrn_scaling_grid = np.logspace(-2, -0.5, 5), model_type = 'PixelWiseStrehlModel' ) #lin_comb') 
 
     # or read one in  
-    strehl_model_file = proj_path  + '/configurations/strehl_model_config-BALDR_UT_J3_2024-10-19T09.28.27.pkl'
-    strehl_model = load_model_from_pickle(filename=strehl_model_file)
+    #strehl_model_file = proj_path  + '/baldrapp/configurations/strehl_model_config-BALDR_UT_J3_2024-10-19T09.28.27.pkl'
+    # bug loading this since model class not explicitly imported here. works locally - need to cjheck
+    #strehl_model = load_model_from_pickle(filename=strehl_model_file)
 
     #HO_ctrl.reset()
     #zonal_ctrl_dict = bldr.add_controllers_for_zonal_interp_no_projection( zwfs_ns ,  HO = 'PID' , return_controller = True) # HO = 'leaky'
@@ -950,7 +981,7 @@ if __name__ == "__main__":
 
     # wvl0=1.25e-6
     # config_ini = 'configurations/BALDR_UT_J3.ini'#'/home/benja/Documents/BALDR/BaldrApp/configurations/BALDR_UT_J3.ini'
-    # zwfs_ns = bldr.init_zwfs_from_config_ini( config_ini=config_ini , wvl0=wvl0)
+    # 955,7:     # config_ini = 'configurations/BALDR_UT_J3.ini'#'/home/benja/Documents/BALDR/BaldrApp/configurations/BALDR_UT_J3.ini'#zwfs_ns = bldr.init_zwfs_from_config_ini( config_ini=config_ini , wvl0=wvl0)
 
     # opd_input = 0 * zwfs_ns.grid.pupil_mask *  np.random.randn( *zwfs_ns.grid.pupil_mask.shape)
 

@@ -46,9 +46,9 @@ def add_project_root_to_sys_path(project_root_name="BaldrApp"):
 
 # Call the function to add the project root
 add_project_root_to_sys_path()
-from common import baldr_core as bldr
-from common import DM_basis as gen_basis
-from common import utilities as util
+from baldrapp.common import baldr_core as bldr
+from baldrapp.common import DM_basis as gen_basis
+from baldrapp.common import utilities as util
 
 
 """ 

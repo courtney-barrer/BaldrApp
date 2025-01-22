@@ -18,9 +18,9 @@ import pyzelda.ztools as ztools
 import pyzelda.utils.aperture as aperture
 
 
-from common import baldr_core as bldr
-from common import DM_basis as gen_basis
-from common import utilities as util
+from baldrapp.common import baldr_core as bldr
+from baldrapp.common import DM_basis as gen_basis
+from baldrapp.common import utilities as util
 
 
 ### we generally deal with Simplename spaces since they are lightweight and meet our requirements  
@@ -50,7 +50,7 @@ But by default I will use my own machinery. This is useful for testing and debug
 
 ## The most concise way to interface with the pyZelda object is to use the following function to init from ini configuation file
 # that contains the necessary information to configure the ZWFS.
-config_ini = '/home/benja/Documents/BALDR/BaldrApp/configurations/baldr_1.ini'
+config_ini = '/home/benja/Documents/BALDR/BaldrApp/baldrapp/configurations/baldr_1.ini'
 zwfs_ns = bldr.init_zwfs_from_config_ini( config_ini=config_ini , wvl0=1.25e-6)
 
 # pyZelda object is here 

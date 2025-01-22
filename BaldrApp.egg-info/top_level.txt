@@ -1,5 +1,1 @@
-apps
-common
-configurations
-data
-playground
+baldrapp

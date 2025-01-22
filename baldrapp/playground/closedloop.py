@@ -15,13 +15,13 @@ import pyzelda.zelda as zelda
 import pyzelda.ztools as ztools
 import pyzelda.utils.aperture as aperture
 import pyzelda.utils.imutils as imutils
-from common import phasescreens as ps
-from common import utilities as util
-from common import baldr_core as bldr
-from common import DM_registration
-from common import DM_basis
+from baldrapp.common import phasescreens as ps
+from baldrapp.common import utilities as util
+from baldrapp.common import baldr_core as bldr
+from baldrapp.common import DM_registration
+from baldrapp.common import DM_basis
 
-from common.baldr_core import StrehlModel 
+from baldrapp.common.baldr_core import StrehlModel 
 
 import numpy as np
 from sklearn.model_selection import train_test_split
@@ -116,7 +116,7 @@ proj_path =  os.getcwd() #'/home/benja/Documents/BALDR/BaldrApp/' #'/home/rtc/Do
 
 # initialize our ZWFS instrument
 wvl0=1.25e-6
-config_ini = proj_path  + '/configurations/BALDR_UT_J3.ini'#'/home/benja/Documents/BALDR/BaldrApp/configurations/BALDR_UT_J3.ini'
+config_ini = proj_path  + '/baldrapp/configurations/BALDR_UT_J3.ini'#'/home/benja/Documents/BALDR/BaldrApp/configurations/BALDR_UT_J3.ini'
 zwfs_ns = bldr.init_zwfs_from_config_ini( config_ini=config_ini , wvl0=wvl0)
 
 
@@ -304,7 +304,7 @@ strehl_model = bldr.calibrate_strehl_model( zwfs_ns, save_results_path = fig_pat
    number_of_screen_initiations = 60, scrn_scaling_grid = np.logspace(-2, -0.5, 5), model_type = 'PixelWiseStrehlModel' ) #lin_comb') 
 
 # or read one in  
-# strehl_model_file = proj_path  + '/configurations/strehl_model_config-BALDR_UT_J3_2024-10-19T09.28.27.pkl'
+# strehl_model_file = proj_path  + '/baldrapp/configurations/strehl_model_config-BALDR_UT_J3_2024-10-19T09.28.27.pkl'
 # strehl_model = load_model_from_pickle(filename=strehl_model_file)
 
 
