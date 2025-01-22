@@ -3,13 +3,13 @@
 Simulating Baldr - the Zernike Wavefront Sensor for Asgard
 
 Includes 
-- A  **PyQt** app for end-to-end simulatations and visualization of  Baldr operations (closed and open loop for a single telescope). The gui allows downloading of configuration files and telemetry. After installation try type in a terminal prompt (it takes 1-2 minutes to calibrate):
+- A  **PyQt** app for end-to-end simulatations and visualization of  Baldr operations (closed and open loop for a single telescope). The gui allows downloading of configuration files and telemetry. After pip installation try type in a terminal prompt (warning: it takes 1-2 minutes to calibrate before the app will appear):
 ```
 closed_loop_pyqtgraph.py
 ```                                                
-- a **Streamlit** application that simulates a Zernike Wavefront Sensor optical system using Fresnel diffraction propagation to model system mis-alignments. The default setup is for simulating the last (critical) part of the optical train of Baldr. Try from the project root folder: 
+- a **Streamlit** application that simulates a Zernike Wavefront Sensor optical system using Fresnel diffraction propagation to model system mis-alignments. The default setup is for simulating the last (critical) part of the optical train of Baldr. After pip installation try type in a terminal prompt: 
 ```
-streamlit run apps/baldr_alignment_app/Baldr_Fresnel_App.py
+Baldr_Fresnel_App.py
 ```
 - general packaged tools for simulating ZWFS's. These build upon the python pyZELDA package ().
 

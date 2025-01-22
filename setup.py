@@ -1,12 +1,4 @@
-from setuptools import setup, find_packages
-import os
-
-# Read the requirements from requirements.txt
-# def read_requirements():
-#     requirements_path = os.path.join(os.path.dirname(__file__), "requirements.txt")
-#     with open(requirements_path) as req_file:
-#         return req_file.read().splitlines()
-
+#!/usr/bin/env python
 from setuptools import setup, find_packages
 import os
 
@@ -28,7 +20,7 @@ def read_dependency_links():
 
 setup(
     name="BaldrApp",
-    version="0.1.0",
+    version="0.1.2",
     description="Simulating Baldr - the Zernike Wavefront Sensor for Asgard",
     long_description=open("README.md").read(),
     long_description_content_type="text/markdown",
@@ -37,7 +29,8 @@ setup(
     url="https://github.com/your_username/your_project",
     packages=find_packages(),
     scripts=[
-        "apps/baldr_closed_loop_app/closed_loop_pyqtgraph.py"
+        "apps/baldr_closed_loop_app/closed_loop_pyqtgraph.py",
+        "apps/baldr_alignment_app/Baldr_Fresnel_App.py"
     ],
     install_requires=read_requirements(),  # Include requirements dynamically
     classifiers=[
@@ -46,4 +39,6 @@ setup(
         "Operating System :: OS Independent",
     ],
     python_requires=">=3.12.7",
+    license="MIT",
+    license_files=["LICENSE"],
 )

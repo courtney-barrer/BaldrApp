@@ -17,9 +17,14 @@ import traceback
 
 ## Testing pip installation locally (for developers)
 # python setup.py sdist bdist_wheel
-# pip install dist/BaldrApp-0.1.0-py3-none-any.whl  --force-reinstall
+# pip install dist/BaldrApp-0.1.1-py3-none-any.whl  --force-reinstall
 # pip install pyzelda@git+https://github.com/courtney-barrer/pyZELDA.git@b42aaea5c8a47026783a15391df5e058360ea15e
 # closed_loop_pyqtgraph.py <--- check it runs
+# after or between rebuilds rm -r build  , rm -r dist 
+
+# once happy with the build to upload to pypi (needs to be new version each upload)
+#twine upload dist/*. tokens in $HOME/.pypirc
+
 
 def add_project_root_to_sys_path(project_root_name="BaldrApp"):
     """
@@ -930,7 +935,7 @@ if __name__ == "__main__":
     zwfs_ns.ctrl.HO_ctrl.ki += 0.4
     dynamic_opd_input=False
     M2C_0 =  DM_basis.construct_command_basis( basis= "Zernike", number_of_modes = 20, without_piston=True).T  
-    dm_disturbance = dm_disturbance = M2C_0[5]* 1e-1 # check dm gain for idea of scaling to opd
+    dm_disturbance =  M2C_0[5]* 1e-1 # check dm gain for idea of scaling to opd
 
     # lock 
     zwfs_ns.ctrl.HO_ctrl.ki += 0.4

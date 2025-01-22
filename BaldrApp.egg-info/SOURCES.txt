@@ -8,6 +8,10 @@ BaldrApp.egg-info/SOURCES.txt
 BaldrApp.egg-info/dependency_links.txt
 BaldrApp.egg-info/requires.txt
 BaldrApp.egg-info/top_level.txt
+apps/__init__.py
+apps/baldr_alignment_app/Baldr_Fresnel_App.py
+apps/baldr_alignment_app/__init__.py
+apps/baldr_closed_loop_app/__init__.py
 apps/baldr_closed_loop_app/closed_loop_pyqtgraph.py
 common/DM_basis.py
 common/DM_registration.py
@@ -16,3 +20,16 @@ common/baldr_core.py
 common/phasescreens.py
 common/pupils.py
 common/utilities.py
+configurations/__init__.py
+data/__init__.py
+playground/IM_onsky_sim.py
+playground/__init__.py
+playground/calibrating_optical_gain_model_v1 copy.py
+playground/closedloop.py
+playground/effect_pupil_definition.py
+playground/fit_cauchy_eq_Ma-N_1405_photoresist.py
+playground/open_to_closedloop.py
+playground/phasemask_fine_acquisition_simulation.py
+playground/pyzelda_play.py
+playground/test_tutorial_baldr.py
+playground/visual_exploration_optical_gain.py

@@ -1,10 +1,11 @@
 Metadata-Version: 2.2
 Name: BaldrApp
-Version: 0.1.0
+Version: 0.1.2
 Summary: Simulating Baldr - the Zernike Wavefront Sensor for Asgard
 Home-page: https://github.com/your_username/your_project
 Author: Benjamin Courtney-Barrer
 Author-email: benjamin.courtney-barrer@anu.edu.au
+License: MIT
 Classifier: Programming Language :: Python :: 3
 Classifier: License :: OSI Approved :: MIT License
 Classifier: Operating System :: OS Independent
@@ -92,6 +93,7 @@ Dynamic: classifier
 Dynamic: description
 Dynamic: description-content-type
 Dynamic: home-page
+Dynamic: license
 Dynamic: requires-dist
 Dynamic: requires-python
 Dynamic: summary
@@ -101,14 +103,13 @@ Dynamic: summary
 Simulating Baldr - the Zernike Wavefront Sensor for Asgard
 
 Includes 
-- A  **PyQt** app for end-to-end simulatations and visualization of  Baldr operations (closed and open loop). Try:
+- A  **PyQt** app for end-to-end simulatations and visualization of  Baldr operations (closed and open loop for a single telescope). The gui allows downloading of configuration files and telemetry. After pip installation try type in a terminal prompt (warning: it takes 1-2 minutes to calibrate before the app will appear):
 ```
-python apps/baldr_closed_loop_app/closed_loop_pyqtgraph.py
+closed_loop_pyqtgraph.py
+```                                                
+- a **Streamlit** application that simulates a Zernike Wavefront Sensor optical system using Fresnel diffraction propagation to model system mis-alignments. The default setup is for simulating the last (critical) part of the optical train of Baldr. After pip installation try type in a terminal prompt: 
 ```
-                                                    
-- a **Streamlit** application that simulates a Zernike Wavefront Sensor optical system using Fresnel diffraction propagation to model system mis-alignments. The default setup is for simulating the last (critical) part of the optical train of Baldr. Try: 
-```
-streamlit run apps/baldr_alignment_app/Baldr_Fresnel_App.py
+Baldr_Fresnel_App.py
 ```
 - general packaged tools for simulating ZWFS's. These build upon the python pyZELDA package ().
 

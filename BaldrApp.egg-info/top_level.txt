@@ -1,1 +1,5 @@
+apps
 common
+configurations
+data
+playground

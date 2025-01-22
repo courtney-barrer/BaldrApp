@@ -1,12 +1,16 @@
 #!/usr/bin/env python3
 import streamlit as st
+from streamlit.web import cli as stcli
+from streamlit.runtime.scriptrunner import get_script_run_ctx
+
 import numpy as np
 import poppy
 import matplotlib.pyplot as plt
 from poppy.poppy_core import PlaneType
 from poppy.zernike import zernike
 import astropy.units as u
-
+import os 
+import sys
 st.write("Starting app...")
 
 # Thin lens functions and system
@@ -76,12 +80,20 @@ class PhaseMask(poppy.AnalyticOpticalElement):
 # Sidebar for user inputs
 st.sidebar.title("Zernike Wavefront Sensor Inputs")
 
-st.write("Reading in user variables..") # for logging
+st.write("Instructions: Adjust alignment parameters in the side panel and press 'Update'. No image will be shown until you press update") # for logging
+
+st.write("Reading in user variables.. Don't forget to press update on the side panel!") # for logging
 
 # Initialize session_state
 if "submitted" not in st.session_state:
     st.session_state.submitted = False
     
+# Submit button
+# Update button
+if st.sidebar.button("Update"):
+    st.write("changing session state..")
+    st.session_state.submitted = True
+
 # Input field inputs
 wavelength = st.sidebar.number_input("Wavelength (um)", value=1.25)
 zernike_mode = st.sidebar.number_input("Zernike Mode", value=None, step=1)
@@ -112,11 +124,7 @@ detector_offset = 1e-6 * st.sidebar.number_input("Detector Offset (um)", value=0
 include_phase_mask = st.sidebar.checkbox("Include Phase Mask", value=True)
 include_cold_stop = st.sidebar.checkbox("Include Cold Stop", value=True)
 
-# Submit button
-# Update button
-if st.sidebar.button("Update"):
-    st.write("changing session state..")
-    st.session_state.submitted = True
+
 
 # Only generate plot if Update button is clicked
 if st.session_state.submitted:
@@ -221,3 +229,19 @@ if st.session_state.submitted:
     st.pyplot(plt)
 
 
+
+def main():
+    # Check if the script is already running in Streamlit
+    if get_script_run_ctx() is not None:
+        # Your Streamlit app code goes here
+        import streamlit as st
+        st.title("Baldr Fresnel App")
+        st.write("Welcome to the Baldr Fresnel App!")
+    else:
+        # Launch the app using streamlit run
+        app_path = os.path.abspath(__file__)
+        sys.argv = ["streamlit", "run", app_path]
+        stcli.main()
+
+if __name__ == "__main__":
+    main()
