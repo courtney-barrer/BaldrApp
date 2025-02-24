@@ -9,6 +9,7 @@ import matplotlib.animation as animation
 import math
 from configparser import ConfigParser
 from types import SimpleNamespace
+import scipy.ndimage as ndimage
 
 def ini_to_namespace(ini_file):
     # convert ini file to python namespace
@@ -83,6 +84,43 @@ def get_DM_command_in_2D(cmd,Nx_act=12):
     return( np.array(cmd_in_2D).reshape(Nx_act,Nx_act) )
 
 
+
+
+def get_circle_DM_command(radius, Nx_act=12):
+    """
+    Generates a DM command that forms a circular shape of the given radius.
+
+    Parameters:
+        radius (float): Desired radius in actuator units.
+        Nx_act (int, optional): Number of actuators per side of the DM (default 12).
+
+    Returns:
+        cmd (ndarray): A 140-length DM command vector with a circular shape.
+    """
+    # Generate actuator coordinate grid
+    x = np.arange(Nx_act)
+    y = np.arange(Nx_act)
+    X, Y = np.meshgrid(x, y)
+
+    # Compute distances from the center of the DM grid
+    center = (Nx_act - 1) / 2  # DM is 12x12, so center is at (5.5, 5.5)
+    distances = np.sqrt((X - center) ** 2 + (Y - center) ** 2)
+
+    # Mask actuators inside the desired radius
+    mask = distances <= radius
+
+    # Flatten the mask and remove corner actuators
+    mask_flattened = mask.flatten()
+    corner_indices = [0, Nx_act-1, Nx_act*(Nx_act-1), Nx_act*Nx_act-1]
+    mask_flattened = np.delete(mask_flattened, corner_indices)
+
+    # Create the DM command vector of length 140
+    cmd = np.zeros(140)
+    cmd[mask_flattened] = 1  # Set selected actuators to 1
+
+    return cmd
+
+
 def insert_concentric(smaller_array, larger_array):
     # Get the shapes of both arrays
     N, M = smaller_array.shape
@@ -105,6 +143,198 @@ def insert_concentric(smaller_array, larger_array):
     return result_array
 
 
+
+def get_theoretical_reference_pupils( wavelength = 1.65e-6 ,F_number = 21.2, mask_diam = 1.2, eta=0, diameter_in_angular_units = True, get_individual_terms=False, phaseshift = np.pi/2 , padding_factor = 4, debug= True, analytic_solution = True ) :
+    """
+    get theoretical reference pupil intensities of ZWFS with / without phasemask 
+    
+
+    Parameters
+    ----------
+    wavelength : TYPE, optional
+        DESCRIPTION. input wavelength The default is 1.65e-6.
+    F_number : TYPE, optional
+        DESCRIPTION. The default is 21.2.
+    mask_diam : phase dot diameter. TYPE, optional
+            if diameter_in_angular_units=True than this has diffraction limit units ( 1.22 * f * lambda/D )
+            if  diameter_in_angular_units=False than this has physical units (m) determined by F_number and wavelength
+        DESCRIPTION. The default is 1.2.
+    eta : ratio of secondary obstruction radius (r_2/r_1), where r2 is secondary, r1 is primary. 0 meams no secondary obstruction
+    diameter_in_angular_units : TYPE, optional
+        DESCRIPTION. The default is True.
+    get_individual_terms : Type optional
+        DESCRIPTION : if false (default) with jsut return intensity, otherwise return P^2, abs(M)^2 , phi + mu
+    phaseshift : TYPE, optional
+        DESCRIPTION. phase phase shift imparted on input field (radians). The default is np.pi/2.
+    padding_factor : pad to change the resolution in image plane. TYPE, optional
+        DESCRIPTION. The default is 4.
+    debug : TYPE, optional
+        DESCRIPTION. Do we want to plot some things? The default is True.
+    analytic_solution: TYPE, optional
+        DESCRIPTION. use analytic formula or calculate numerically? The default is True.
+    Returns
+    -------
+    Ic, reference pupil intensity with phasemask in 
+    P, reference pupil intensity with phasemask out 
+
+    """
+    pupil_radius = 1  # Pupil radius in meters
+
+    # Define the grid in the pupil plane
+    N = 2**9 + 1 #256  # Number of grid points (assumed to be square)
+    L_pupil = 2 * pupil_radius  # Pupil plane size (physical dimension)
+    dx_pupil = L_pupil / N  # Sampling interval in the pupil plane
+    x_pupil = np.linspace(-L_pupil/2, L_pupil/2, N)   # Pupil plane coordinates
+    y_pupil = np.linspace(-L_pupil/2, L_pupil/2, N) 
+    X_pupil, Y_pupil = np.meshgrid(x_pupil, y_pupil)
+    
+    
+
+
+    # Define a circular pupil function
+    pupil = (np.sqrt(X_pupil**2 + Y_pupil**2) > eta*pupil_radius) & (np.sqrt(X_pupil**2 + Y_pupil**2) <= pupil_radius)
+
+    # Zero padding to increase resolution
+    # Increase the array size by padding (e.g., 4x original size)
+    N_padded = N * padding_factor
+    pupil_padded = np.zeros((N_padded, N_padded))
+    start_idx = (N_padded - N) // 2
+    pupil_padded[start_idx:start_idx+N, start_idx:start_idx+N] = pupil
+
+    # Perform the Fourier transform on the padded array (normalizing for the FFT)
+    pupil_ft = np.fft.fftshift(np.fft.fft2(np.fft.ifftshift(pupil_padded)))
+    
+    # Compute the Airy disk scaling factor (1.22 * λ * F)
+    airy_scale = 1.22 * wavelength * F_number
+
+    # Image plane sampling interval (adjusted for padding)
+    L_image = wavelength * F_number / dx_pupil  # Total size in the image plane
+    dx_image_padded = L_image / N_padded  # Sampling interval in the image plane with padding
+    
+    if diameter_in_angular_units:
+        x_image_padded = np.linspace(-L_image/2, L_image/2, N_padded) / airy_scale  # Image plane coordinates in Airy units
+        y_image_padded = np.linspace(-L_image/2, L_image/2, N_padded) / airy_scale
+    else:
+        x_image_padded = np.linspace(-L_image/2, L_image/2, N_padded)  # Image plane coordinates in Airy units
+        y_image_padded = np.linspace(-L_image/2, L_image/2, N_padded) 
+        
+    X_image_padded, Y_image_padded = np.meshgrid(x_image_padded, y_image_padded)
+
+    if diameter_in_angular_units:
+        mask = np.sqrt(X_image_padded**2 + Y_image_padded**2) <= mask_diam / 4
+    else: 
+        mask = np.sqrt(X_image_padded**2 + Y_image_padded**2) <= mask_diam / 4
+        
+    psi_B = np.fft.fftshift(np.fft.fft2(np.fft.ifftshift(pupil_padded)) )
+                            
+    b = np.fft.fftshift( np.fft.ifft2( mask * psi_B ) ) 
+
+    
+    if debug: 
+        
+        psf = np.abs(pupil_ft)**2  # Get the PSF by taking the square of the absolute value
+        psf /= np.max(psf)  # Normalize PSF intensity
+        
+        if diameter_in_angular_units:
+            zoom_range = 3  # Number of Airy disk radii to zoom in on
+        else:
+            zoom_range = 3 * airy_scale 
+            
+        extent = (-zoom_range, zoom_range, -zoom_range, zoom_range)
+
+        fig,ax = plt.subplots(1,1)
+        ax.imshow(psf, extent=(x_image_padded.min(), x_image_padded.max(), y_image_padded.min(), y_image_padded.max()), cmap='gray')
+        ax.contour(X_image_padded, Y_image_padded, mask, levels=[0.5], colors='red', linewidths=2, label='phasemask')
+        #ax[1].imshow( mask, extent=(x_image_padded.min(), x_image_padded.max(), y_image_padded.min(), y_image_padded.max()), cmap='gray')
+        #for axx in ax.reshape(-1):
+        #    axx.set_xlim(-zoom_range, zoom_range)
+        #    axx.set_ylim(-zoom_range, zoom_range)
+        ax.set_xlim(-zoom_range, zoom_range)
+        ax.set_ylim(-zoom_range, zoom_range)
+        ax.set_title( 'PSF' )
+        ax.legend() 
+        #ax[1].set_title('phasemask')
+
+
+    
+    # if considering complex b 
+    # beta = np.angle(b) # complex argunment of b 
+    # M = b * (np.exp(1J*theta)-1)**0.5
+    
+    # relabelling
+    theta = phaseshift # rad , 
+    P = pupil_padded.copy() 
+    
+    if analytic_solution :
+        
+        M = abs( b ) * np.sqrt((np.cos(theta)-1)**2 + np.sin(theta)**2)
+        mu = np.angle((np.exp(1J*theta)-1) ) # np.arctan( np.sin(theta)/(np.cos(theta)-1) ) #
+        
+        phi = np.zeros( P.shape ) # added aberrations 
+        
+        # out formula ----------
+        #if measured_pupil!=None:
+        #    P = measured_pupil / np.mean( P[P > np.mean(P)] ) # normalize by average value in Pupil
+        
+        Ic = ( P**2 + abs(M)**2 + 2* P* abs(M) * np.cos(phi + mu) ) #+ beta)
+        if not get_individual_terms:
+            return( P, Ic )
+        else:
+            return( P, abs(M) , phi+mu )
+    else:
+        
+        # phasemask filter 
+        
+        T_on = 1
+        T_off = 1
+        H = T_off*(1 + (T_on/T_off * np.exp(1j * theta) - 1) * mask  ) 
+        
+        Ic = abs( np.fft.fftshift( np.fft.ifft2( H * psi_B ) ) ) **2 
+    
+        return( P, Ic )
+
+
+def interpolate_pupil_to_measurement(original_pupil, original_image, M, N, m, n, x_c, y_c, new_radius):
+    """
+    Interpolate the pupil onto a new grid, centering the original pupil at (x_c, y_c) 
+    and giving it a specified radius in the new grid.
+    
+    Parameters:
+    - pupil: Original MxN pupil array.
+    - original_image: original image (i.e intensity with phasemask in) corresponding to the pupil (phasemask out)
+    - M, N: Size of the original grid.
+    - n, m: Size of the new grid.
+    - x_c, y_c: Center of the pupil in the new grid (in pixels).
+    - new_radius: The desired radius of the pupil in the new grid (in pixels).
+    
+    Returns:
+    - new_pupil: The pupil interpolated onto the new grid (nxm).
+    """
+    # Original grid coordinates (centered at the middle)
+    x_orig = np.linspace(-M/2, M/2, M)
+    y_orig = np.linspace(-N/2, N/2, N)
+    #X_orig, Y_orig = np.meshgrid(x_orig, y_orig)
+    
+    # Create the new grid coordinates (centered)
+    x_new = np.linspace(-m/2, m/2, m)  # New grid should also be centered
+    y_new = np.linspace(-n/2, n/2, n)
+    X_new, Y_new = np.meshgrid(x_new, y_new)
+
+    # Find the actual radius of the original pupil in terms of grid size (not M/2)
+    orig_radius = np.sum( original_pupil/np.pi )**0.5 #np.sqrt((X_orig**2 + Y_orig**2).max())
+
+    # Map new grid coordinates to the original grid
+    scale_factor = new_radius / orig_radius  # Correct scaling factor based on actual original radius
+    X_new_mapped = (X_new - x_c + m/2) / scale_factor + M/2
+    Y_new_mapped = (Y_new - y_c + n/2) / scale_factor + N/2
+
+    # Perform interpolation using map_coordinates
+    new_pupil = ndimage.map_coordinates(original_image, [Y_new_mapped.ravel(), X_new_mapped.ravel()], order=1, mode='constant', cval=0)
+    
+    # Reshape the interpolated result to the new grid size
+    new_pupil = new_pupil.reshape(n, m)
+
+    return new_pupil
 
 def crop_pupil(pupil, image):
     """

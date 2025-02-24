@@ -263,7 +263,7 @@ class detector :
         if self.ron > 0:
             noisy_intensity += np.random.normal(0, self.ron, noisy_intensity.shape).astype(int)
 
-        return noisy_intensity
+        return np.clip(noisy_intensity,0,np.inf)
     
     
     
@@ -2503,7 +2503,7 @@ def update_dm_registration_in_detector_space( zwfs_ns, transform_dict ):
     pixel space coordinates (in pixels). Hence from construction we can get the DM registration in 
     detector space from the wavespace simply by interpolation onto the detector pixel grid.
 
-    However in the real system we cannot measured DM registration directly, so we need to measure it on the detector space
+    However in the real system we cannot measure DM registration directly, so we need to measure it on the detector space
     This is what transform_dict has in it ( generated from DM_registration.calibrate_transform_between_DM_and_image(..)
     - so here we just standardize the relevant information to extract from here and append to zwfs namespace.
     
@@ -2960,7 +2960,7 @@ class my_lin_fit:
         
         
 def fit_linear_zonal_model( zwfs_ns, opd_internal, iterations = 100, photon_flux_per_pixel_at_vlti = 200, \
-    pearson_R_threshold = 0.6, phase_scaling_factor=0.2,   plot_intermediate=True , fig_path = None):
+    pearson_R_threshold = 0.6, use_R_threshold=True, phase_scaling_factor=0.2,   plot_intermediate=True , fig_path = None):
     
     
     #zwfs_ns.dm2pix_registration.actuator_coord_list_pixel_space
@@ -3116,8 +3116,17 @@ def fit_linear_zonal_model( zwfs_ns, opd_internal, iterations = 100, photon_flux
 
  
     # we filter a little tighter (4 actuator radius) because edge effects are bad 
-    act_filt = ( np.array( R_list ) > pearson_R_threshold ) #* np.array( [x**2 + y**2 < 4**2 for x,y in zwfs_ns.grid.dm_coord.dm_coords])
-    
+    if use_R_threshold :
+        act_filt = ( np.array( R_list ) > pearson_R_threshold ) #* np.array( [x**2 + y**2 < 4**2 for x,y in zwfs_ns.grid.dm_coord.dm_coords])
+    else:
+        print('ALERT: use_R_threshold=False. Using set DM actuator radius = 4 actuators for control region')
+        act_filt = util.get_circle_DM_command(radius= 4, Nx_act=12).astype(bool)
+    # we could also have a set filter (e.g 10 actuator diameter )
+    # so standardise the testing with differenet scenarios / parameters
+
+
+
+
     telem_ns.act_filt = act_filt
     telem_ns.pearson_R = np.array( R_list ) 
     

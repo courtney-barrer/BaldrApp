@@ -182,7 +182,7 @@ opd_internal = util.apply_parabolic_scratches(np.zeros( zwfs_ns.grid.pupil_mask.
 
 focus_offset = 100e-9 #m
 focus_mode = basis[3]
-opd_internal += 100e-9 * focus_mode
+opd_internal += focus_offset * focus_mode
 
 plt.figure();plt.imshow(basis[0]*opd_internal);plt.title('internal OPD');plt.colorbar();plt.show()
 
@@ -237,8 +237,10 @@ zwfs_ns = bldr.register_DM_in_pixelspace_from_IM( zwfs_ns, plot_intermediate_res
 
 
 # or we create fit a linear zonal model to the IM
+# we use_R_threshold=False so uses a default 4 actuator radius for control region
+# can check here using plt.imshow(util.get_DM_command_in_2D(get_circle_DM_command(radius=4, Nx_act=12)));plt.show()
 zwfs_ns = bldr.fit_linear_zonal_model( zwfs_ns, opd_internal, iterations = 100, photon_flux_per_pixel_at_vlti = photon_flux_per_pixel_at_vlti , \
-    pearson_R_threshold = 0.6, phase_scaling_factor=phase_scaling_factor,   plot_intermediate=True , fig_path = None)
+    pearson_R_threshold = 0.6, use_R_threshold=False, phase_scaling_factor=phase_scaling_factor,   plot_intermediate=True , fig_path = None)
 
 
 # if plot_intermediate_results:
@@ -291,10 +293,10 @@ zwfs_ns = bldr.reset_telemetry( zwfs_ns )
 N0_dm = DM_registration.interpolate_pixel_intensities(image = N0, pixel_coords = zwfs_ns.dm2pix_registration.actuator_coord_list_pixel_space) #DM_registration.interpolate_pixel_intensities(image = N0, pixel_coords = transform_dict['actuator_coord_list_pixel_space'])
 
 
-static_aberrations_opd =  1e-7 * np.sum( [ b * a for a,b in zip( [0.5, 0.5, 0.2, 0.1, 0.1], basis[1:5])  ] , axis=0) 
+static_aberrations_opd = 0   * 1e-7 * np.sum( [ b * a for a,b in zip( [0.5, 0.5, 0.2, 0.1, 0.1], basis[1:5])  ] , axis=0) 
 print(  f'using { 1e9 * np.std(  static_aberrations_opd[zwfs_ns.pyZelda.pupil > 0.5] )}nm rms static aberrations' )
 close_after = 5
-iterations = 50
+iterations = 250
 
 kwargs = {"N0_dm":N0_dm, "HO_ctrl": zonal_ctrl_dict['HO_ctrl']  } 
 
@@ -305,7 +307,7 @@ Strehl_2_list = []
 Strehl_est_list = []
 
 kp = 0.0
-ki = 0.4 
+ki = 0.3
 
 #
 for it in range(iterations) :
@@ -397,7 +399,7 @@ line_rmse = np.array( zwfs_ns.telem.rmse_list )
 
 # Define plot data
 #image_list =  [im_phase[-1], im_phase[-1], im_int[-1], im_cmd[-1]]
-image_list =  [ zwfs_ns.telem.field_phase, im_phase, im_int, im_cmd]
+image_list = [ zwfs_ns.telem.field_phase, im_phase, im_int, im_cmd]
 image_title_list =  ['DM disturbance', 'input phase', 'intensity', 'reco. command']
 image_colorbar_list = ['DM units', 'radians', 'adu', 'DM units']
 
@@ -420,5 +422,52 @@ tmpcmd[zwfs_ns.reco.linear_zonal_model.act_filt_recommended] = zwfs_ns.telem.e_H
 plt.imshow( util.get_DM_command_in_2D( tmpcmd ) )
 plt.imshow( util.get_DM_command_in_2D( tmpcmd ) ); plt.show()
 
+
+
+########## 
+# STATE MATRIX ESTIMATION 
+
+def estimate_state_transition_matrix(dm_commands):
+    """
+    Estimate the state transition matrix A from a series of DM commands.
+    
+    The model is assumed to be:
+        x[k+1] = A x[k] + w[k],
+    where x[k] is the DM command vector at time k.
+    
+    Parameters:
+        dm_commands : numpy.ndarray
+            A 2D array of DM commands with shape (T, n_actuators), where T is the
+            number of time steps (e.g., 250) and n_actuators is the number of actuators (e.g., 140).
+    
+    Returns:
+        A_est : numpy.ndarray
+            The estimated state transition matrix of shape (n_actuators, n_actuators).
+    """
+    # Check that there are at least two time steps
+    if dm_commands.shape[0] < 2:
+        raise ValueError("dm_commands must contain at least two time steps.")
+
+    # Define X0 (states at time steps 0 to T-2) and X1 (states at time steps 1 to T-1)
+    # We want to treat each state as a column vector. Since dm_commands is (T, n),
+    # we can transpose the appropriate slices.
+    X0 = dm_commands[:-1].T  # Shape: (n_actuators, T-1)
+    X1 = dm_commands[1:].T   # Shape: (n_actuators, T-1)
+
+    # Estimate A using the pseudoinverse of X0.
+    # A_est will be a (n_actuators, n_actuators) matrix.
+    A_est = X1 @ np.linalg.pinv(X0)
+
+    return A_est
+
+dm_cmds = np.array(zwfs_ns.telem.c_HO_list)[150:]
+A_est = estimate_state_transition_matrix(dm_cmds)
+
+eigenvalues = np.linalg.eigvals(A_est)
+print("Estimated state transition matrix A has eigenvalues:")
+print(eigenvalues)
+
+spectral_radius = np.max(np.abs(eigenvalues))
+print("Spectral radius:", spectral_radius)
 
 

@@ -9,6 +9,8 @@ import json
 import datetime 
 from scipy.interpolate import griddata
 from scipy.ndimage import map_coordinates
+from scipy.interpolate import Rbf
+from scipy.sparse import lil_matrix
 
 # Function to get indices for the inner square on DM, accounting for missing corners
 def get_inner_square_indices(outer_size, inner_offset, without_outer_corners=True):
@@ -594,6 +596,60 @@ def interpolate_pixel_intensities(image, pixel_coords):
     return interpolated_intensities
 
 
+# add experimental rbf method - doesnt work well/difficukt to tune
+
+# def interpolate_pixel_intensities(image, pixel_coords, method='rbf',
+#                                   rbf_function='multiquadric', epsilon=1.0, smooth=0.0):
+#     """
+#     Interpolates pixel intensities at given actuator coordinates using either
+#     scipy's map_coordinates for fast grid interpolation or RBF interpolation.
+
+#     Args:
+#         image: 2D array of pixel intensities.
+#         pixel_coords: Array-like of actuator coordinates in pixel space.
+#                       Expected shape: (N, 2) where each row is [y, x].
+#         method: Interpolation method. 'map' (default) uses map_coordinates,
+#                 or 'rbf' uses radial basis function interpolation.
+#         rbf_function: (Optional) Function type for RBF interpolation (default 'multiquadric').
+#                       Options include 'inverse', 'gaussian', 'linear', etc.
+#         epsilon: (Optional) Parameter for RBF interpolation controlling the shape (default 1.0).
+#         smooth: (Optional) Smoothing parameter for RBF interpolation (default 0.0).
+
+#     Returns:
+#         Interpolated intensities at the given actuator pixel coordinates.
+#     """
+#     if method.lower() == 'rbf':
+#         # Create a regular grid of pixel coordinates for the image.
+#         ny, nx = image.shape
+#         y_idx = np.arange(ny)
+#         x_idx = np.arange(nx)
+#         X, Y = np.meshgrid(x_idx, y_idx)  # X: x-coords, Y: y-coords, shape (ny, nx)
+        
+#         # Flatten the grid and corresponding image intensities.
+#         X_flat = X.ravel()
+#         Y_flat = Y.ravel()
+#         values_flat = image.ravel()
+
+#         # Ensure pixel_coords is a NumPy array and extract y and x components.
+#         pixel_coords = np.array(pixel_coords)  # shape (N, 2); each row: [y, x]
+#         y_coords = pixel_coords[:, 0]
+#         x_coords = pixel_coords[:, 1]
+
+#         # Create an RBF interpolator with the specified function and parameters.
+#         rbf_interp = Rbf(X_flat, Y_flat, values_flat,
+#                          function=rbf_function, epsilon=epsilon, smooth=smooth)
+#         interpolated_intensities = rbf_interp(x_coords, y_coords)
+#     else:
+#         # Default: use scipy's map_coordinates.
+#         # For map_coordinates, the coordinate array must have shape (ndim, N).
+#         # The original function assumes pixel_coords are in [y, x] order.
+#         pixel_coords = np.array(pixel_coords).T  # Transpose to shape (2, N)
+#         # Note: image.T is used because map_coordinates expects the first axis to correspond
+#         # to the first coordinate in pixel_coords.
+#         interpolated_intensities = map_coordinates(image.T, pixel_coords, order=1, mode='nearest')
+    
+#     return interpolated_intensities
+
 def calibrate_transform_between_DM_and_image( dm_4_corners, img_4_corners , debug = False, fig_path= None ):
 
     stacked_corner_img = []
@@ -724,7 +780,62 @@ def calibrate_transform_between_DM_and_image( dm_4_corners, img_4_corners , debu
     return write_dict
 
 
-    
+def construct_bilinear_interpolation_matrix(image_shape, x_grid, y_grid, x_target, y_target):
+    """
+    Constructs a bilinear interpolation matrix that maps image pixels to target coordinates.
+
+    Parameters:
+        image_shape (tuple): Shape of the image (height, width).
+        x_grid (ndarray): 1D array of x-coordinates corresponding to the image grid.
+        y_grid (ndarray): 1D array of y-coordinates corresponding to the image grid.
+        x_target (ndarray): 1D array of target x-coordinates where we want to interpolate.
+        y_target (ndarray): 1D array of target y-coordinates where we want to interpolate.
+
+    Returns:
+        interpolation_matrix (scipy.sparse matrix): Matrix that performs interpolation.
+    """
+    height, width = image_shape
+    num_targets = len(x_target)
+
+    # Create an empty sparse matrix (rows = target points, columns = original pixels)
+    interpolation_matrix = lil_matrix((num_targets, height * width))
+
+    for i in range(num_targets):
+        # Find the surrounding grid indices
+        x1_idx = np.searchsorted(x_grid, x_target[i]) - 1
+        x2_idx = x1_idx + 1
+        y1_idx = np.searchsorted(y_grid, y_target[i]) - 1
+        y2_idx = y1_idx + 1
+
+        # Ensure indices are within bounds
+        x1_idx = max(0, min(x1_idx, width - 2))
+        x2_idx = x1_idx + 1
+        y1_idx = max(0, min(y1_idx, height - 2))
+        y2_idx = y1_idx + 1
+
+        # Get the actual x, y coordinates of the grid points
+        x1, x2 = x_grid[x1_idx], x_grid[x2_idx]
+        y1, y2 = y_grid[y1_idx], y_grid[y2_idx]
+
+        # Compute bilinear interpolation weights
+        w11 = ((x2 - x_target[i]) * (y2 - y_target[i])) / ((x2 - x1) * (y2 - y1))
+        w21 = ((x_target[i] - x1) * (y2 - y_target[i])) / ((x2 - x1) * (y2 - y1))
+        w12 = ((x2 - x_target[i]) * (y_target[i] - y1)) / ((x2 - x1) * (y2 - y1))
+        w22 = ((x_target[i] - x1) * (y_target[i] - y1)) / ((x2 - x1) * (y2 - y1))
+
+        # Flattened indices in the image
+        idx11 = y1_idx * width + x1_idx
+        idx21 = y1_idx * width + x2_idx
+        idx12 = y2_idx * width + x1_idx
+        idx22 = y2_idx * width + x2_idx
+
+        # Fill the interpolation matrix
+        interpolation_matrix[i, idx11] = w11
+        interpolation_matrix[i, idx21] = w21
+        interpolation_matrix[i, idx12] = w12
+        interpolation_matrix[i, idx22] = w22
+
+    return interpolation_matrix#.tocsr().toarray()  # Convert to compressed sparse row format for efficiency
 
 
 if __name__== "__main__":
