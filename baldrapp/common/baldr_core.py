@@ -18,6 +18,15 @@ from . import DM_basis
 from . import phasescreens
 from . import DM_registration
 
+"""
+1/11/25 - updated get_pupil_intensity to use fft and not mft for speed, added coldstop diam and coldstop_offset as input argunments removes and remove precomupted mask 
+
+changed get_frame with use_pyZelda = False to use updated 'get_pupil_intensity()' method which include zwfs.optics.coldstop_diam , and remove precomupted mask since we use fft and not mft now for speed 
+
+
+"""
+
+
 # PID and leaky integrator copied from /Users/bencb/Documents/asgard-alignment/playground/open_loop_tests_HO.py
 class PIDController:
     def __init__(self, kp=None, ki=None, kd=None, upper_limit=None, lower_limit=None, setpoint=None):
@@ -248,7 +257,7 @@ class detector :
             spectral_bandwidth (_type_, optional): _description_. Defaults to None. if spectral_bandwidth is None than returns photons per pixel per nm of input light,
         """
 
-        i = sum_subarrays( array = i, block_size = self.binning )
+        i = sum_subarrays( array = i, block_size = (self.binning, self.binning) )
         
         if spectral_bandwidth is None:
             i *= self.qe * self.dit 
@@ -1500,134 +1509,606 @@ def get_dm_displacement( command_vector, gain, sigma, X, Y, x0, y0 ):
     return displacement_map 
 
 
+### mft version takes ~ 0.2s per iteration, while fft ~ 8e-3s per iteration even with large padding.. no brainer. dont use mft
+# def get_pupil_intensity_mft(
+#     phi, amp, theta,
+#     phasemask_diameter,      # legacy: in units of 1.22 * F * λ/D (DIAMETER)
+#     phasemask_mask,          # focal-plane mask (fplane_pixels×fplane_pixels), center-aligned
+#     pupil_diameter,
+#     coldstop_diam=None,      # DIAMETER in the same 1.22-units as above (legacy style)
+#     coldstop_mask=None,      # focal-plane cold stop mask (same grid); if given, we use it as-is
+#     fplane_pixels=300,
+#     pixels_across_mask=10
+# ):
+#     """
+#     ZWFS intensity using your legacy MFT path.
+#     - Uses the phase-mask-defined sampling (m1) for *both* mask and cold stop.
+#     - If only coldstop_diam is given, we synthesize a disc on the SAME focal grid.
+#     - If coldstop_mask is provided, we use it directly (no recentering).
+#     """
+#     t0 = time.time()
+#     # ---- pupil field
+#     psi_A = amp * np.exp(1j * phi)
 
-def get_pupil_intensity_OLD( phi, theta , phasemask, amp ): 
-    """_summary_
+#     # ---- legacy m1 (keep exactly as before)
+#     array_dim    = phi.shape[0]
+#     pupil_radius = pupil_diameter // 2
+#     # Convert phase-mask "diameter in 1.22 units" -> DIAMETER in λ/D
+#     R_mask_lD_diam = float(phasemask_diameter) / 1.22
 
-    SAMPLING THE FOCAL PLANE WELL AND MAINTAINING SPEED IS AN ISSUE WITH THIS 
-    
-    Args:
-        phi (_type_): OPD (m)
-        theta (_type_): phaseshift of mask (rad)
-        phasemask ( ) : 2D array of the phaseshifting region in image plane 
-            (Note: phi and amp implicitly have pupi geometry encoded in them for the PSF)
-        amp (_type_): input amplitude of field
+#     # legacy: m1 = pixels_across_mask * 2 * R_mask * (array_dim / (2 * pupil_radius))
+#     # (R_mask was historically used like a diameter, despite the name in comments)
+#     m1 = pixels_across_mask * 2.0 * R_mask_lD_diam * (array_dim / (2.0 * pupil_radius))
 
-    Returns:
-        _type_: ZWFS pupil intensity
+#     # ---- forward MFT to focal plane
+#     psi_B = mft.mft(psi_A, array_dim, fplane_pixels, m1)
+
+#     # ---- reference arm via provided phase mask (same grid; no recentering)
+#     # (Assume phasemask_mask matches fplane_pixels and is centered as in your pipeline.)
+#     b = mft.imft(phasemask_mask * psi_B, fplane_pixels, array_dim, m1)
+
+#     # ---- analytic ZWFS combine on the pupil
+#     ejt_minus_1 = np.exp(1j * float(theta)) - 1.0
+#     psi_c = psi_A + ejt_minus_1 * b
+
+#     # ---- propagate to focal plane to apply cold stop
+#     Psi_c = mft.mft(psi_c, array_dim, fplane_pixels, m1)
+
+#     # ---- case A: no cold stop at all
+#     if (coldstop_mask is None) and (coldstop_diam is None):
+#         psi_out = mft.imft(Psi_c, fplane_pixels, array_dim, m1)
+#         I_out = np.abs(psi_out)**2
+#         #return I_out
+
+#     # ---- helper: infer pixels-per-(λ/D) from the phase-mask sampling
+#     # We know the phase-mask diameter in λ/D (R_mask_lD_diam) and the number of pixels across it on this grid.
+#     # The grid pixels across the mask is exactly `pixels_across_mask`.
+#     # => pixels per (λ/D) on this focal plane:
+#     px_per_lD = float(pixels_across_mask) / max(R_mask_lD_diam, 1e-12)
+
+#     # ---- case B: build cold stop disc from diameter (no precomputed mask)
+#     if (coldstop_mask is None) and (coldstop_diam is not None):
+#         # Convert cold-stop DIAMETER (in same 1.22-units) -> DIAMETER in λ/D
+#         R_stop_lD_diam = float(coldstop_diam) / 1.22
+#         r_stop_pix = 0.5 * R_stop_lD_diam * px_per_lD  # radius in pixels on THIS grid
+
+#         yy, xx = np.indices((fplane_pixels, fplane_pixels))
+#         c = (fplane_pixels - 1) / 2.0
+#         r = np.hypot(yy - c, xx - c)
+#         C = (r <= r_stop_pix).astype(float)
+
+#         Psi_c *= C
+#         psi_out = mft.imft(Psi_c, fplane_pixels, array_dim, m1)
+#         I_out = np.abs(psi_out)**2
+
+#         # ----- plot |Ψ_c|^2 with cold stop outline -----
+#         I_fp = np.abs(Psi_c)**2
+#         I_fp /= (I_fp.max() + 1e-12)
+
+#         # plt.figure(figsize=(5.2, 4.6))
+#         # plt.imshow(np.log10(I_fp + 1e-6), origin="lower", cmap="magma")
+#         # plt.colorbar(label="log10 |Ψ_c|² (norm.)")
+#         # plt.contour(C, levels=[0.5], colors="cyan", linewidths=1.2)  # cold stop outline
+#         # plt.title("Focal-plane |Ψ_c|² with cold stop (cyan)")
+#         # plt.tight_layout()
+#         # plt.show()
+#         #return I_out
+
+#     # ---- case C: precomputed cold-stop mask is provided (use as-is)
+#     if coldstop_mask is not None:
+#         # No need for coldstop_diam in this branch.
+#         C = np.asarray(coldstop_mask, dtype=float)
+#         # Sanity: shape must match this focal grid
+#         assert C.shape == (fplane_pixels, fplane_pixels), \
+#             "coldstop_mask must have shape (fplane_pixels, fplane_pixels)"
+#         Psi_c *= C
+#         psi_out = mft.imft(Psi_c, fplane_pixels, array_dim, m1)
+#         I_out = np.abs(psi_out)**2
+#         #return I_out
+
+#     # Fallback (shouldn’t hit)
+#     #psi_out = mft.imft(Psi_c, fplane_pixels, array_dim, m1)
+#     #I_out = np.abs(psi_out)**2
+#     t1 = time.time()
+#     print(t1-t0)
+#     return I_out
+
+
+
+### NEED TO TEST!!! try deal with even / off with fft
+def get_pupil_intensity(
+    phi, amp, theta, phasemask_diameter, phasemask_mask, pupil_diameter,
+    fplane_pixels=300, pixels_across_mask=10,
+    *, coldstop_diam=None, coldstop_offset=(0.0, 0.0), coldstop_mask=None,
+    include_beta=True, return_field=False, return_terms=False, debug=False
+):
     """
+    ZWFS pupil intensity with analytic output field and focal-plane cold stop.
+    Tilt-safe for even-sized inputs: internally pads to odd size to avoid half-pixel centering errors,
+    then crops back to the caller’s original size.
 
-    psi_A = amp * np.exp( 1J * ( phi ) )
+    #     Args:
+    #         phi (_type_): input phase (radians)
+    #         amp (_type_): input amplitude of field (sqrt of intensity)
+    #         theta (_type_): phaseshift of mask (rad)
+    #         phasemask_diameter ( ) : diameter in units of 1.22 * F * lambda/D of phasemask
+    #         phasemask_mask ( ) : 2D array of the phaseshifting region in image plane (input to make things quicker)
+    #         pupil_diameter () : diameter of pupil in pixels
+    #         fplane_pixels (int) : number of pixels in focal plane 
+    #         pixels_across_mask (int) : number of pixels across the phase shifting region of mask in focal plane
+    #     Returns:
+    #         _type_: ZWFS pupil intensity
 
-    psi_B = np.fft.fftshift(np.fft.fft2(np.fft.ifftshift( psi_A )) )
-                            
-    b = np.fft.fftshift( np.fft.ifft2( phasemask * psi_B ) )  
-
-    psi_R = abs( b ) * np.sqrt((np.cos(theta)-1)**2 + np.sin(theta)**2)
-    mu = np.angle((np.exp(1J*theta)-1) ) # np.arctan( np.sin(theta)/(np.cos(theta)-1) ) #
-    #beta = np.angle( b )
-    # out formula ----------
-    #if measured_pupil!=None:
-    #    P = measured_pupil / np.mean( P[P > np.mean(P)] ) # normalize by average value in Pupil
-
-    Ic = abs(psi_A)**2 + abs(psi_R)**2 + 2 * abs(psi_A) * abs(psi_R) * np.cos( phi - mu )  #+ beta)
-
-    return Ic 
-
-
-
-
-def get_pupil_intensity( phi, amp, theta, phasemask_diameter, phasemask_mask , pupil_diameter, fplane_pixels=300, pixels_across_mask=10 ): 
-    """_summary_
-
-    Args:
-        phi (_type_): input phase (radians)
-        amp (_type_): input amplitude of field (sqrt of intensity)
-        theta (_type_): phaseshift of mask (rad)
-        phasemask_diameter ( ) : diameter in units of 1.22 * F * lambda/D of phasemask
-        phasemask_mask ( ) : 2D array of the phaseshifting region in image plane (input to make things quicker)
-        pupil_diameter () : diameter of pupil in pixels
-        fplane_pixels (int) : number of pixels in focal plane 
-        pixels_across_mask (int) : number of pixels across the phase shifting region of mask in focal plane
-    Returns:
-        _type_: ZWFS pupil intensity
     """
-
-    psi_A = amp * np.exp( 1j * ( phi ) )
-
-    R_mask =  phasemask_diameter / 1.22 # mask radius in lam0/D unit
+    t0 = time.time()
     
-    array_dim = phi.shape[0]
-    pupil_radius = pupil_diameter // 2
+    # ---------------- even-grid safe: promote to odd internally ----------------
+    phi  = np.asarray(phi)
+    amp  = np.asarray(amp)
+    assert phi.shape == amp.shape and phi.ndim == 2, "phi and amp must be same 2D shape"
+    N_orig = amp.shape[0]; assert amp.shape[1] == N_orig, "phi/amp must be square"
 
-    # ++++++++++++++++++++++++++++++++++
-    # Numerical simulation part
-    # ++++++++++++++++++++++++++++++++++
+    padded_even = False
+    if (N_orig % 2) == 0:
+        # pad ONE row/col (bottom/right) -> internal odd grid; center aligns to a pixel
+        amp_work = np.pad(amp, ((0,1),(0,1)), mode="constant")
+        phi_work = np.pad(phi, ((0,1),(0,1)), mode="constant")
+        N = N_orig + 1
+        padded_even = True
+    else:
+        amp_work = amp
+        phi_work = phi
+        N = N_orig
+
+    # ---------------- build pupil-plane field Ψ_A on the odd (or original odd) grid ----------------
+    psi_A = amp_work.astype(np.complex128) * np.exp(1j * phi_work.astype(np.float64))
+
+    # ---------------- choose focal-plane FFT size (prefer odd to keep centering simple) -------------
+    Nf = int(max(fplane_pixels, N))
+    if (Nf % 2) == 0:    # enforce odd focal grid as well
+        Nf += 1
+
+    # ---------------- center embed to focal grid ----------------
+    pad = (Nf - N) // 2  # integer because both are odd
+    psi_A_pad = np.zeros((Nf, Nf), dtype=np.complex128)
+    psi_A_pad[pad:pad+N, pad:pad+N] = psi_A
+
+    # ---------------- forward FFT to focal plane ----------------
+    psi_B = np.fft.fftshift(np.fft.fft2(np.fft.ifftshift(psi_A_pad),norm="ortho")) # norm="ortho" to maintain flux conservation
+
+    # ---------------- phase disc (derive physical pixels-per-(λ/D) correctly) ----------------
+    def _center_resize_mask(mask, tgtN):
+        m = np.asarray(mask, float)
+        assert m.ndim == 2 and m.shape[0] == m.shape[1], "mask must be square"
+        if m.shape[0] == tgtN:
+            return (m > 0.5).astype(float)
+        out = np.zeros((tgtN, tgtN), float)
+        c0 = (m.shape[0]-1)//2; ct = (tgtN-1)//2
+        y0s = max(0, ct - c0); y0d = max(0, c0 - ct)
+        h = min(m.shape[0], tgtN)
+        out[y0s:y0s+h, y0s:y0s+h] = m[y0d:y0d+h, y0d:y0d+h]
+        return (out > 0.5).astype(float)
+
+    def _disc_radius_in_pixels(bin_mask):
+        if bin_mask.max() == 0: return 0.0
+        yy, xx = np.indices(bin_mask.shape)
+        c = (bin_mask.shape[0]-1)/2.0
+        r = np.hypot(yy - c, xx - c)
+        return r[bin_mask.astype(bool)].max()
+
+    if phasemask_mask is not None:
+        phase_disc = _center_resize_mask(phasemask_mask, Nf)
+        r_pix = _disc_radius_in_pixels(phase_disc)
+        if r_pix <= 0 or phasemask_diameter <= 0:
+            # fallback; will be superseded by cold-stop scaling anyway
+            pix_per_wvld = float(pixels_across_mask)
+        else:
+            pix_per_wvld = (2.0 * r_pix) / float(phasemask_diameter)
+    else:
+        # derive physical pixels-per-(λ/D) from the pupil diameter on the padded grid
+        amp_pad = np.zeros((Nf, Nf), dtype=float)
+        amp_pad[pad:pad+N, pad:pad+N] = np.abs(amp_work)
+        support = amp_pad > 0
+        yy, xx = np.indices((Nf, Nf))
+        c = (Nf - 1) / 2.0
+        r = np.hypot(yy - c, xx - c)
+        if np.any(support):
+            Rpix = r[support].max()
+            Dp_pix = 2.0 * Rpix
+            pix_per_wvld = float(Nf) / max(Dp_pix, 1e-9)
+        else:
+            pix_per_wvld = float(pixels_across_mask)
+
+        r_mask_pix = 0.5 * float(phasemask_diameter) * pix_per_wvld
+        phase_disc = (r <= r_mask_pix).astype(float)
+
+    # ---------------- reference arm & analytic pupil field ----------------
+    b = np.fft.fftshift(np.fft.ifft2(np.fft.ifftshift(phase_disc * psi_B),norm="ortho"))
+    ejt_minus_1 = np.exp(1j * float(theta)) - 1.0
+    psi_theta_pad = psi_A_pad + ejt_minus_1 * b
+
+    # ---------------- forward to focal plane, apply cold stop ----------------
+    psi_theta_B = np.fft.fftshift(np.fft.fft2(np.fft.ifftshift(psi_theta_pad),norm="ortho"))
+
+    if coldstop_mask is not None:
+        C = _center_resize_mask(coldstop_mask, Nf)
+    else:
+        if coldstop_diam is None:
+            C = np.ones((Nf, Nf), float)
+        else:
+            dx_wvld, dy_wvld = coldstop_offset
+            dx_pix = float(dx_wvld) * pix_per_wvld
+            dy_pix = float(dy_wvld) * pix_per_wvld
+            r_cs_pix = 0.5 * float(coldstop_diam) * pix_per_wvld
+            yy, xx = np.indices((Nf, Nf))
+            c = (Nf - 1) / 2.0
+            r_cs = np.hypot(yy - (c + dy_pix), xx - (c + dx_pix))
+            C = (r_cs <= r_cs_pix).astype(float)
+
+    psi_out_pad = np.fft.fftshift(np.fft.ifft2(np.fft.ifftshift(C * psi_theta_B),norm="ortho"))
+
+    # ---------------- crop back to caller's original size ----------------
+    # First crop to the internal pupil block (N×N), then drop the extra row/col if we padded.
+    psi_crop = psi_out_pad[pad:pad+N, pad:pad+N]
+    if padded_even:
+        psi_out = psi_crop[:N_orig, :N_orig]
+    else:
+        psi_out = psi_crop
+    Ic = np.abs(psi_out)**2
+
+    # ---------------- optional diag ----------------
+    if debug:
+        psf = np.abs(psi_theta_B)**2
+        if psf.max() > 0: psf /= psf.max()
+        plt.figure(figsize=(5,4))
+        plt.imshow(psf, origin="lower", cmap="gray")
+        plt.contour(phase_disc, levels=[0.5], colors="w", linewidths=1.0)
+        if coldstop_diam is not None or coldstop_mask is not None:
+            plt.contour(C, levels=[0.5], colors="r", linewidths=1.0)
+        plt.title("Focal-plane |Ψ_θ|² (phase disc white, cold stop red)")
+        plt.tight_layout()
+
+    # ---------------- returns ----------------
+    if return_terms or return_field:
+        out = {"Ic": Ic}
+        if return_field:
+            out["field_pupil"] = psi_out
+        if return_terms:
+            # also return pupil-plane terms cropped back to caller’s shape for convenience
+            b_crop = b[pad:pad+N, pad:pad+N]
+            psi_theta_crop = psi_theta_pad[pad:pad+N, pad:pad+N]
+            if padded_even:
+                b_crop = b_crop[:N_orig, :N_orig]
+                psi_theta_crop = psi_theta_crop[:N_orig, :N_orig]
+            out.update({
+                "psi_A": amp * np.exp(1j*phi),   # original-resolution pupil field
+                "b_crop": b_crop,
+                "psi_theta_crop": psi_theta_crop,
+                "phase_disc_fp": phase_disc,
+                "cold_stop_fp": C,
+                "pix_per_wvld": pix_per_wvld,
+            })
+        return out
+    t1 = time.time()
+    print(t1-t0)
+    return Ic
+
+# def get_pupil_intensity(
+#     phi,                    # phase [rad], 2D array
+#     amp,                    # amplitude (sqrt intensity), 2D array (same shape as phi), includes pupil support
+#     theta,                  # phase shift of ZWFS dot [rad]
+#     phasemask_diameter,     # phase-dot diameter [λ/D]
+#     phasemask_mask,         # optional precomputed phase-disc *on focal-plane grid* (can be None; any size now OK)
+#     pupil_diameter,         # diameter of pupil in *pupil pixels* (kept for compatibility; not used here)
+#     fplane_pixels=300,      # focal-plane array size (FFT grid)
+#     pixels_across_mask=10,  # interpreted as PIXELS PER (λ/D)
+#     *,
+#     # ---- new, optional cold-stop controls (all in λ/D, same units as phasemask_diameter) ----
+#     coldstop_diam=None,             # cold-stop diameter [λ/D] (None = no cold stop)
+#     coldstop_offset=(0.0, 0.0),     # (dx, dy) misalignment [λ/D]
+#     coldstop_mask=None,             # precomputed cold-stop mask (any square size; will be center-resized)
+#     # ---- optional outputs/behaviour ----
+#     include_beta=True,              # β included inherently by complex b; kept for API familiarity
+#     return_field=False,             # if True, also return the complex pupil field after cold stop
+#     return_terms=False,             # if True, return dict of components for debugging
+#     debug=False                     # quick focal-plane diagnostic plot
+# ):
+#     """
+#     Backward-compatible ZWFS pupil intensity with analytic output field and focal-plane cold stop.
+#     Accepts precomputed masks at arbitrary square sizes (center-resized internally).
+#     """
+
+#     # ---------- helpers (local; no external deps) ----------
+#     def _center_resize_mask(mask, tgtN):
+#         """Center-pad/crop a square binary mask to (tgtN, tgtN)."""
+#         m = np.asarray(mask, dtype=float)
+#         assert m.ndim == 2 and m.shape[0] == m.shape[1], "mask must be square"
+#         N0 = m.shape[0]
+#         if N0 == tgtN:
+#             # ensure binary 0/1
+#             return (m > 0.5).astype(float)
+#         out = np.zeros((tgtN, tgtN), dtype=float)
+#         # source center & target center (index coords)
+#         c0 = (N0 - 1) // 2
+#         ct = (tgtN - 1) // 2
+#         # extents to copy
+#         y0s = max(0, ct - c0); y0d = max(0, c0 - ct)
+#         x0s = max(0, ct - c0); x0d = max(0, c0 - ct)
+#         h = min(N0, tgtN)
+#         out[y0s:y0s+h, x0s:x0s+h] = m[y0d:y0d+h, x0d:x0d+h]
+#         return (out > 0.5).astype(float)
+
+#     def _disc_radius_in_pixels(bin_mask):
+#         """Estimate disc radius (pixels) from a binary, centered disc mask."""
+#         if bin_mask.max() == 0:
+#             return 0.0
+#         yy, xx = np.indices(bin_mask.shape)
+#         cy = cx = (bin_mask.shape[0] - 1) / 2.0
+#         r = np.sqrt((yy - cy)**2 + (xx - cx)**2)
+#         return r[bin_mask.astype(bool)].max()
+
+#     # ---------- 0) Validate shapes; keep caller grid unchanged ----------
+#     amp = np.asarray(amp)
+#     phi = np.asarray(phi)
+#     assert amp.shape == phi.shape and amp.ndim == 2, "amp and phi must be same shape, 2D"
+#     N = amp.shape[0]; assert N == amp.shape[1], "amp/phi must be square"
+
+#     # ---------- 1) Build pupil-plane field Ψ_A ----------
+#     psi_A = amp.astype(np.complex128) * np.exp(1j * phi.astype(np.float64))
+
+#     # ---------- 2) Choose focal-plane FFT size ----------
+#     Nf = int(max(fplane_pixels, N))
+#     if (Nf % 2) != (N % 2):
+#         Nf += 1  # keep parity
+
+#     # ---------- 3) Centered zero-padding to focal size ----------
+#     pad = (Nf - N) // 2
+#     psi_A_pad = np.zeros((Nf, Nf), dtype=np.complex128)
+#     psi_A_pad[pad:pad+N, pad:pad+N] = psi_A
+
+#     # ---------- 4) Forward FFT to focal plane (centered) ----------
+#     psi_B = np.fft.fftshift(np.fft.fft2(np.fft.ifftshift(psi_A_pad)))
+
+#     # ---------- 5) Phase-disc on focal grid (robust to user-supplied size) ----------
+#     if phasemask_mask is not None:
+#         phase_disc = _center_resize_mask(phasemask_mask, Nf)
+#         # derive pixels_per_(λ/D) from the (resized) disc:
+#         r_pix = _disc_radius_in_pixels(phase_disc)
+#         # avoid divide by zero if user supplied an all-zeros mask
+#         if r_pix <= 0 or phasemask_diameter <= 0:
+#             # FIX: interpret pixels_across_mask as pixels per (λ/D)
+#             pix_per_wvld = float(pixels_across_mask)   # FIX
+#         else:
+#             pix_per_wvld = (2.0 * r_pix) / float(phasemask_diameter)
+#     # else:
+#     #     # FIX: interpret pixels_across_mask as PIXELS PER (λ/D)
+#     #     pix_per_wvld = float(pixels_across_mask)       # FIX
+#     #     yy, xx = np.indices((Nf, Nf))
+#     #     cy = cx = (Nf - 1) / 2.0
+#     #     r = np.sqrt((yy - cy)**2 + (xx - cx)**2)
+#     #     # disc radius scales with phasemask_diameter (λ/D)
+#     #     r_mask_pix = 0.5 * float(phasemask_diameter) * pix_per_wvld   # FIX
+#     #     phase_disc = (r <= r_mask_pix).astype(float)
+#     ### below fixes issue that mask diameter lambda/D didnt accoutn for padding
+#     else:
+#         # --- Correct physical scaling: derive pixels-per-(λ/D) from the pupil on the padded grid ---
+#         # Effective pupil support on the padded grid (use amplitude magnitude as support)
+#         amp_pad = np.zeros((Nf, Nf), dtype=float)
+#         amp_pad[pad:pad+N, pad:pad+N] = np.abs(amp)
+#         support = amp_pad > 0
+
+#         # Estimate pupil diameter in pixels (centered)
+#         yy, xx = np.indices((Nf, Nf))
+#         cy = cx = (Nf - 1) / 2.0
+#         r = np.hypot(yy - cy, xx - cx)
+#         if np.any(support):
+#             Rpix = r[support].max()              # pupil radius in pixels
+#             Dp_pix = 2.0 * Rpix                  # pupil diameter in pixels
+#             pix_per_wvld = float(Nf) / max(Dp_pix, 1e-9)   # <-- pixels per (λ/D)
+#         else:
+#             # Fallback (degenerate): revert to old behavior so we don't crash
+#             pix_per_wvld = float(pixels_across_mask)
+
+#         # Build the **phase disc** with the correct λ/D → pixel mapping
+#         r_mask_pix = 0.5 * float(phasemask_diameter) * pix_per_wvld
+#         phase_disc = (r <= r_mask_pix).astype(float)
+
+
+#     # ---------- 6) Reference arm: b = IFFT{ D_R * FFT{Ψ_A} } ----------
+#     b = np.fft.fftshift(np.fft.ifft2(np.fft.ifftshift(phase_disc * psi_B)))
+
+#     # ---------- 7) Analytic ZWFS pupil field ----------
+#     ejt_minus_1 = np.exp(1j * float(theta)) - 1.0
+#     psi_theta_pad = psi_A_pad + ejt_minus_1 * b
+
+#     # ---------- 8) Forward FFT of Ψ_θ to focal plane ----------
+#     psi_theta_B = np.fft.fftshift(np.fft.fft2(np.fft.ifftshift(psi_theta_pad)))
+
+#     # ---------- 9) Cold stop on focal grid (robust to user-supplied size) ----------
+#     if coldstop_mask is not None:
+#         C = _center_resize_mask(coldstop_mask, Nf)
+#     else:
+#         if coldstop_diam is None:
+#             C = np.ones((Nf, Nf), dtype=float)
+#         else:
+#             dx_wvld, dy_wvld = coldstop_offset
+#             # use the SAME pixels-per-(λ/D) scale for cold stop
+#             dx_pix = float(dx_wvld) * pix_per_wvld      # FIX (uses consistent pix_per_wvld)
+#             dy_pix = float(dy_wvld) * pix_per_wvld      # FIX
+#             r_cs_pix = 0.5 * float(coldstop_diam) * pix_per_wvld  # FIX
+#             yy, xx = np.indices((Nf, Nf))
+#             cy = cx = (Nf - 1) / 2.0
+#             r_cs = np.sqrt((yy - (cy + dy_pix))**2 + (xx - (cx + dx_pix))**2)
+#             C = (r_cs <= r_cs_pix).astype(float)
+
+#     # ---------- 10) Apply cold stop; inverse FFT back to pupil plane ----------
+#     psi_out_pad = np.fft.fftshift(np.fft.ifft2(np.fft.ifftshift(C * psi_theta_B)))
+
+#     # ---------- 11) Crop back to original pupil size and form intensity ----------
+#     psi_out = psi_out_pad[pad:pad+N, pad:pad+N]
+#     Ic = np.abs(psi_out)**2
+
+#     # ---------- 12) Optional quick diagnostic ----------
+#     if debug:
+#         psf = np.abs(psi_theta_B)**2
+#         if psf.max() > 0:
+#             psf = psf / psf.max()
+#         plt.figure(figsize=(5,4))
+#         plt.imshow(psf, origin="lower", cmap="gray")
+#         plt.contour(phase_disc, levels=[0.5], colors="w", linewidths=1.0)
+#         if coldstop_diam is not None or coldstop_mask is not None:
+#             plt.contour(C, levels=[0.5], colors="r", linewidths=1.0)
+#         plt.title("Focal-plane |Ψ_θ|² with phase disc (white) and cold stop (red)")
+#         plt.tight_layout()
+
+#     # ---------- 13) Returns (compatible) ----------
+#     if return_terms or return_field:
+#         out = {"Ic": Ic}
+#         if return_field:
+#             out["field_pupil"] = psi_out
+#         if return_terms:
+#             out.update({
+#                 "psi_A": psi_A,                            # original pupil field (N×N)
+#                 "b_crop": b[pad:pad+N, pad:pad+N],         # reference arm (cropped to pupil)
+#                 "psi_theta_crop": psi_theta_pad[pad:pad+N, pad:pad+N],
+#                 "phase_disc_fp": phase_disc,               # focal-plane mask (Nf×Nf)
+#                 "cold_stop_fp": C,                         # focal-plane mask (Nf×Nf)
+#                 "pix_per_wvld": pix_per_wvld,
+#             })
+#         return out
+
+#     return Ic
+
+
+
+# Old functioning version 
+# def get_pupil_intensity( phi, amp, theta, phasemask_diameter, phasemask_mask , pupil_diameter, fplane_pixels=300, pixels_across_mask=10 ): 
+#     """_summary_
+
+#     Args:
+#         phi (_type_): input phase (radians)
+#         amp (_type_): input amplitude of field (sqrt of intensity)
+#         theta (_type_): phaseshift of mask (rad)
+#         phasemask_diameter ( ) : diameter in units of 1.22 * F * lambda/D of phasemask
+#         phasemask_mask ( ) : 2D array of the phaseshifting region in image plane (input to make things quicker)
+#         pupil_diameter () : diameter of pupil in pixels
+#         fplane_pixels (int) : number of pixels in focal plane 
+#         pixels_across_mask (int) : number of pixels across the phase shifting region of mask in focal plane
+#     Returns:
+#         _type_: ZWFS pupil intensity
+#     """
+
+#     psi_A = amp * np.exp( 1j * ( phi ) )
+
+#     R_mask =  phasemask_diameter / 1.22 # mask radius in lam0/D unit
+    
+#     array_dim = phi.shape[0]
+#     pupil_radius = pupil_diameter // 2
+
+#     # ++++++++++++++++++++++++++++++++++
+#     # Numerical simulation part
+#     # ++++++++++++++++++++++++++++++++++
 
     
-    #m1 parameter for the Matrix Fourier Transform (MFT)
-    m1 = pixels_across_mask * 2 * R_mask * (array_dim / (2. * pupil_radius))
+#     #m1 parameter for the Matrix Fourier Transform (MFT)
+#     m1 = pixels_across_mask * 2 * R_mask * (array_dim / (2. * pupil_radius))
 
-    psi_A = amp * np.exp(1j * phi )
+#     psi_A = amp * np.exp(1j * phi )
 
-    # --------------------------------
-    # plane B (Focal plane)
+#     # --------------------------------
+#     # plane B (Focal plane)
 
-    # calculation of the electric field in plane B with MFT within the Zernike
-    # sensor mask
-    psi_B = mft.mft(psi_A, array_dim, fplane_pixels, m1)
+#     # calculation of the electric field in plane B with MFT within the Zernike
+#     # sensor mask
+#     psi_B = mft.mft(psi_A, array_dim, fplane_pixels, m1)
     
-    #phasemask_mask = aperture.disc(fplane_pixels, fplane_pixels//pixels_across_mask, diameter=True, cpix=True, strict=False)
+#     #phasemask_mask = aperture.disc(fplane_pixels, fplane_pixels//pixels_across_mask, diameter=True, cpix=True, strict=False)
              
-    b = mft.imft(  phasemask_mask * psi_B , fplane_pixels, array_dim, m1)
+#     b = mft.imft(  phasemask_mask * psi_B , fplane_pixels, array_dim, m1)
 
-    # could be quicker implemeting similar way to pyZelda-
-    psi_R = abs( b ) * np.sqrt((np.cos(theta)-1)**2 + np.sin(theta)**2)
-    mu = np.angle((np.exp(1J*theta)-1) ) # np.arctan( np.sin(theta)/(np.cos(theta)-1) ) #
-    beta = np.angle( b )
-    # out formula ----------
-    #if measured_pupil!=None:
-    #    P = measured_pupil / np.mean( P[P > np.mean(P)] ) # normalize by average value in Pupil
+#     # could be quicker implemeting similar way to pyZelda-
+#     psi_R = abs( b ) * np.sqrt((np.cos(theta)-1)**2 + np.sin(theta)**2)
+#     mu = np.angle((np.exp(1J*theta)-1) ) # np.arctan( np.sin(theta)/(np.cos(theta)-1) ) #
+#     beta = np.angle( b )
+#     # out formula ----------
+#     #if measured_pupil!=None:
+#     #    P = measured_pupil / np.mean( P[P > np.mean(P)] ) # normalize by average value in Pupil
 
-    Ic = abs(psi_A)**2 + abs(psi_R)**2 + 2 * abs(psi_A) * abs(psi_R) * np.cos( phi - mu - beta)
+#     Ic = abs(psi_A)**2 + abs(psi_R)**2 + 2 * abs(psi_A) * abs(psi_R) * np.cos( phi - mu - beta)
 
-    return Ic 
+#     return Ic 
 
-def get_b( phi, phasemask , phasemask_diameter , pupil_diameter, fplane_pixels=300, pixels_across_mask=10 ):
+# def get_b( phi, phasemask , phasemask_diameter , pupil_diameter, fplane_pixels=300, pixels_across_mask=10 ):
     
-    R_mask =  phasemask_diameter / 1.22 # mask radius in lam0/D unit
-    array_dim = phi.shape[0]
-    pupil_radius = pupil_diameter // 2
+#     R_mask =  phasemask_diameter / 1.22 # mask radius in lam0/D unit
+#     array_dim = phi.shape[0]
+#     pupil_radius = pupil_diameter // 2
 
 
-    #m1 parameter for the Matrix Fourier Transform (MFT)
-    m1 = pixels_across_mask * 2 * R_mask * (array_dim / (2. * pupil_radius))
+#     #m1 parameter for the Matrix Fourier Transform (MFT)
+#     m1 = pixels_across_mask * 2 * R_mask * (array_dim / (2. * pupil_radius))
     
-    psi_A = np.exp( 1J * ( phi ) )
+#     psi_A = np.exp( 1J * ( phi ) )
 
-    psi_B = mft.mft(psi_A, array_dim, fplane_pixels, m1)
+#     psi_B = mft.mft(psi_A, array_dim, fplane_pixels, m1)
                             
-    b = mft.imft(  phasemask * psi_B , fplane_pixels, array_dim, m1) 
+#     b = mft.imft(  phasemask * psi_B , fplane_pixels, array_dim, m1) 
     
-    return b
+#     return b
 
 
-def get_psf( phi, pupil_diameter,  phasemask_diameter , fplane_pixels=300, pixels_across_mask=10 ):
+# # def get_pupil_intensity_OLD( phi, theta , phasemask, amp ): 
+# #     """_summary_
+
+# #     SAMPLING THE FOCAL PLANE WELL AND MAINTAINING SPEED IS AN ISSUE WITH THIS 
     
-    R_mask =  phasemask_diameter / 1.22 # mask radius in lam0/D unit
-    array_dim = phi.shape[0]
-    pupil_radius = pupil_diameter // 2
+# #     Args:
+# #         phi (_type_): OPD (m)
+# #         theta (_type_): phaseshift of mask (rad)
+# #         phasemask ( ) : 2D array of the phaseshifting region in image plane 
+# #             (Note: phi and amp implicitly have pupi geometry encoded in them for the PSF)
+# #         amp (_type_): input amplitude of field
+
+# #     Returns:
+# #         _type_: ZWFS pupil intensity
+# #     """
+
+# #     psi_A = amp * np.exp( 1J * ( phi ) )
+
+# #     psi_B = np.fft.fftshift(np.fft.fft2(np.fft.ifftshift( psi_A )) )
+                            
+# #     b = np.fft.fftshift( np.fft.ifft2( phasemask * psi_B ) )  
+
+# #     psi_R = abs( b ) * np.sqrt((np.cos(theta)-1)**2 + np.sin(theta)**2)
+# #     mu = np.angle((np.exp(1J*theta)-1) ) # np.arctan( np.sin(theta)/(np.cos(theta)-1) ) #
+# #     #beta = np.angle( b )
+# #     # out formula ----------
+# #     #if measured_pupil!=None:
+# #     #    P = measured_pupil / np.mean( P[P > np.mean(P)] ) # normalize by average value in Pupil
+
+# #     Ic = abs(psi_A)**2 + abs(psi_R)**2 + 2 * abs(psi_A) * abs(psi_R) * np.cos( phi - mu )  #+ beta)
+
+# #     return Ic 
 
 
-    #m1 parameter for the Matrix Fourier Transform (MFT)
-    m1 = pixels_across_mask * 2 * R_mask * (array_dim / (2. * pupil_radius))
+
+# def get_psf( phi, pupil_diameter,  phasemask_diameter , fplane_pixels=300, pixels_across_mask=10 ):
     
-    psi_A = np.exp( 1j *  phi )
+#     R_mask =  phasemask_diameter / 1.22 # mask radius in lam0/D unit
+#     array_dim = phi.shape[0]
+#     pupil_radius = pupil_diameter // 2
 
-    psi_B = mft.mft(psi_A, array_dim, fplane_pixels, m1)
+
+#     #m1 parameter for the Matrix Fourier Transform (MFT)
+#     m1 = pixels_across_mask * 2 * R_mask * (array_dim / (2. * pupil_radius))
+    
+#     psi_A = np.exp( 1j *  phi )
+
+#     psi_B = mft.mft(psi_A, array_dim, fplane_pixels, m1)
                             
     
-    return psi_B
+#     return psi_B
+
 
 """def get_b_fresnel( phi, phasemask, wavelength, dx, z):
     k = 2 * np.pi / wavelength
@@ -1821,7 +2302,7 @@ def init_zwfs(grid_ns, optics_ns, dm_ns):
             pupil = aperture.disc(dim=int(grid_ns.dim), size= grid_ns.N, diameter=True, strict=False, center=(), cpix=False, invert=False, mask=False)
     
         else:
-            raise TypeError("telescope not implemented. Try AT or UT")
+            raise TypeError("telescope not implemented. Try DISC, AT or UT")
         
     else:   
         pupil = aperture.disc(dim=int(grid_ns.dim), size= grid_ns.N, diameter=True, strict=False, center=(), cpix=False, invert=False, mask=False)
@@ -1859,6 +2340,10 @@ def init_zwfs(grid_ns, optics_ns, dm_ns):
     # attach to grid_ns for legacy reasons (not have to make lots of edits )
     grid_ns.phasemask_mask = phasemask_mask
     
+
+    #grid_ns.coldstop_mask =  
+
+
     # get coordinates in focal plane
     xmin = -focal_plane_sampling_dict['fplane_pixels']/focal_plane_sampling_dict['pixels_across_mask'] * optics_ns.mask_diam * optics_ns.wvl0 * optics_ns.F_number / 2
     xmax = focal_plane_sampling_dict['fplane_pixels']/focal_plane_sampling_dict['pixels_across_mask'] * optics_ns.mask_diam * optics_ns.wvl0 * optics_ns.F_number / 2
@@ -1899,13 +2384,18 @@ def init_zwfs(grid_ns, optics_ns, dm_ns):
     
     dm_act_2_wave_space_transform_matrix = np.array( [[a,b,t_x],[c,d,t_y]] )
 
-    
+    #### Stellar Name Space
+    # detect requires stellar.bandwidth input so we set as None as default
+    stellar_ns = SimpleNamespace(**{"bandwidth":None} )
+
+    # nned to add 
     # ZWFS NAME SPACE 
     zwfs_dict = {
         "grid":grid_ns,
         "optics":optics_ns,
         "dm":dm_ns,
-        "focal_plane":focal_plane_ns
+        "focal_plane":focal_plane_ns,
+        "stellar":stellar_ns,
         #"dm2wavespace_registration" : dm2wavespace_registration_ns
         }
         
@@ -1916,6 +2406,7 @@ def init_zwfs(grid_ns, optics_ns, dm_ns):
     zwfs_ns = update_dm_registration_wavespace(  dm_act_2_wave_space_transform_matrix, zwfs_ns )
     
     return zwfs_ns 
+
 
 
 
@@ -2156,9 +2647,20 @@ def get_I0(  opd_input,  amp_input, opd_internal,  zwfs_ns, detector=None, inclu
     else:
         phi = zwfs_ns.grid.pupil_mask  *  2*np.pi / zwfs_ns.optics.wvl0 * (  opd_map )
 
-        Intensity = get_pupil_intensity( phi= phi, amp=amp_input, theta = zwfs_ns.optics.theta , phasemask_diameter = zwfs_ns.optics.mask_diam, \
-            phasemask_mask = zwfs_ns.grid.phasemask_mask, pupil_diameter = zwfs_ns.grid.N, fplane_pixels=zwfs_ns.focal_plane.fplane_pixels, \
-                pixels_across_mask=zwfs_ns.focal_plane.pixels_across_mask )
+        ## before cold stop update 
+        # Intensity = get_pupil_intensity( phi= phi, amp=amp_input, theta = zwfs_ns.optics.theta , phasemask_diameter = zwfs_ns.optics.mask_diam, \
+        #     phasemask_mask = zwfs_ns.grid.phasemask_mask, pupil_diameter = zwfs_ns.grid.N, fplane_pixels=zwfs_ns.focal_plane.fplane_pixels, \
+        #         pixels_across_mask=zwfs_ns.focal_plane.pixels_across_mask )
+
+        # with coldstop update 
+        Intensity = get_pupil_intensity( phi= phi, amp=amp_input, theta = zwfs_ns.optics.theta , 
+                                        phasemask_diameter = zwfs_ns.optics.mask_diam, 
+                                        coldstop_diam=zwfs_ns.optics.coldstop_diam,  #new
+                                        coldstop_offset = zwfs_ns.optics.coldstop_offset, #new
+                                        pupil_diameter = zwfs_ns.grid.N, 
+                                        fplane_pixels=zwfs_ns.focal_plane.fplane_pixels, 
+                                        pixels_across_mask=zwfs_ns.focal_plane.pixels_across_mask,
+                                        phasemask_mask = None ) 
         #get_pupil_intensity( phi = phi, theta = zwfs_ns.optics.theta, phasemask=zwfs_ns.grid.phasemask_mask, amp=amp_input )
 
     if detector is not None:
@@ -2215,9 +2717,20 @@ def get_N0( opd_input,  amp_input ,  opd_internal,  zwfs_ns , detector=None, inc
         #  convert to radians 
         phi = zwfs_ns.grid.pupil_mask  *  2*np.pi / zwfs_ns.optics.wvl0 * ( opd_map )
 
-        Intensity = get_pupil_intensity( phi= phi, amp=amp_input, theta = 0 , phasemask_diameter = zwfs_ns.optics.mask_diam, \
-            phasemask_mask = zwfs_ns.grid.phasemask_mask, pupil_diameter = zwfs_ns.grid.N, fplane_pixels=zwfs_ns.focal_plane.fplane_pixels, \
-                pixels_across_mask=zwfs_ns.focal_plane.pixels_across_mask )
+        # before coldstop update 
+        # Intensity = get_pupil_intensity( phi= phi, amp=amp_input, theta = 0 , phasemask_diameter = zwfs_ns.optics.mask_diam, \
+        #     phasemask_mask = zwfs_ns.grid.phasemask_mask, pupil_diameter = zwfs_ns.grid.N, fplane_pixels=zwfs_ns.focal_plane.fplane_pixels, \
+        #         pixels_across_mask=zwfs_ns.focal_plane.pixels_across_mask )
+
+        # after coldstop update 
+        Intensity =  get_pupil_intensity( phi= phi, amp=amp_input, theta = 0 , 
+                                phasemask_diameter = zwfs_ns.optics.mask_diam, 
+                                coldstop_diam=zwfs_ns.optics.coldstop_diam,  #new
+                                coldstop_offset = zwfs_ns.optics.coldstop_offset, #new
+                                pupil_diameter = zwfs_ns.grid.N, 
+                                fplane_pixels=zwfs_ns.focal_plane.fplane_pixels, 
+                                pixels_across_mask=zwfs_ns.focal_plane.pixels_across_mask,
+                                phasemask_mask = None ) 
 
     if detector is not None:
         if not hasattr(zwfs_ns, 'stellar'):
@@ -2274,9 +2787,19 @@ def get_frame( opd_input,  amp_input ,  opd_internal,  zwfs_ns , detector=None, 
         # convert phase in radians
         phi = zwfs_ns.grid.pupil_mask * 2*np.pi / zwfs_ns.optics.wvl0 * ( opd_map )
         
-        Intensity = get_pupil_intensity( phi= phi, amp=amp_input, theta = zwfs_ns.optics.theta , phasemask_diameter = zwfs_ns.optics.mask_diam, \
-            phasemask_mask = zwfs_ns.grid.phasemask_mask, pupil_diameter = zwfs_ns.grid.N, fplane_pixels=zwfs_ns.focal_plane.fplane_pixels, \
-                pixels_across_mask=zwfs_ns.focal_plane.pixels_across_mask )
+        if not hasattr(zwfs_ns.optics, "coldstop_offset"):
+            print( "zwfs_ns.optics has no coldstop_offset attribute, assigning aligned coldstop ( coldstop_offset=(0,0))")
+            zwfs_ns.optics.coldstop_offset = (0,0)
+
+        # update 1/11/25 got rid of phasemask_mask input since with fft method (faster) we just generate this with the  phasemask_diameter depending on grid ,fplane_pixels and pixels_across_mask. 
+        Intensity = get_pupil_intensity( phi= phi, amp=amp_input, theta = zwfs_ns.optics.theta , 
+                                        phasemask_diameter = zwfs_ns.optics.mask_diam, 
+                                        coldstop_diam=zwfs_ns.optics.coldstop_diam,  #new
+                                        coldstop_offset = zwfs_ns.optics.coldstop_offset, #new
+                                        pupil_diameter = zwfs_ns.grid.N, 
+                                        fplane_pixels=zwfs_ns.focal_plane.fplane_pixels, 
+                                        pixels_across_mask=zwfs_ns.focal_plane.pixels_across_mask,
+                                        phasemask_mask = None ) # phasemask_mask = None since with fft we dont keep fixed fourier plane sampling and just init phasemask each iteration... its still quicker than mft! 
 
     if detector is not None:
         if not hasattr(zwfs_ns, 'stellar') :

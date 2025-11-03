@@ -50,7 +50,7 @@ But by default I will use my own machinery. This is useful for testing and debug
 
 ## The most concise way to interface with the pyZelda object is to use the following function to init from ini configuation file
 # that contains the necessary information to configure the ZWFS.
-config_ini = '/home/benja/Documents/BALDR/BaldrApp/baldrapp/configurations/baldr_1.ini'
+config_ini = "/Users/bencb/Documents/ASGARD/BaldrApp/baldrapp/configurations/BALDR_UT_J3.ini" #'/home/benja/Documents/BALDR/BaldrApp/baldrapp/configurations/baldr_1.ini'
 zwfs_ns = bldr.init_zwfs_from_config_ini( config_ini=config_ini , wvl0=1.25e-6)
 
 # pyZelda object is here 
@@ -365,7 +365,7 @@ M2C_0 = gen_basis.construct_command_basis( basis= basis, number_of_modes = Nmode
 
 _ = bldr.build_IM( zwfs_ns ,  calibration_opd_input= 0 *zwfs_ns.grid.pupil_mask , calibration_amp_input = amp_input , \
     opd_internal = opd_internal,  basis = basis, Nmodes =  Nmodes, poke_amp = 0.05, poke_method = 'double_sided_poke',\
-        imgs_to_mean = 1, detector=None)
+        imgs_to_mean = 1, detector=None, use_pyZelda=False)
 
 _ = bldr.build_IM( zwfs_ns ,  calibration_opd_input= 0 *zwfs_ns.grid.pupil_mask , calibration_amp_input = amp_input , \
     opd_internal = opd_internal,  basis = basis, Nmodes =  Nmodes, poke_amp = 0.05, poke_method = 'single_sided_poke',\
@@ -874,7 +874,169 @@ if __name__ == '__main__':
 
 
 
+import numpy as np
+import matplotlib.pyplot as plt
+
+# ----------------------------
+# 1) Build pupil, phase, amps
+# ----------------------------
+N = 240  # keep even to confirm no internal cropping
+yy, xx = np.indices((N, N))
+cy = cx = (N - 1) / 2.0
+r = np.hypot(yy - cy, xx - cx)
+
+Rp = 0.45 * (N/2.0)                 # pupil radius [px]
+pupil = (r <= Rp).astype(float)
+
+amp = 1.0e4 * pupil                 # amplitude inside pupil only
+phi = 0.03 * ((r/Rp)**2 - 0.5) * pupil  # small, smooth aberration [rad]
+
+# ----------------------------
+# 2) Fixed ZWFS params
+# ----------------------------
+theta = np.pi/2                     # ZWFS phase shift
+phasemask_diameter = 1.2            # [λ/D]  (keep fixed while sweeping the cold stop)
+fplane_pixels = 300                 # focal-plane FFT grid
+pixels_per_wvld = 24                # INTERPRETED AS: pixels per (λ/D)
+
+# ----------------------------
+# 3) Sweep cold-stop diameters
+# ----------------------------
+cs_list = [1.0, 2.0, 3.0, 4.0, 5.0]  # [λ/D]
+
+Ic_list = []
+for cs in cs_list:
+    Ic = bldr.get_pupil_intensity(
+        phi, amp, theta, phasemask_diameter,
+        phasemask_mask=None,             # let the function build the phase disc
+        pupil_diameter=N,
+        fplane_pixels=fplane_pixels,
+        pixels_across_mask=pixels_per_wvld,  # pixels per (λ/D)
+        coldstop_diam=cs,                # <- sweeping this
+        coldstop_offset=(0.0, 0.0),
+        coldstop_mask=None,
+        debug=False
+    )
+    assert Ic.shape == amp.shape == (N, N)
+    Ic_list.append(Ic)
+
+# ----------------------------
+# 4) Inspect + visualize
+# ----------------------------
+means_in_pupil = [float(Ic[pupil > 0].mean()) for Ic in Ic_list]
+totals_in_pupil = [float(Ic[pupil > 0].sum()) for Ic in Ic_list]
+print("Cold-stop diameters [λ/D]:", cs_list)
+print("Mean intensity inside pupil:", means_in_pupil)
+print("Total intensity inside pupil:", totals_in_pupil)
+
+# Central row profiles to see filtering changes
+plt.figure(figsize=(8, 3))
+for Ic, cs in zip(Ic_list, cs_list):
+    plt.plot(Ic[int(cy), :], label=f"{cs:.0f} λ/D")
+plt.title("Central row |pupil| intensity vs cold-stop diameter")
+plt.xlabel("Pixel"); plt.ylabel("Intensity [a.u.]")
+plt.legend(title="Cold stop"); plt.tight_layout()
+plt.show()
+
+# Image array for a quick look
+fig, axs = plt.subplots(1, len(cs_list), figsize=(14, 3), constrained_layout=True)
+for ax, Ic, cs in zip(axs, Ic_list, cs_list):
+    im = ax.imshow(Ic, origin="lower", cmap="magma")
+    ax.contour(pupil, levels=[0.5], colors="w", linewidths=0.8)
+    ax.set_title(f"CS = {cs:.0f} λ/D")
+    ax.set_xticks([]); ax.set_yticks([])
+fig.colorbar(im, ax=axs.ravel().tolist(), shrink=0.75, pad=0.02)
+plt.show()
 
 
 
+# import numpy as np
+# import matplotlib.pyplot as plt
 
+# # --- one call, then measure the applied cold stop on the focal grid ---
+# cs_in = 0.6        # requested cold-stop DIAMETER [λ/D]
+# ppw   = 24         # pixels per (λ/D) you passed as pixels_across_mask
+# N     = 240
+
+# # build a simple pupil
+# yy, xx = np.indices((N, N)); cy=cx=(N-1)/2
+# r  = np.hypot(yy-cy, xx-cx)
+# Rp = 0.45*(N/2)
+# pupil = (r<=Rp).astype(float)
+# amp = 1e4*pupil
+# phi = 1e-3*np.cos(2*np.pi*0.6*((xx-cx)/(2*Rp))) * pupil  # small cosine phase
+
+# out = bldr.get_pupil_intensity(
+#     phi, amp, np.pi/2, 1.2,
+#     phasemask_mask=None,
+#     pupil_diameter=N,
+#     fplane_pixels=300,
+#     pixels_across_mask=ppw,   # pixels per (λ/D)
+#     coldstop_diam=cs_in,      # <-- what we’re testing
+#     coldstop_offset=(0.0, 0.0),
+#     coldstop_mask=None,
+#     return_terms=True, return_field=True, debug=False
+# )
+
+# C   = out["cold_stop_fp"]              # applied cold-stop mask on focal grid
+# ppw = out["pix_per_wvld"]              # pixels per (λ/D) actually used
+# yyf, xxf = np.indices(C.shape); Cf=(C.shape[0]-1)/2
+# rf = np.hypot(yyf-Cf, xxf-Cf)
+# r_pix = rf[C>0.5].max()                # pixel radius of the cold stop
+# measured_diam_lD = 2.0*r_pix/ppw
+# print(f"requested CS = {cs_in:.3f} λ/D, measured ≈ {measured_diam_lD:.3f} λ/D  (ppw={ppw:.2f})")
+
+
+
+# # Sweep cold-stop DIAMETER: smaller -> stronger low-pass
+# cs_list = [0.3, 0.5, 0.8, 1.2]
+
+# fig1, axs1 = plt.subplots(1, len(cs_list), figsize=(3.6*len(cs_list),3), constrained_layout=True)
+# fig2, axs2 = plt.subplots(1, len(cs_list), figsize=(3.6*len(cs_list),3), constrained_layout=True)
+
+# std_in_pupil = []
+# edge_energy  = []
+
+# for k, cs in enumerate(cs_list):
+#     out = bldr.get_pupil_intensity(
+#         phi, amp, np.pi/2, 1.2,
+#         phasemask_mask=None,
+#         pupil_diameter=N,
+#         fplane_pixels=300,
+#         pixels_across_mask=ppw,
+#         coldstop_diam=cs,
+#         coldstop_offset=(0.0, 0.0),
+#         coldstop_mask=None,
+#         return_terms=True, return_field=True, debug=False
+#     )
+
+#     # --- focal plane check: |Psi_theta_B|^2 with cold-stop contour ---
+#     psi_theta_B = np.fft.fftshift(np.fft.fft2(np.fft.ifftshift(out["psi_theta_crop"])))
+#     fp = np.abs(psi_theta_B)**2
+#     fp /= fp.max() if fp.max()>0 else 1
+#     axs1[k].imshow(fp, origin="lower", cmap="gray")
+#     axs1[k].contour(out["cold_stop_fp"], levels=[0.5], colors="r", linewidths=1)
+#     axs1[k].set_title(f"Focal plane, CS={cs:.1f} λ/D")
+#     axs1[k].set_xticks([]); axs1[k].set_yticks([])
+
+#     # --- pupil plane check: intensity & metrics ---
+#     Ic = out["Ic"]
+#     m = Ic[pupil>0].mean()
+#     Ic_n = Ic / (m if m>0 else 1)
+#     std_in_pupil.append(Ic_n[pupil>0].std())
+
+#     # edge-energy proxy (total variation) inside pupil
+#     gx, gy = np.gradient(Ic_n)
+#     ee = (np.abs(gx)+np.abs(gy))[pupil>0].sum()
+#     edge_energy.append(float(ee))
+
+#     im = axs2[k].imshow(Ic_n, origin="lower", cmap="magma")
+#     axs2[k].contour(pupil, levels=[0.5], colors="w", linewidths=0.7)
+#     axs2[k].set_title(f"Pupil, CS={cs:.1f} λ/D")
+#     axs2[k].set_xticks([]); axs2[k].set_yticks([])
+
+# fig2.colorbar(im, ax=axs2.ravel().tolist(), shrink=0.75, pad=0.02, label="Intensity / mean(in-pupil)")
+# plt.show()
+
+# print("STD(in-pupil)  vs CS:", [f"{cs:.1f}:{v:.4f}" for cs,v in zip(cs_list,std_in_pupil)])
+# print("Edge-energy TV vs CS:", [f"{cs:.1f}:{v:.1f}" for cs,v in zip(cs_list,edge_energy)])

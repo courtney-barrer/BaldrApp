@@ -10,6 +10,9 @@ import math
 from configparser import ConfigParser
 from types import SimpleNamespace
 import scipy.ndimage as ndimage
+from scipy.integrate import quad 
+import pandas as pd 
+from scipy.interpolate import interp1d
 
 def ini_to_namespace(ini_file):
     # convert ini file to python namespace
@@ -144,7 +147,55 @@ def insert_concentric(smaller_array, larger_array):
 
 
 
-def get_theoretical_reference_pupils( wavelength = 1.65e-6 ,F_number = 21.2, mask_diam = 1.2, eta=0, diameter_in_angular_units = True, get_individual_terms=False, phaseshift = np.pi/2 , padding_factor = 4, debug= True, analytic_solution = True ) :
+def get_phasemask_phaseshift( wvl, depth, dot_material = 'N_1405' ):
+    """
+    wvl is wavelength in micrometers
+    depth is the physical depth of the phasemask in micrometers
+    dot material is the material of phaseshifting object
+
+    it is assumed phasemask is in air (n=1).
+    N_1405 is photoresist used for making phasedots in Sydney
+    """
+    print( 'reminder wvl input should be um!')
+    if dot_material == 'N_1405':
+        # wavelengths in csv file are in nanometers
+        df = pd.read_csv('baldrapp/data/Exposed_Ma-N_1405_optical_constants.txt', sep='\s+', header=1)
+        f = interp1d(df['Wavelength(nm)'], df['n'], kind='linear',fill_value=np.nan, bounds_error=False)
+        n = f( wvl * 1e3 ) # convert input wavelength um - > nm
+        phaseshift = 2 * np.pi/ wvl  * depth * (n -1)
+        return( phaseshift )
+    
+    else:
+        raise TypeError('No corresponding dot material for given input. Try N_1405.')
+
+
+
+# Planck's law function for spectral radiance
+def planck_law(wavelength, T):
+    """Returns spectral radiance (Planck's law) at a given wavelength and temperature."""
+    h = 6.62607015e-34
+    c = 299792458.0
+    k = 1.380649e-23
+    return (2 * h * c**2) / (wavelength**5) / (np.exp(h * c / (wavelength * k * T)) - 1)
+
+# Function to find the weighted average wavelength (central wavelength)
+def find_central_wavelength(lambda_cut_on, lambda_cut_off, T):
+    # Define integrands for energy and weighted wavelength
+    def _integrand_energy(wavelength):
+        return planck_law(wavelength, T)
+
+    def _integrand_weighted(wavelength):
+        return planck_law(wavelength, T) * wavelength
+
+    # Integrate to find total energy and weighted energy
+    total_energy, _ = quad(_integrand_energy, lambda_cut_on, lambda_cut_off)
+    weighted_energy, _ = quad(_integrand_weighted, lambda_cut_on, lambda_cut_off)
+    
+    # Calculate the central wavelength as the weighted average wavelength
+    central_wavelength = weighted_energy / total_energy
+    return central_wavelength
+
+def get_theoretical_reference_pupils( wavelength = 1.65e-6 ,F_number = 21.2, mask_diam = 1.2, coldstop_diam=None, eta=0, diameter_in_angular_units = True, get_individual_terms=False, phaseshift = np.pi/2 , padding_factor = 4, debug= True, analytic_solution = True ) :
     """
     get theoretical reference pupil intensities of ZWFS with / without phasemask 
     
@@ -159,6 +210,7 @@ def get_theoretical_reference_pupils( wavelength = 1.65e-6 ,F_number = 21.2, mas
             if diameter_in_angular_units=True than this has diffraction limit units ( 1.22 * f * lambda/D )
             if  diameter_in_angular_units=False than this has physical units (m) determined by F_number and wavelength
         DESCRIPTION. The default is 1.2.
+    coldstop_diam : diameter in lambda / D of focal plane coldstop
     eta : ratio of secondary obstruction radius (r_2/r_1), where r2 is secondary, r1 is primary. 0 meams no secondary obstruction
     diameter_in_angular_units : TYPE, optional
         DESCRIPTION. The default is True.
@@ -181,7 +233,7 @@ def get_theoretical_reference_pupils( wavelength = 1.65e-6 ,F_number = 21.2, mas
     pupil_radius = 1  # Pupil radius in meters
 
     # Define the grid in the pupil plane
-    N = 2**9 + 1 #256  # Number of grid points (assumed to be square)
+    N = 2**9+1  # for parity (to not introduce tilt) works better ODD!  # Number of grid points (assumed to be square)
     L_pupil = 2 * pupil_radius  # Pupil plane size (physical dimension)
     dx_pupil = L_pupil / N  # Sampling interval in the pupil plane
     x_pupil = np.linspace(-L_pupil/2, L_pupil/2, N)   # Pupil plane coordinates
@@ -197,9 +249,17 @@ def get_theoretical_reference_pupils( wavelength = 1.65e-6 ,F_number = 21.2, mas
     # Zero padding to increase resolution
     # Increase the array size by padding (e.g., 4x original size)
     N_padded = N * padding_factor
+    if (N % 2) != (N_padded % 2):  
+        N_padded += 1  # Adjust to maintain parity
+        
     pupil_padded = np.zeros((N_padded, N_padded))
-    start_idx = (N_padded - N) // 2
-    pupil_padded[start_idx:start_idx+N, start_idx:start_idx+N] = pupil
+    #start_idx = (N_padded - N) // 2
+    #pupil_padded[start_idx:start_idx+N, start_idx:start_idx+N] = pupil
+
+    start_idx_x = (N_padded - N) // 2
+    start_idx_y = (N_padded - N) // 2  # Explicitly ensure symmetry
+
+    pupil_padded[start_idx_y:start_idx_y+N, start_idx_x:start_idx_x+N] = pupil
 
     # Perform the Fourier transform on the padded array (normalizing for the FFT)
     pupil_ft = np.fft.fftshift(np.fft.fft2(np.fft.ifftshift(pupil_padded)))
@@ -211,6 +271,7 @@ def get_theoretical_reference_pupils( wavelength = 1.65e-6 ,F_number = 21.2, mas
     L_image = wavelength * F_number / dx_pupil  # Total size in the image plane
     dx_image_padded = L_image / N_padded  # Sampling interval in the image plane with padding
     
+
     if diameter_in_angular_units:
         x_image_padded = np.linspace(-L_image/2, L_image/2, N_padded) / airy_scale  # Image plane coordinates in Airy units
         y_image_padded = np.linspace(-L_image/2, L_image/2, N_padded) / airy_scale
@@ -225,7 +286,15 @@ def get_theoretical_reference_pupils( wavelength = 1.65e-6 ,F_number = 21.2, mas
     else: 
         mask = np.sqrt(X_image_padded**2 + Y_image_padded**2) <= mask_diam / 4
         
-    psi_B = np.fft.fftshift(np.fft.fft2(np.fft.ifftshift(pupil_padded)) )
+    if coldstop_diam is not None:
+        coldmask = np.sqrt(X_image_padded**2 + Y_image_padded**2) <= coldstop_diam / 4
+    else:
+        coldmask = np.ones(X_image_padded.shape)
+
+    pupil_ft = np.fft.fft2(np.fft.ifftshift(pupil_padded))  # Remove outer fftshift
+    pupil_ft = np.fft.fftshift(pupil_ft)  # Shift only once at the end
+
+    psi_B = coldmask * pupil_ft
                             
     b = np.fft.fftshift( np.fft.ifft2( mask * psi_B ) ) 
 
