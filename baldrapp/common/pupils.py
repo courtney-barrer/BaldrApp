@@ -534,6 +534,8 @@ def pick_pupil(pupil_geometry, dim, diameter ):
         pup = vlt_pupil(dim = dim, diameter =  diameter, dead_actuator_diameter=0) 
     elif pupil_geometry == 'disk':
         pup = disc( dim = dim, size = diameter//2) 
+    elif pupil_geometry == "solarstein": #internal source on asgard (no spiders, UT like secondary) 
+        pup = disc_obstructed(dim, diameter, obs=1100/8000, diameter=True, strict=False, cpix=False)
     else :
         print('no valid geometry defined (try pupil_geometry == disk, or UT, or AT\nassuming disk pupil')
         pup = disc( dim = dim, size = diameter//2) 
