@@ -2300,10 +2300,9 @@ def init_zwfs(grid_ns, optics_ns, dm_ns):
             pupil = aperture.baldr_AT_pupil( diameter=grid_ns.N, dim=int(grid_ns.dim), spiders_thickness=0.016, strict=False, cpix=False) #, padding_factor = 2 )
         elif grid_ns.telescope.upper() == 'DISC':
             pupil = aperture.disc(dim=int(grid_ns.dim), size= grid_ns.N, diameter=True, strict=False, center=(), cpix=False, invert=False, mask=False)
-        elif grid_ns.telescope.upper() == 'solarstein': # ASGARD internal source SOLARSTEIN which has UT like secondary with no spiders 
+        elif grid_ns.telescope.upper() == 'SOLARSTEIN': # ASGARD internal source SOLARSTEIN which has UT like secondary with no spiders 
             pupil = aperture.disc_obstructed(dim=int(grid_ns.dim), size= grid_ns.N, obs = 1100/8000, diameter=True, strict=False )
             
-        
         else:
             raise TypeError("telescope not implemented. Try DISC, AT or UT")
         
