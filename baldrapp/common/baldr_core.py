@@ -2813,41 +2813,68 @@ def get_frame( opd_input,  amp_input ,  opd_internal,  zwfs_ns , detector=None, 
     return Intensity
 
 
-def classify_pupil_regions( opd_input,  amp_input ,  opd_internal,  zwfs_ns , detector=None, pupil_diameter_scaling = 1.0, pupil_offset = (0,0), use_pyZelda = True):
-    # very basic pupil classification
-    # adds to zwfs_ns 
-    # inside pupil 
+def classify_pupil_regions( opd_input,  amp_input ,  opd_internal,  zwfs_ns , detector=None, pupil_diameter_scaling = 1.0, pupil_offset = (0,0), use_pyZelda = True, mode='bright', lobe_threshold = 0.03):
     
-    # We intentionally put detector as None here to keep intensities in wave space
-    # we do the math here and then bin after if user selects detector is not None    
-    N0 = get_N0( opd_input,  amp_input ,  opd_internal,  zwfs_ns , detector=None, use_pyZelda = use_pyZelda)
-    I0 = get_I0( opd_input,  amp_input ,  opd_internal,  zwfs_ns , detector=None, use_pyZelda = use_pyZelda)
+    ##18-12-25 redo to be consistent with how we do it in real Baldr
+    N0 = get_N0( opd_input,  amp_input ,  opd_internal,  zwfs_ns , detector=detector, use_pyZelda = use_pyZelda)
+    I0 = get_I0( opd_input,  amp_input ,  opd_internal,  zwfs_ns , detector=detector, use_pyZelda = use_pyZelda)
     
-    # currently we don't use N0 to classify, just use known pupil diameter 
-    #pupil_filt = zwfs_ns.grid.pupil_mask > 0.5
-    pupil_filt = (zwfs_ns.grid.wave_coord.X - pupil_offset[0])**2 + (zwfs_ns.grid.wave_coord.Y - pupil_offset[1])**2 <= pupil_diameter_scaling * (zwfs_ns.grid.D/2)**2
+    center_x, center_y, a, b, theta, pupil_mask = util.detect_pupil(N0, sigma=2, threshold=0.5, plot=True, savepath=None)
+    
+    outside_filt = ~pupil_mask 
 
-    outside_filt = ~pupil_filt 
+    secondary_mask = util.get_secondary_mask(pupil_mask, (center_x, center_y))
+
+    # filter edge of pupil and out radii limit for the strehl mask 
+    if 'bright' in mode.lower():
+        pupil_edge_filter = util.filter_exterior_annulus(pupil_mask, inner_radius=7, outer_radius=100) # to limit pupil edge pixels
+        pupil_limit_filter = ~util.filter_exterior_annulus(pupil_mask, inner_radius=11, outer_radius=100) # to limit far out pixel
+    elif 'faint' in mode.lower():
+        pupil_edge_filter = util.filter_exterior_annulus(pupil_mask, inner_radius=4, outer_radius=100) # to limit pupil edge pixels
+        pupil_limit_filter = ~util.filter_exterior_annulus(pupil_mask, inner_radius=8, outer_radius=100) # to limit far out pixel
+    else:
+        raise UserWarning("invalid mode. Must be either 'bright' or 'faint'")
+    #lobe_threshold = 0.1 # percentage of mean clear pupil interior. Absolute values above this in the exterior pixels are candidates for Strehl pixels 
+    #exterior_filter =  ( abs( I0  - N0 )  > lobe_threshold * np.mean( N0[pupil_mask] )  ) * (~pupil_mask) * pupil_edge_filter 
     
-    secondary_strehl_filt = (zwfs_ns.grid.wave_coord.X - pupil_offset[0])**2 + (zwfs_ns.grid.wave_coord.Y - pupil_offset[1])**2 < (zwfs_ns.grid.D/10)**2
+    # to be more aggressive we can remove ~pupil_mask in filter
+    exterior_mask =  ( abs( I0  - N0 ) > lobe_threshold  * np.mean( N0[pupil_mask] ) ) * (~pupil_mask) * pupil_edge_filter * pupil_limit_filter
+
+    ### old simplified way commented out 18-12-25    
+    # # We intentionally put detector as None here to keep intensities in wave space
+    # # we do the math here and then bin after if user selects detector is not None    
+
+    # # currently we don't use N0 to classify, just use known pupil diameter 
+    # #pupil_filt = zwfs_ns.grid.pupil_mask > 0.5
+    # pupil_filt = (zwfs_ns.grid.wave_coord.X - pupil_offset[0])**2 + (zwfs_ns.grid.wave_coord.Y - pupil_offset[1])**2 <= pupil_diameter_scaling * (zwfs_ns.grid.D/2)**2
+
+    # outside_filt = ~pupil_filt 
     
-    outer_strehl_filt = ( I0 - N0 >   4.5 * np.median(I0) ) * outside_filt
+    # secondary_strehl_filt = (zwfs_ns.grid.wave_coord.X - pupil_offset[0])**2 + (zwfs_ns.grid.wave_coord.Y - pupil_offset[1])**2 < (zwfs_ns.grid.D/10)**2
     
-    if detector is not None:
-        pupil_filt = average_subarrays(array= pupil_filt, block_size=(zwfs_ns.detector.binning,zwfs_ns.detector.binning)) > 0
+    # outer_strehl_filt = ( I0 - N0 >   4.5 * np.median(I0) ) * outside_filt
+    
+    # if detector is not None:
+    #     pupil_filt = average_subarrays(array= pupil_filt, block_size=(zwfs_ns.detector.binning,zwfs_ns.detector.binning)) > 0
         
-        outside_filt = average_subarrays(array= outside_filt, block_size=(zwfs_ns.detector.binning,zwfs_ns.detector.binning)) > 0
+    #     outside_filt = average_subarrays(array= outside_filt, block_size=(zwfs_ns.detector.binning,zwfs_ns.detector.binning)) > 0
         
-        secondary_strehl_filt = average_subarrays( secondary_strehl_filt ,block_size=(zwfs_ns.detector.binning,zwfs_ns.detector.binning)) > 0
+    #     secondary_strehl_filt = average_subarrays( secondary_strehl_filt ,block_size=(zwfs_ns.detector.binning,zwfs_ns.detector.binning)) > 0
         
-        outer_strehl_filt = average_subarrays( outer_strehl_filt ,block_size=(zwfs_ns.detector.binning,zwfs_ns.detector.binning)) > 0
+    #     outer_strehl_filt = average_subarrays( outer_strehl_filt ,block_size=(zwfs_ns.detector.binning,zwfs_ns.detector.binning)) > 0
 
 
     region_classification_dict = {
-        "pupil_filt":pupil_filt,
+        "pupil_filt":pupil_mask,
         "outside_filt":outside_filt,
-        "secondary_strehl_filt":secondary_strehl_filt,
-        "outer_strehl_filt":outer_strehl_filt }
+        "secondary_strehl_filt":secondary_mask,
+        "outer_strehl_filt":exterior_mask,
+        "center_x" : center_x, #fitted centers
+        "center_y" : center_y, #fitted centers
+        "a":a,  #semi major axis of fitted ellipse
+        "b":b, #semi minor axis of fitted ellipse
+        "theta" : theta # orientation of semimajor axis 
+        }
     
     regions_ns = SimpleNamespace(**region_classification_dict ) 
     
