@@ -2933,10 +2933,10 @@ def build_IM( zwfs_ns ,  calibration_opd_input, calibration_amp_input ,  opd_int
             Intensity = np.mean( img_list, axis = 0).reshape(-1) 
 
             # IMPORTANT : we normalize by mean over total image region (post reduction) (NOT FILTERED )... 
-            Intensity *= 1/np.mean( Intensity ) # we normalize by mean over total region! 
+            #Intensity *= 1/np.mean( Intensity ) # we normalize by mean over total region! 
             
             # get intensity error signal 
-            errsig = process_zwfs_signal( Intensity, I0, zwfs_ns.pupil_regions.pupil_filt )
+            errsig = Intensity - I0 #process_zwfs_signal( Intensity, I0, zwfs_ns.pupil_regions.pupil_filt )
 
             IM.append( list(  errsig.reshape(-1) ) ) #toook out 1/poke_amp *
 
@@ -2965,7 +2965,7 @@ def build_IM( zwfs_ns ,  calibration_opd_input, calibration_amp_input ,  opd_int
             I_minus = np.mean( I_minus_list, axis = 0).reshape(-1)  # flatten so can filter with ZWFS.pupil_pixels
             I_minus *= 1/np.mean( I_minus )
 
-            errsig =  (I_plus - I_minus)[np.array( zwfs_ns.pupil_regions.pupil_filt.reshape(-1) )]
+            errsig =  (I_plus - I_minus) #[np.array( zwfs_ns.pupil_regions.pupil_filt.reshape(-1) )]
             IM.append( list(  errsig.reshape(-1) ) ) #toook out 1/poke_amp *
 
     else:
@@ -3024,12 +3024,15 @@ def register_DM_in_pixelspace_from_IM( zwfs_ns , plot_intermediate_results=True 
         dm_4_corners.append( np.where( M2C_0[i] )[0][0] )
         #dm2px.get_DM_command_in_2D( d['M2C'].data[:,i]  # if you want to plot it 
 
-        tmp = np.zeros( zwfs_ns.pupil_regions.pupil_filt.shape )
-        tmp.reshape(-1)[zwfs_ns.pupil_regions.pupil_filt.reshape(-1)] = zwfs_ns.reco.IM[i] 
+        ## !!when we filtered the pupil in the interaction matrix 
+        #tmp = np.zeros( zwfs_ns.pupil_regions.pupil_filt.shape )
+        #tmp.reshape(-1)[zwfs_ns.pupil_regions.pupil_filt.reshape(-1)] = zwfs_ns.reco.IM[i] 
 
         #plt.imshow( tmp ); plt.show()
-        img_4_corners.append( abs(tmp ) )
+        #img_4_corners.append( abs(tmp ) )
 
+        ## when we dont filter the pupil in the interaction matrix 
+        img_4_corners.append( abs( zwfs_ns.reco.IM[i].reshape(zwfs_ns.pupil_regions.pupil_filt.shape ) )  )
     #plt.imshow( np.sum( tosee, axis=0 ) ); plt.show()
 
     # dm_4_corners should be an array of length 4 corresponding to the actuator index in the (flattened) DM command space
