@@ -1206,7 +1206,7 @@ def get_grids( wavelength = 1.65e-6 , F_number = 21.2, mask_diam = 1.2, diameter
     
     return pupil_padded, mask  
 
-
+### DM actuator influence options
 #@njit
 def gaussian_displacement(c_i, sigma_i, x, y, x0, y0):
     """Compute Gaussian displacement for a single actuator."""
@@ -1214,6 +1214,8 @@ def gaussian_displacement(c_i, sigma_i, x, y, x0, y0):
     #return c_i / (1 + ((x - x0)**2 + (y - y0)**2) / (0.7*sigma_i)**2) #lorentzian approximation to speed things up - good blanace accuracy and speed
     #return np.clip(c_i * (1 - ((x - x0)**2 + (y - y0)**2)/ (1.2 * sigma_i**2)), a_min=0, a_max=None) #quadratic
     #return c_i * ( (x - x0)**2 + (y - y0)**2 <= sigma_i**2 ) # box profile'
+
+
 
 # t0 = time.time()
 # OL_data = bldr.roll_screen_on_dm( zwfs_ns=zwfs_ns,  Nmodes_removed=14, ph_scale = 0.2, actuators_per_iteration = 0.5, number_of_screen_initiations= 200, opd_internal=opd_internal)
@@ -2964,8 +2966,8 @@ def build_IM( zwfs_ns ,  calibration_opd_input, calibration_amp_input ,  opd_int
 
             I_minus = np.mean( I_minus_list, axis = 0).reshape(-1)  # flatten so can filter with ZWFS.pupil_pixels
             I_minus *= 1/np.mean( I_minus )
-
-            errsig =  (I_plus - I_minus) #[np.array( zwfs_ns.pupil_regions.pupil_filt.reshape(-1) )]
+            # 19/12/25 added divison of pokeamp 
+            errsig =  (I_plus - I_minus) / poke_amp #[np.array( zwfs_ns.pupil_regions.pupil_filt.reshape(-1) )]
             IM.append( list(  errsig.reshape(-1) ) ) #toook out 1/poke_amp *
 
     else:

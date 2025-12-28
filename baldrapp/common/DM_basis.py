@@ -3,6 +3,15 @@ from scipy.ndimage import distance_transform_edt
 from . import utilities as util 
 from math import factorial
 
+try:
+    from xaosim.zernike import mkzer1
+    from scipy.interpolate import griddata
+    from xaosim.pupil import _dist as dist
+    we_have_xaosim = 1
+except:
+    print("failed to import xaosim tools used specifically for BMC-multi3.5 DM Zernike basis.")
+    we_have_xaosim = 0
+
 def shift(xs, n, m, fill_value=np.nan):
     # shifts a 2D array xs by n rows, m columns and fills the new region with fill_value
 
@@ -238,6 +247,7 @@ def construct_command_basis( basis='Zernike_pinned_edges', number_of_modes = 20,
         M2C = np.eye( 140 ) # we just consider this over all actuators (so defaults to 140 modes) 
         # we filter zonal basis in the eigenvectors of the control matrix. 
     
+
     elif basis == 'Zonal_pinned_edges':
         # pin edges of actuator
         b = np.eye(100) #
@@ -246,6 +256,16 @@ def construct_command_basis( basis='Zernike_pinned_edges', number_of_modes = 20,
         control_basis = np.array( [np.sqrt( 1/np.nansum( cb**2 ) ) * cb.reshape(-1) for cb in bmcdm_basis_list] )
 
         M2C = np.array( control_basis ).T
+
+    elif basis == 'TT_w_zonal': # TT and zonal basis on BMC multi 3.5 DM 
+        M2C_TT = construct_command_basis( basis='Zernike_pinned_edges', 
+                                         number_of_modes = 3, 
+                                         Nx_act_DM = Nx_act_DM, 
+                                         Nx_act_basis = Nx_act_basis, 
+                                         act_offset=act_offset, 
+                                         without_piston=True)
+        M2C_zonal = np.eye( 140 )
+        M2C = np.hstack( (M2C_TT, M2C_zonal ) ) #np.array( list( M2C_TT ).append( M2C_zonal ) )
 
     else:
         raise TypeError( ' input basis name invalid. Try: "Zonal", "Zonal_pinned_edges", "Zernike", "Zernike_pinned_edges", "fourier", "fourier_pinned_edges"  etc ')
@@ -737,3 +757,70 @@ def pin_to_nearest_registered_with_missing_corners(dm_shape, missing_corners, re
 
 
 
+###### 
+# Frantz Zernike definitions on DM. Requires extra dependancies so avoid for now in sim. 
+def fill_mode(dmmap):
+    ''' Extrapolate the modes outside the aperture to ensure edge continuity
+
+    Parameter:
+    ---------
+    - a single 2D DM map
+    '''
+
+
+    dms = 12 
+    aps = 10  # the aperture grid size
+    dd = dist(dms, dms, between_pix=True)  # auxilliary array
+    tprad = 5.5  # the taper function radius
+    taper = np.exp(-(dd/tprad)**20)  # power to be adjusted ?
+    amask = taper > 0.4  # seems to work well
+    #circ = dd < 4
+
+    out = True ^ amask  # outside the aperture
+    gx, gy = np.mgrid[0:dms, 0:dms]
+    points = np.array([gx[amask], gy[amask]]).T
+    values = np.array(dmmap[amask])
+    grid_z0 = griddata(points, values, (gx[out], gy[out]), method='nearest')
+    res = dmmap.copy()
+    res[out] = grid_z0
+    return res
+
+
+def zer_bank(i0, i1, extrapolate=True, tapered=False):
+    ''' ------------------------------------------
+    Returns a 3D array containing 2D (dms x dms)
+    maps of Zernike modes for Noll index going
+    from i0 to i1 included.
+
+    Parameters:
+    ----------
+    - i0: the first Zernike index to be used
+    - i1: the last Zernike index to be used
+    - tapered: boolean (tapers the Zernike)
+    ------------------------------------------ '''
+
+    dms = 12 
+    aps = 10  # the aperture grid size
+    dd = dist(dms, dms, between_pix=True)  # auxilliary array
+    tprad = 5.5  # the taper function radius
+    taper = np.exp(-(dd/tprad)**20)  # power to be adjusted ?
+    amask = taper > 0.4  # seems to work well
+    #circ = dd < 4
+
+    dZ = i1 - i0 + 1
+    res = np.zeros((dZ, dms, dms))
+    for ii in range(i0, i1+1):
+        test = mkzer1(ii, dms, aps//2, limit=False)
+        # if ii == 1:
+        #     test *= circ
+        if ii != 1:
+            test -= test[amask].mean()
+            test /= test[amask].std()
+        if extrapolate is True:
+            # if ii != 1:
+            test = fill_mode(test)
+        if tapered is True:
+            test *= taper * amask
+        res[ii-i0] = test
+
+    return(res)
