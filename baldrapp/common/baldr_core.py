@@ -1617,7 +1617,7 @@ def get_dm_displacement( command_vector, gain, sigma, X, Y, x0, y0 ):
 
 
 
-### NEED TO TEST!!! try deal with even / off with fft
+
 def get_pupil_intensity(
     phi, amp, theta, phasemask_diameter, phasemask_mask, pupil_diameter,
     fplane_pixels=300, pixels_across_mask=10,
@@ -3659,6 +3659,19 @@ def reco_method(
         "I2M_HO":reco_dict[what_space]["I2M_HO"],
         "M2C_LO":reco_dict[what_space]["M2C_LO"],
         "M2C_HO":reco_dict[what_space]["M2C_HO"],
+        "info":{
+            #auxillary info
+            "space": what_space,
+            "LO": LO,
+            "LO_inv_method": LO_inv_method,
+            "HO_inv_method": HO_inv_method,
+            "project_out_of_HO": project_out_of_HO,
+            "truncation_idx": truncation_idx,
+            "eps": eps,
+
+            "HO_intermediates": inv_HO_dict,
+            "LO_intermediates": inv_LO_dict,
+        }
     }
     reco_dict_current = vars( zwfs_ns.reco )
     updated_reco_dict = reco_dict_current | dict2append
