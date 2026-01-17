@@ -3078,6 +3078,597 @@ def update_dm_registration_in_detector_space( zwfs_ns, transform_dict ):
     
     return zwfs_ns
     
+
+
+
+# added 18-Jan-2026 to be more consistent with Baldr methods on sky
+# use this over other reconstruction methods 
+def reco_method(
+    zwfs_ns,
+    LO=2,
+    LO_inv_method="eigen",     # pinv | eigen | map
+    HO_inv_method="eigen",     # pinv | eigen | zonal | map
+    project_out_of_LO=None, # we should never really project things out of LO basis, perhaps scintillation in advanced cases
+    project_out_of_HO="lo_intensity", # lo_intensity | lo_command | 
+    what_space = "pix", # what space does I2M operate in ( pix | dm  )
+    **kwargs
+):
+    """
+    Construct ZWFS reconstruction operators for low-order (LO) and high-order (HO)
+    channels, in either pixel measurement space ("pix") or DM-sampled measurement
+    space ("dm").
+
+    The function builds:
+      - I2M_LO, I2M_HO : measurement -> modal coefficient estimators
+      - M2C_LO, M2C_HO : modal coefficients -> DM command mappings
+    optionally followed by projection operators that suppress LO leakage in the HO
+    channel.
+
+    The interaction matrix is taken from:
+      - zwfs_ns.reco.IM : array, shape (Nmodes_total, Npix_flat)
+        Each row is the measured response (flattened pixel signal) to a unit poke
+        of a corresponding DM command in zwfs_ns.reco.M2C_0.
+
+    The poke-mode DM command basis is taken from:
+      - zwfs_ns.reco.M2C_0 : array, shape (Nmodes_total, Nact=140)
+        Row m is the DM command used to generate IM[m].
+
+    A DM-sampled interaction matrix is built internally by interpolating each
+    IM row from pixel space onto the DM actuator sampling grid defined by
+    zwfs_ns.dm2pix_registration.actuator_coord_list_pixel_space.
+
+    --------------------------------------------------------------------------
+    Parameters
+    --------------------------------------------------------------------------
+    zwfs_ns : namespace-like
+        Must contain at least:
+          - zwfs_ns.reco.IM, zwfs_ns.reco.I0, zwfs_ns.reco.M2C_0
+          - zwfs_ns.dm2pix_registration.actuator_coord_list_pixel_space
+        and whatever DM_registration.interpolate_pixel_intensities requires.
+
+    LO : int, default=2
+        Number of low-order modes (typically tip/tilt). Modes [0:LO) are LO and
+        modes [LO:] are HO.
+
+    LO_inv_method : {"eigen","pinv","map"}, default="eigen"
+        Method used to build I2M_LO.
+          - "pinv" / "eigen": uses np.linalg.pinv(IM_LO, rcond=eps)
+          - "map"          : uses a Gaussian MAP estimator with (Ca_LO_*, Cn_LO_*)
+
+    HO_inv_method : {"eigen","map","zonal"}, default="eigen"
+        Method used to build I2M_HO (and an internal representation of M2C_HO).
+          - "eigen": truncated SVD of IM_HO
+          - "map"  : Gaussian MAP estimator in a truncated SVD subspace
+                    (truncation_idx controls retained singular directions)
+          - "zonal": diagonal actuator-wise inverse in *DM measurement space only*
+                    (i.e. only returns a "dm" entry in reco_dict)
+
+    project_out_of_LO : None
+        Currently not implemented. Any non-None value raises.
+
+    project_out_of_HO : {None,"lo_intensity","lo_command"}, default="lo_intensity"
+        Optional suppression of LO content from the HO control path:
+          - None:
+              no projection
+          - "lo_intensity":
+              projects the HO measurement vector onto the orthogonal complement of
+              the LO measurement subspace (built from IM_LO via SVD). This modifies
+              I2M_HO only (measurement-side projection).
+          - "lo_command":
+              projects HO commands into the null-space of the LO command subspace
+              spanned by M2C_0[:LO]. This modifies M2C_HO only (command-side projection).
+              If filter_dm_pupil is provided, the LO command basis is weighted by it.
+
+    --------------------------------------------------------------------------
+    Keyword arguments (kwargs)
+    --------------------------------------------------------------------------
+    eps : float, default=1e-12
+        Small diagonal regularisation used in inversions and SVD rank decisions.
+
+    truncation_idx : int, optional
+        Truncation parameter used for:
+          - HO_inv_method="eigen": number of singular modes retained
+          - HO_inv_method="map"  : number of singular directions retained for the
+                                  reduced MAP solve (no extra tuning variable used)
+        If omitted and HO_inv_method="eigen", a default is chosen in the function.
+
+    filter_dm_pupil : array_like, shape (140,), optional
+        Actuator weighting mask (0..1) representing the DM pupil footprint.
+        Used for:
+          - HO_inv_method="zonal": to down-weight / zero actuators outside footprint
+          - project_out_of_HO="lo_command": to weight the LO command subspace before
+            building its projector
+
+    MAP covariance inputs (all optional; defaults fall back to scaled identity):
+      - Cn_LO_px, Cn_LO_dm : (Nmeas,Nmeas) noise covariance for LO in pix/dm space
+      - Ca_LO_px, Ca_LO_dm : (LO,LO) prior covariance on LO coefficients
+      - Cn_HO_px, Cn_HO_dm : (Nmeas,Nmeas) noise covariance for HO in pix/dm space
+      - Ca_HO_px, Ca_HO_dm : (Nho,Nho) prior covariance on HO coefficients
+      - sigma_n : float, default=1.0
+          Used only if Cn_* is not provided (Cn = sigma_n^2 I)
+      - sigma_a : float, default=1.0
+          Used only if Ca_* is not provided (Ca = sigma_a^2 I)
+
+    Notes on MAP implementation:
+      This implementation uses the equivalent “measurement form”:
+          I2M = Ca H^T (H Ca H^T + Cn)^(-1)
+      and for HO it optionally performs the solve in a truncated SVD subspace
+      controlled by truncation_idx (to avoid poorly-sensed singular directions).
+
+    --------------------------------------------------------------------------
+    Returns
+    --------------------------------------------------------------------------
+    reco_dict : dict
+        Keys are measurement spaces: "pix" and/or "dm".
+        Each entry is a dict containing:
+          - "I2M_LO" : ndarray, shape (LO, Nmeas)
+          - "M2C_LO" : ndarray, shape (140, LO)  (from zwfs_ns.reco.M2C_0[:LO].T)
+          - "I2M_HO" : ndarray, shape (Nho, Nmeas)
+          - "M2C_HO" : ndarray, shape (140, Nho) or (140, k_eff) depending on method
+                       (for MAP/zonal HO the mapping comes from zwfs_ns.reco.M2C_0[LO:].T)
+          - "IM_LO"  : ndarray, shape (Nmeas, LO)
+          - "IM_HO"  : ndarray, shape (Nmeas, Nho)
+          - "LO_intermediates" / "HO_intermediates" : dicts with diagnostic matrices
+            (SVD factors, covariances, projectors, effective truncation, etc.)
+
+        Special case:
+          - If HO_inv_method="zonal", only the "dm" space is returned (pixel-space
+            reconstruction is skipped by design).
+
+    --------------------------------------------------------------------------
+    Assumptions / conventions
+    --------------------------------------------------------------------------
+    - zwfs_ns.reco.IM rows correspond 1:1 with rows of zwfs_ns.reco.M2C_0.
+    - LO corresponds to the first LO poke modes in that ordering.
+    - The DM has 140 actuators (BMC 3.5 layout); filter_dm_pupil is expected to
+      have length 140 if provided.
+    - Sign conventions are not enforced here; this function only produces linear
+      operators. Closed-loop sign and gain selection are handled by the caller.
+    """
+
+    # ---- kwargs handling ----
+    truncation_idx = kwargs.get("truncation_idx", None)
+    if truncation_idx  is not None:
+        truncation_idx = int(truncation_idx)
+
+    if (truncation_idx is None) and ("eigen" in HO_inv_method.lower()):
+        print("no truncation_idx for HO_inv_method, using defaul = 30\n")
+        truncation_idx = 30. 
+
+    eps = float(kwargs.get("eps", 1e-12))
+    
+    filter_dm_pupil = kwargs.get("filter_dm_pupil", None) # used to filter the cmd space for pupil inprint which is important if projecting modes out of command space 
+
+    if filter_dm_pupil is not None:
+        if np.array( filter_dm_pupil  ).shape[0] != 140:
+            print( filter_dm_pupil.shape, "is not BMC 3.5 size of 140! ")
+    else:
+        print("user input for DM pupil filter")
+
+
+    LO = int(LO) # lower order mode index definition
+
+    if LO < 0:
+        raise ValueError("LO must be >= 0")
+
+    if LO == 0:
+        if project_out_of_HO is not None:
+            raise ValueError(
+                "project_out_of_HO is not valid when LO=0 "
+                "(no LO subspace exists to project out)"
+            )
+        
+    # ---- sanity checks / expectations ----
+    if not hasattr(zwfs_ns, "reco") or not hasattr(zwfs_ns.reco, "IM"):
+        raise ValueError("zwfs_ns.reco.IM not found. Did you run build_IM / populate zwfs_ns.reco?")
+
+    IM_px_modes_by_meas = np.array(zwfs_ns.reco.IM, dtype=float)  # expected shape (Nmodes_total, Npix_flat)
+    if IM_px_modes_by_meas.ndim != 2:
+        raise ValueError(f"zwfs_ns.reco.IM must be 2D, got shape {IM_px_modes_by_meas.shape}")
+
+    Nmodes_total, Npix_flat = IM_px_modes_by_meas.shape
+    if LO < 0 or LO >= Nmodes_total:
+        raise ValueError(f"LO must satisfy 0 <= LO < Nmodes_total. Got LO={LO}, Nmodes_total={Nmodes_total}")
+
+    # ---- build DM-sampled version of the interaction matrix ----
+    IM_dm_list = []
+    for ii in IM_px_modes_by_meas:  # ii shape (Npix_flat,)
+        i_dm = DM_registration.interpolate_pixel_intensities(
+            image=ii.reshape(zwfs_ns.reco.I0.shape),
+            pixel_coords=zwfs_ns.dm2pix_registration.actuator_coord_list_pixel_space
+        )
+        IM_dm_list.append(i_dm)
+
+    IM_dm_modes_by_meas = np.array(IM_dm_list, dtype=float)  # shape (Nmodes_total, Nact_samples)
+    if IM_dm_modes_by_meas.ndim != 2:
+        raise ValueError(f"IM_dm must be 2D, got shape {IM_dm_modes_by_meas.shape}")
+
+    # ---- transpose to (Nmeas, Nmodes) ----
+    if LO == 0:
+        IM_px_LO = None
+        IM_dm_LO = None
+        IM_px_HO = IM_px_modes_by_meas.T
+        IM_dm_HO = IM_dm_modes_by_meas.T
+    else:
+        IM_px_LO = IM_px_modes_by_meas[:LO, :].T      # (Npix, LO)
+        IM_px_HO = IM_px_modes_by_meas[LO:, :].T      # (Npix, Nmodes_total-LO)
+
+        IM_dm_LO = IM_dm_modes_by_meas[:LO, :].T      # (Nact_samples, LO)
+        IM_dm_HO = IM_dm_modes_by_meas[LO:, :].T      # (Nact_samples, Nmodes_total-LO)
+
+    # LO in DM command basis 
+    #B_LO = zwfs_ns.reco.M2C_0[:LO, :].T   # (140, LO)
+
+    reco_dict = {}
+
+    if 'zonal' in HO_inv_method.lower():
+        print("---------------\n\n Since you selected 'zonal' for HO inversion method, we can only do this on the DM interpolated space, so do not consider pixel space!\n\n")
+        space_labels = [ "dm"]
+        interaction_matricies = [(IM_dm_LO, IM_dm_HO)]
+    else:
+        space_labels = ["pix", "dm"]
+        interaction_matricies = [(IM_px_LO, IM_px_HO), (IM_dm_LO, IM_dm_HO)]
+    for space, (IM_LO, IM_HO) in zip(
+        space_labels,
+        interaction_matricies
+    ):
+        # -------------------------
+        # HO INVERSION (raw)
+        # -------------------------
+        if "eigen" in HO_inv_method.lower():
+            k = truncation_idx
+            U, S, Vt = np.linalg.svd(IM_HO, full_matrices=False)
+
+            k_eff = min(k, S.shape[0])  # guard against k > rank dims
+            U_k  = U[:, :k_eff]
+            S_k  = S[:k_eff]
+            Vt_k = Vt[:k_eff, :]
+            V_k  = Vt_k.T
+
+            I2M_HO_raw = U_k.T
+            M2C_HO_raw = V_k @ np.diag(1.0 / (S_k + eps))
+
+            inv_HO_dict = {
+                "method": "eigen",
+                "truncation_idx": k,
+                "truncation_idx_effective": k_eff,
+                "U": U, "S": S, "Vt": Vt,
+                "U_k": U_k, "S_k": S_k, "Vt_k": Vt_k,
+                "I2M_HO_raw": I2M_HO_raw,
+                "M2C_HO_raw": M2C_HO_raw,
+            }
+
+
+        elif "map" in HO_inv_method.lower():
+
+            # get raw object first (could be None)
+            if space == "pix":
+                Ca = kwargs.get("Ca_HO_px", None)
+                Cn = kwargs.get("Cn_HO_px", None)
+            elif space == "dm":
+                Ca = kwargs.get("Ca_HO_dm", None)  # (Nho, Nho)
+                Cn = kwargs.get("Cn_HO_dm", None)  # (Nmeas, Nmeas)
+            else:
+                raise ValueError(space, " not a valid space")
+
+            # ---- shapes ----
+            H = IM_HO                      # (Nmeas, Nho)
+            n_meas, n_modes = H.shape
+
+            # ---- defaults ----
+            if truncation_idx is None:
+                print("no truncation_idx for HO MAP inversion, using default = 54\n")
+                truncation_idx = 54
+            k = int(min(truncation_idx, min(n_meas, n_modes)))
+
+            # ---- Measurement noise covariance defaults ----
+            if Cn is None:
+                print("no input noise covariance - using Identity with sigma_n input, if not sigma_n input kwargs then sigma_n=1")
+                sigma_n = kwargs.get("sigma_n", 1.0)
+                Cn = (float(sigma_n) ** 2) * np.eye(n_meas)
+            else:
+                Cn = np.array(Cn, dtype=float)
+                if Cn.shape != (n_meas, n_meas):
+                    raise ValueError(f"Cn must be ({n_meas},{n_meas})")
+
+            # ---- Prior covariance defaults ----
+            if Ca is None:
+                print("no input phase covariance prior - using Identity with sigma_a input, if no sigma_a input kwargs then sigma_a=1")
+                sigma_a = kwargs.get("sigma_a", 1.0)
+                Ca = (float(sigma_a) ** 2) * np.eye(n_modes)
+            else:
+                Ca = np.array(Ca, dtype=float)
+                if Ca.shape != (n_modes, n_modes):
+                    raise ValueError(f"Ca must be ({n_modes},{n_modes})")
+
+            # ---------------------------------------------------------
+            # SVD truncation using truncation_idx (NO extra variables)
+            # ---------------------------------------------------------
+            U, S, Vt = np.linalg.svd(H, full_matrices=False)
+            U_k  = U[:, :k]                 # (Nmeas, k)
+            S_k  = S[:k]                    # (k,)
+            V_k  = Vt[:k, :].T              # (Nho, k)
+
+            # H_eff = U_k diag(S_k)
+            H_eff = U_k @ np.diag(S_k)      # (Nmeas, k)
+
+            # project Ca into truncated coordinates
+            Ca_eff = V_k.T @ Ca @ V_k       # (k, k)
+
+            # MAP in truncated subspace, then lift back
+            A = H_eff @ Ca_eff @ H_eff.T + Cn                         # (Nmeas, Nmeas)
+            Ainv = np.linalg.solve(A + eps*np.eye(n_meas), np.eye(n_meas))
+            I2M_red = Ca_eff @ H_eff.T @ Ainv                         # (k, Nmeas)
+            I2M_HO_raw = V_k @ I2M_red                                 # (Nho, Nmeas)
+
+            # HO command basis in actuator space (140 x Nho)
+            M2C_0 = np.array(zwfs_ns.reco.M2C_0, dtype=float)          # (Nmodes_total, 140)
+            M2C_HO_raw = M2C_0[LO:, :].T                               # (140, Nho)
+
+            inv_HO_dict = {
+                "method": "map",
+                "truncation_idx": truncation_idx,
+                "truncation_idx_effective": k,
+                "Cn": Cn,
+                "Ca": Ca,
+                "S": S,
+                "S_k": S_k,
+                "I2M_HO_raw": I2M_HO_raw,
+                "M2C_HO_raw": M2C_HO_raw,
+            }
+
+        elif "zonal" in HO_inv_method.lower():
+
+            if filter_dm_pupil is None:
+                # then we estimate it from the input HO 
+                # filter for pupil footprint on DM 
+                # look at std over IM response , normalized (0-1)
+                dm_im_std = np.std( zwfs_ns.reco.IM[LO:,:].T, axis=0 )
+                filter_dm_pupil = (dm_im_std - np.min(dm_im_std)) / (np.max( dm_im_std ) - np.min( dm_im_std ))
+                filter_dm_pupil[filter_dm_pupil < 0.2] = 0 # normalize 0-1, anything below 0.2 force to 0
+
+            # diagonal "inverse" with pupil weighting
+            I2M_HO_raw = np.diag(np.array([
+                filter_dm_pupil[i] / IM_HO[i][i] if np.isfinite(1.0 / IM_HO[i][i]) else 0.0
+                for i in range(IM_HO.shape[0])
+            ], dtype=float))
+
+            M2C_0 = np.array(zwfs_ns.reco.M2C_0, dtype=float)          # (Nmodes_total, 140)
+            M2C_HO_raw = M2C_0[LO:, :].T   
+
+            inv_HO_dict = {
+                "method": "zonal",
+                "filter_dm_pupil":filter_dm_pupil,
+                "I2M_HO_raw": I2M_HO_raw,
+                "M2C_HO_raw": M2C_HO_raw,
+            }
+        else:
+            raise UserWarning("no valid HO_inv_method implemented (expected 'eigen')")
+
+        # -------------------------
+        # LO INVERSION (raw)
+        # -------------------------
+        if LO == 0: # we only have one reconstructor 
+            I2M_LO = None
+            M2C_LO = None
+            inv_LO_dict = {
+                "method": None,
+                "note": "LO disabled (LO=0)"
+            }
+        else: # we do LO matricies
+            if ("eigen" in LO_inv_method.lower()) or ("pinv" in LO_inv_method.lower()):
+                # physical LO amplitudes from measurement: e_LO = pinv(IM_LO) @ s
+                # IM_LO is (Nmeas, LO) -> pinv is (LO, Nmeas)
+                I2M_LO_raw = np.linalg.pinv(IM_LO, rcond=eps)
+
+                inv_LO_dict = {
+                    "method": "pinv(IM_LO)",
+                    "I2M_LO_raw": I2M_LO_raw,
+                    "eps": eps,
+                }
+
+            elif "map" in LO_inv_method.lower():
+                if space == "pix":
+                    Ca = kwargs.get("Ca_LO_px", None)
+                    Cn = kwargs.get("Cn_LO_px", None)
+                elif space == "dm":
+                    Ca = kwargs.get("Ca_LO_dm", None) # (Nho, Nho)
+                    Cn = kwargs.get("Cn_LO_dm", None) # (Nmeas, Nmeas)
+                else:
+                    raise ValueError(space," not a valid space")
+
+
+
+                # ---- Measurement noise covariance defaults----
+                n_meas, n_modes = IM_LO.shape
+                if Cn is None:
+                    print("no input noise covariance - using Identity with sigma_n input, if not signa_n input kwargs then signa_n=1")
+                    sigma_n = kwargs.get("sigma_n", 1.0)
+                    Cn = (sigma_n**2) * np.eye(n_meas)
+                else:
+                    Cn = np.array(Cn, dtype=float)
+                    if Cn.shape != (n_meas, n_meas):
+                        raise ValueError(f"Cn must be ({n_meas},{n_meas})")
+                    
+
+                # ---- Prior covariance defaults ----
+                if Ca is None:
+                    print("no input phase covariance prior - using Identity with sigma_a input, if no signa_a input kwargs then signa_a=1")
+                    sigma_a = kwargs.get("sigma_a", 1.0)
+                    Ca = (sigma_a**2) * np.eye(n_modes)
+                else:
+                    Ca = np.array(Ca, dtype=float)
+                    if Ca.shape != (n_modes, n_modes):
+                        raise ValueError(f"Ca must be ({n_modes},{n_modes})")
+                # H = IM_LO is (Nmeas, LO)
+                H = IM_LO
+
+                # I2M is (LO, Nmeas)
+                A = H @ Ca @ H.T + Cn
+                Ainv = np.linalg.solve(A + eps*np.eye(A.shape[0]), np.eye(A.shape[0]))
+                I2M_LO_raw = Ca @ H.T @ Ainv
+
+                # LO command basis in actuator space (140 x LO)
+                M2C_0 = np.array(zwfs_ns.reco.M2C_0, dtype=float)  # (Nmodes_total, 140)
+                M2C_LO_raw = M2C_0[:LO, :].T                       # (140, LO)
+
+                inv_LO_dict = {
+                    "method": "map",
+                    "Cn": Cn,
+                    "Ca": Ca,
+                    "I2M_LO_raw": I2M_LO_raw,
+                    "M2C_LO_raw": M2C_LO_raw,
+                }
+
+
+            else:
+                raise UserWarning("no valid LO_inv_method implemented (expected 'eigen')")
+
+        # -------------------------
+        # PROJECTIONS
+        # -------------------------
+        if LO == 0:
+            I2M_HO = I2M_HO_raw
+            M2C_HO = M2C_HO_raw
+            inv_HO_dict["proj"] = None
+        else:
+
+            if project_out_of_LO is not None:
+                raise UserWarning("project_out_of_LO not implemented yet")
+
+            if project_out_of_HO is not None:
+                proj_key = project_out_of_HO.lower().strip()
+
+                if "lo_intensity" in proj_key:
+                    U_lo, S_lo, Vt_lo = np.linalg.svd(IM_LO, full_matrices=False)
+                    r_lo = int(np.sum(S_lo > eps))
+                    U_lo_r = U_lo[:, :r_lo]
+                    P_LO_intensity = U_lo_r @ U_lo_r.T
+
+                    I_eye = np.eye(IM_HO.shape[0])
+                    I2M_HO = I2M_HO_raw @ (I_eye - P_LO_intensity)
+                    M2C_HO = M2C_HO_raw
+
+                    inv_HO_dict["proj"] = "lo_intensity"
+                    inv_HO_dict["r_lo_intensity"] = r_lo
+                    inv_HO_dict["P_LO_intensity"] = P_LO_intensity
+
+
+                
+                elif "lo_command" in proj_key:
+                    # Build LO projector in DM actuator command space (140x140) using the known poke-mode commands
+                    if not hasattr(zwfs_ns.reco, "M2C_0"):
+                        raise ValueError("zwfs_ns.reco.M2C_0 not found, cannot build LO command subspace projector.")
+
+                    M2C_0 = np.array(zwfs_ns.reco.M2C_0, dtype=float)  # expected (Nmodes_total, 140)
+                    if M2C_0.ndim != 2 or M2C_0.shape[1] != 140:
+                        raise ValueError(f"Expected zwfs_ns.reco.M2C_0 shape (Nmodes_total, 140). Got {M2C_0.shape}")
+
+                    if M2C_0.shape[0] < LO:
+                        raise ValueError(f"M2C_0 has only {M2C_0.shape[0]} modes, but LO={LO}")
+
+
+                    # CRITICAL IS TO FILTER THE PUPIL PROJECTED ON THE DM FOR THIS 
+                    # # look at std over IM response , normalized (0-1)
+                    # dm_im_std = np.std( IM_HO ,axis=0)
+                    # pup_filt_dm = (dm_im_std - np.min(dm_im_std)) / (np.max( dm_im_std ) - np.min( dm_im_std ))
+                    # pup_filt_dm[pup_filt_dm < 0.2] = 0 # normalize 0-1, anything below 0.2 force to 0
+                    # B_LO = pup_filt_dm[:,np.newaxis] * M2C_0[:LO, :].T 
+
+                    if filter_dm_pupil is not None:
+                        B_LO = filter_dm_pupil[:,np.newaxis] * M2C_0[:LO, :].T 
+                    else: 
+                        B_LO = M2C_0[:LO, :].T 
+
+                    # Orthonormalize and build projector
+                    Uc, Sc, Vtc = np.linalg.svd(B_LO, full_matrices=False)
+                    rc = int(np.sum(Sc > eps))
+                    Q = Uc[:, :rc]  # (140, rc)
+
+                    P_LO_command = Q @ Q.T
+                    P_LO_command_null = np.eye(P_LO_command.shape[0]) - P_LO_command
+
+                    I2M_HO = I2M_HO_raw
+
+                    # Apply projector to HO command mapping
+                    # In your observed case M2C_HO_raw is (140, k_eff)
+                    if M2C_HO_raw.shape[0] != P_LO_command_null.shape[0]:
+                        raise ValueError(
+                            f"Expected M2C_HO_raw axis0 to match actuator dimension {P_LO_command_null.shape[0]}. "
+                            f"Got M2C_HO_raw shape={M2C_HO_raw.shape}"
+                        )
+
+                    M2C_HO = P_LO_command_null @ M2C_HO_raw
+
+                    inv_HO_dict["proj"] = "lo_command"
+                    inv_HO_dict["rc_command"] = rc
+                    inv_HO_dict["Sc_command"] = Sc
+                    inv_HO_dict["P_LO_command"] = P_LO_command
+                    inv_HO_dict["P_LO_command_null"] = P_LO_command_null
+
+
+                else:
+                    raise UserWarning("no valid project_out_of_HO option (use 'lo_intensity', 'lo_command', or None)")
+            else:
+                I2M_HO = I2M_HO_raw
+                M2C_HO = M2C_HO_raw
+                inv_HO_dict["proj"] = None
+
+        if LO == 0:
+            I2M_LO_raw = None
+            M2C_LO_raw = None
+            I2M_LO = None
+            M2C_LO = None
+            inv_LO_dict = {"method": None, "note": "LO disabled (LO=0)"}
+        else:
+
+            # define LO outputs consistently (no projection here yet)
+            I2M_LO = I2M_LO_raw
+            #M2C_LO = M2C_LO_raw
+
+            # LO command basis (actuator-space)
+            M2C_0 = np.array(zwfs_ns.reco.M2C_0, dtype=float)  # (Nmodes_total, 140)
+            M2C_LO = M2C_0[:LO, :].T  # (140, LO)
+
+        reco_dict[space] = {
+            "space": space,
+            "LO": LO,
+            "LO_inv_method": LO_inv_method,
+            "HO_inv_method": HO_inv_method,
+            "project_out_of_HO": project_out_of_HO,
+            "truncation_idx": truncation_idx,
+            "eps": eps,
+
+            "HO_intermediates": inv_HO_dict,
+            "LO_intermediates": inv_LO_dict,
+
+            "I2M_HO": I2M_HO,
+            "M2C_HO": M2C_HO,
+            "I2M_LO": I2M_LO,
+            "M2C_LO": M2C_LO,
+
+            "IM_LO": IM_LO,
+            "IM_HO": IM_HO,
+        }
+
+
+
+    # APPEND ALL THIS TO zwfs_ns (as the previous one did)
+    dict2append = { # legacy names 
+        "I2M_TT":reco_dict[what_space]["I2M_LO"],
+        "I2M_HO":reco_dict[what_space]["I2M_HO"],
+        "M2C_LO":reco_dict[what_space]["M2C_LO"],
+        "M2C_HO":reco_dict[what_space]["M2C_HO"],
+    }
+    reco_dict_current = vars( zwfs_ns.reco )
+    updated_reco_dict = reco_dict_current | dict2append
+    zwfs_ns.reco = SimpleNamespace( **updated_reco_dict  )# add it to the current reco namespace with 
+    
+
+    return reco_dict
+
+
+
 def plot_eigenmodes( zwfs_ns , save_path = None, descr_label=None, crop_image_modes = [None, None, None, None]):
     """_summary_
 
@@ -3144,9 +3735,10 @@ def plot_eigenmodes( zwfs_ns , save_path = None, descr_label=None, crop_image_mo
         plt.savefig(save_path +  f'dm_eignmodes_{descr_label}_{tstamp}.png',bbox_inches='tight',dpi=100)
     #plt.show()
 
-
+# Should use newer reconstruction matrix builder def reco_method()
 def construct_ctrl_matricies_from_IM(zwfs_ns,  method = 'Eigen_TT-HO', Smax = 50, TT_vectors = DM_basis.get_tip_tilt_vectors() ):
 
+    print("! OUTDATE - you should use new reconstruction method 'reco_method()'")
 
     M2C_0 = zwfs_ns.reco.M2C_0
     poke_amp = zwfs_ns.reco.poke_amp 
@@ -3191,6 +3783,7 @@ def construct_ctrl_matricies_from_IM(zwfs_ns,  method = 'Eigen_TT-HO', Smax = 50
             "I2M_HO":I2M_HO,
             "M2C_HO":M2C_HO
             }
+        
         reco_dict = reco_dict_current | reco_dict_2append
         zwfs_ns.reco = SimpleNamespace( **reco_dict  )# add it to the current reco namespace with 
         
