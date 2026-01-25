@@ -5,6 +5,7 @@ import matplotlib.pyplot as plt
 from types import SimpleNamespace
 from scipy.stats import pearsonr
 from scipy.signal import TransferFunction, bode
+from scipy.ndimage import binary_erosion 
 import datetime 
 from astropy.io import fits 
 import time
@@ -1642,7 +1643,7 @@ def get_pupil_intensity(
     #         _type_: ZWFS pupil intensity
 
     """
-    t0 = time.time()
+    #t0 = time.time()
     
     # ---------------- even-grid safe: promote to odd internally ----------------
     phi  = np.asarray(phi)
@@ -1791,8 +1792,8 @@ def get_pupil_intensity(
                 "pix_per_wvld": pix_per_wvld,
             })
         return out
-    t1 = time.time()
-    print(t1-t0)
+    #t1 = time.time()
+    #print(t1-t0)
     return Ic
 
 # def get_pupil_intensity(
@@ -2903,7 +2904,7 @@ def process_zwfs_signal( I, I0, pupil_filt ):
 
 
     
-def build_IM( zwfs_ns ,  calibration_opd_input, calibration_amp_input ,  opd_internal,  basis = 'Zonal_pinned', Nmodes = 100, poke_amp = 0.05, poke_method = 'double_sided_poke', imgs_to_mean = 10, detector=None, use_pyZelda = True):
+def build_IM( zwfs_ns ,  calibration_opd_input, calibration_amp_input ,  opd_internal,  basis = 'Zonal_pinned', Nmodes = 100, poke_amp = 0.05, poke_method = 'double_sided_poke', normalization_method='subframe mean', imgs_to_mean = 10, detector=None, use_pyZelda = True):
     
     # build reconstructor name space with normalized basis, IM generated, IM generation method, pokeamp 
     modal_basis = DM_basis.construct_command_basis( basis= basis, number_of_modes = Nmodes, without_piston=True).T 
@@ -2920,6 +2921,8 @@ def build_IM( zwfs_ns ,  calibration_opd_input, calibration_amp_input ,  opd_int
         N0_list .append( get_N0( opd_input  =calibration_opd_input,    amp_input = calibration_amp_input  ,  opd_internal= opd_internal,  zwfs_ns=zwfs_ns , detector=detector, use_pyZelda = use_pyZelda )  )
     N0 = np.mean( N0_list ,axis =0 )
     
+    interior_pup_filt = binary_erosion(zwfs_ns.pupil_regions.pupil_filt * (~zwfs_ns.pupil_regions.secondary_strehl_filt), structure=np.ones((3, 3), dtype=bool))
+
     if poke_method=='single_sided_poke': # just poke one side  
                 
 
@@ -2962,10 +2965,19 @@ def build_IM( zwfs_ns ,  calibration_opd_input, calibration_amp_input ,  opd_int
                     
 
             I_plus = np.mean( I_plus_list, axis = 0).reshape(-1)  # flatten so can filter with ZWFS.pupil_pixels
-            I_plus *= 1/np.mean( I_plus )
+            #I_plus *= 1/np.mean( I_plus )
 
             I_minus = np.mean( I_minus_list, axis = 0).reshape(-1)  # flatten so can filter with ZWFS.pupil_pixels
-            I_minus *= 1/np.mean( I_minus )
+            #I_minus *= 1/np.mean( I_minus )
+
+            if normalization_method.strip().lower()=='subframe mean':
+                I_plus *= 1/np.mean( I_plus ) # sum or mean wor
+                I_minus *= 1/np.mean( I_minus )
+            elif normalization_method.strip().lower()=='clear pupil mean': # this is actually the better way , more resistent to 
+                I_plus *= 1/np.mean( N0[interior_pup_filt]  )
+                I_minus *= 1/np.mean( N0[interior_pup_filt]  )
+            else:
+                raise UserWarning("invalid normalization_method method. Try subframe mean | clear pupil mean")
             # 19/12/25 added divison of pokeamp 
             errsig =  (I_plus - I_minus) / poke_amp #[np.array( zwfs_ns.pupil_regions.pupil_filt.reshape(-1) )]
             IM.append( list(  errsig.reshape(-1) ) ) #toook out 1/poke_amp *
@@ -2983,6 +2995,8 @@ def build_IM( zwfs_ns ,  calibration_opd_input, calibration_amp_input ,  opd_int
         "basis_name":basis,
         "poke_amp":poke_amp,
         "poke_method":poke_method,
+        "normalization_method":normalization_method,
+        "interior_pup_filt":interior_pup_filt,
         "IM":IM,
     }
     
@@ -3225,6 +3239,31 @@ def reco_method(
     - Sign conventions are not enforced here; this function only produces linear
       operators. Closed-loop sign and gain selection are handled by the caller.
     """
+    # internal helpers for if user provides nuicence vectors to project out 
+    def _orthonormal_basis(B, eps=1e-12):
+        """
+        B: (N, K) columns spanning a subspace
+        returns Q: (N, r) orthonormal basis
+        """
+        B = np.atleast_2d(np.array(B, dtype=float))
+        if B.shape[0] == 1 and B.shape[1] > 1:
+            # user gave row vector; treat as single column
+            B = B.T
+        # SVD gives stable rank decision
+        U, S, _ = np.linalg.svd(B, full_matrices=False)
+        r = int(np.sum(S > eps))
+        return U[:, :r], S, r
+
+    def _projector_from_vectors(B, N, eps=1e-12):
+        """
+        Returns P = Q Q^T onto span(B). If B is None, returns zeros.
+        """
+        if B is None:
+            return np.zeros((N, N)), None
+        Q, S, r = _orthonormal_basis(B, eps=eps)
+        P = Q @ Q.T
+        info = {"S": S, "r": r, "Q": Q}
+        return P, info
 
     # ---- kwargs handling ----
     truncation_idx = kwargs.get("truncation_idx", None)
@@ -3243,7 +3282,11 @@ def reco_method(
         if np.array( filter_dm_pupil  ).shape[0] != 140:
             print( filter_dm_pupil.shape, "is not BMC 3.5 size of 140! ")
     else:
-        print("user input for DM pupil filter")
+        print("no user input for DM pupil filter")
+
+    # user-provided nuisance subspaces
+    B_meas = kwargs.get("project_out_HO_meas_vectors", None)  # (Nmeas, K)
+    B_cmd  = kwargs.get("project_out_HO_cmd_vectors", None)   # (140, K)
 
 
     LO = int(LO) # lower order mode index definition
@@ -3630,6 +3673,57 @@ def reco_method(
             M2C_0 = np.array(zwfs_ns.reco.M2C_0, dtype=float)  # (Nmodes_total, 140)
             M2C_LO = M2C_0[:LO, :].T  # (140, LO)
 
+
+
+
+        ## FINALLY we project any user defined nuisance vectors out of the spaces! 
+        # measurement-side nuisance vectors
+        if B_meas is not None:
+            Bm = np.atleast_2d(np.array(B_meas, dtype=float))
+            if Bm.shape[0] == 1 and Bm.shape[1] == IM_HO.shape[0]:
+                Bm = Bm.T  # treat as single column vector
+                
+            if Bm.shape[0] != IM_HO.shape[0]:
+                print(
+                    f"[reco_method][{space}] "
+                    f"Skipping measurement-side HO projection: "
+                    f"B_meas has length {Bm.shape[0]}, expected {IM_HO.shape[0]}"
+                )
+            else:
+                P_bad_meas, info_meas = _projector_from_vectors(
+                    Bm, N=IM_HO.shape[0], eps=eps
+                )
+                I2M_HO = I2M_HO @ (np.eye(IM_HO.shape[0]) - P_bad_meas)
+
+                inv_HO_dict["proj_user_meas"] = {
+                    "space": space,
+                    **(info_meas or {})
+                }
+                inv_HO_dict["P_bad_meas"] = P_bad_meas
+
+
+        # command-side nuisance vectors
+        if B_cmd is not None:
+            Bc = np.atleast_2d(np.array(B_cmd, dtype=float))
+            if Bc.shape[0] == 1 and Bc.shape[1] == IM_HO.shape[0]:
+                Bc = Bc.T  # treat as single column vector
+            if Bc.shape[0] != M2C_HO.shape[0]:
+                print(
+                    f"[reco_method][{space}] "
+                    f"Skipping command-side HO projection: "
+                    f"B_cmd has length {Bc.shape[0]}, expected {M2C_HO.shape[0]}"
+                )
+            else:
+                P_bad_cmd, info_cmd = _projector_from_vectors(
+                    Bc, N=M2C_HO.shape[0], eps=eps
+                )
+                M2C_HO = (np.eye(M2C_HO.shape[0]) - P_bad_cmd) @ M2C_HO
+
+                inv_HO_dict["proj_user_cmd"] = info_cmd
+                inv_HO_dict["P_bad_cmd"] = P_bad_cmd
+
+
+        
         reco_dict[space] = {
             "space": space,
             "LO": LO,
@@ -4421,7 +4515,48 @@ def process_zwfs_intensity( i, zwfs_ns, method, record_telemetry = False , **kwa
         
     
     
-     
+## Some utils for updating scintillation (used originally in ASGARD/paranal_onsky_comissioning/simulation_experiments/)
+def upsample_by_factor(ar: np.ndarray, f: int | tuple[int, int]) -> np.ndarray:
+    """
+    Upsample 2D array by integer factor(s) via block replication (nearest-neighbour).
+    If f is an int, uses the same factor on both axes. If f=(fy, fx), uses per-axis factors.
+    """
+    ar = np.asarray(ar)
+    if ar.ndim != 2:
+        raise ValueError("ar must be 2D")
+    fy, fx = (f, f) if isinstance(f, int) else f
+    if fy < 1 or fx < 1:
+        raise ValueError("factors must be positive integers")
+    return np.repeat(np.repeat(ar, fy, axis=0), fx, axis=1)
+
+
+def pad_to_shape_edge(arr: np.ndarray, target_shape: tuple[int, int]) -> np.ndarray:
+    """
+    Grow a 2D array to target_shape by copying its edges (last row/col).
+    Equivalent to np.pad(..., mode='edge').
+    """
+    if arr.ndim != 2:
+        raise ValueError("arr must be 2D")
+    m, n = arr.shape
+    M, N = target_shape
+    if M < m or N < n:
+        raise ValueError("target_shape must be >= current shape in both dims")
+
+    pad_rows = M - m
+    pad_cols = N - n
+    return np.pad(arr, ((0, pad_rows), (0, pad_cols)), mode="edge")
+
+
+def upsample( ar, target_size ):
+    out_almost = upsample_by_factor(ar, target_size//len(ar) ) # 
+    if np.mod( target_size, len(ar) ) != 0: # not even divisor, we just pad! 
+        out = pad_to_shape_edge( out_almost , target_shape = (target_size,target_size))
+    else :
+        out = out_almost
+    return( out )
+
+
+
 # #### 
 
 # grid_dict = {

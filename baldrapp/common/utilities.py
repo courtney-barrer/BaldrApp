@@ -983,7 +983,7 @@ def plot_eigenmodes( zwfs_ns , save_path = None ):
 
 
 
-def display_images_with_slider(image_lists, plot_titles=None, cbar_labels=None):
+def display_images_with_slider(image_lists, plot_titles=None, cbar_labels=None, row_col = None):
     """
     Displays multiple images or 1D plots from a list of lists with a slider to control the shared index.
     
@@ -998,10 +998,19 @@ def display_images_with_slider(image_lists, plot_titles=None, cbar_labels=None):
     assert all(len(lst) == len(image_lists[0]) for lst in image_lists), "All inner lists must have the same length."
     
     # Number of rows and columns based on the number of plots
-    num_plots = len(image_lists)
-    ncols = math.ceil(math.sqrt(num_plots))  # Number of columns for grid
-    nrows = math.ceil(num_plots / ncols)     # Number of rows for grid
-    
+    if row_col is None:
+        num_plots = len(image_lists)
+        ncols = math.ceil(math.sqrt(num_plots))  # Number of columns for grid
+        nrows = math.ceil(num_plots / ncols)     # Number of rows for grid
+    else:
+        num_plots = len(image_lists)
+        try:
+            nrows, ncols = row_col
+        except:
+            raise UserWarning('cannot cast "nrows, ncols = row_col"')
+        
+        assert nrows * ncols == num_plots 
+        
     num_frames = len(image_lists[0])
 
     # Create figure and axes
@@ -1072,7 +1081,7 @@ def display_images_with_slider(image_lists, plot_titles=None, cbar_labels=None):
 
 
 
-def display_images_as_movie(image_lists, plot_titles=None, cbar_labels=None, save_path="output_movie.mp4", fps=5):
+def display_images_as_movie(image_lists, plot_titles=None, cbar_labels=None, save_path="output_movie.mp4", fps=5,row_col = None):
     """
     Creates an animation from multiple images or 1D plots from a list of lists and saves it as a movie.
     
@@ -1088,12 +1097,29 @@ def display_images_as_movie(image_lists, plot_titles=None, cbar_labels=None, sav
     # Check that all inner lists have the same length
     assert all(len(lst) == len(image_lists[0]) for lst in image_lists), "All inner lists must have the same length."
     
-    # Number of rows and columns based on the number of plots
-    num_plots = len(image_lists)
-    ncols = math.ceil(math.sqrt(num_plots))  # Number of columns for grid
-    nrows = math.ceil(num_plots / ncols)     # Number of rows for grid
+    # # Number of rows and columns based on the number of plots
+    # num_plots = len(image_lists)
+    # ncols = math.ceil(math.sqrt(num_plots))  # Number of columns for grid
+    # nrows = math.ceil(num_plots / ncols)     # Number of rows for grid
     
+    # num_frames = len(image_lists[0])
+
+    # Number of rows and columns based on the number of plots
+    if row_col is None:
+        num_plots = len(image_lists)
+        ncols = math.ceil(math.sqrt(num_plots))  # Number of columns for grid
+        nrows = math.ceil(num_plots / ncols)     # Number of rows for grid
+    else:
+        num_plots = len(image_lists)
+        try:
+            nrows, ncols = row_col
+        except:
+            raise UserWarning('cannot cast "nrows, ncols = row_col"')
+        
+        assert nrows * ncols == num_plots 
+        
     num_frames = len(image_lists[0])
+
 
     # Create figure and axes
     fig, axes = plt.subplots(nrows=nrows, ncols=ncols, figsize=(6 * ncols, 6 * nrows))
