@@ -1,5 +1,8 @@
 
 import numpy as np
+import matplotlib.pyplot as plt
+from mpl_toolkits.axes_grid1 import make_axes_locatable
+
 from baldrapp.common import baldr_core as bldr
 
 
@@ -1129,6 +1132,7 @@ def run_experiment_grid(
     DM_interpolate_fn,
     configs,                   # list of dict configs
     common_kwargs=None,        # forwarded to eval_onsky
+    keys_to_not_evaluate={"name","ctrl_fast","ctrl_slow","loop_schedule","user_ref_intensities","disable_ho"}
 ):
     """
     Returns:
@@ -1168,7 +1172,7 @@ def run_experiment_grid(
             user_ref_intensities = cfg.get("user_ref_intensities", None),
             # allow per-config overrides
             **common_kwargs,
-            **{k: v for k, v in cfg.items() if k not in {"name","ctrl_fast","ctrl_slow","loop_schedule","user_ref_intensities"}},
+            **{k: v for k, v in cfg.items() if k not in keys_to_not_evaluate},
         )
 
         results[name] = telem
@@ -1463,3 +1467,839 @@ def quicklook_experiment_results(
 
     return widget_handles
 
+
+
+def get_worst_offenders(
+    results,
+    measurement,
+    *,
+    metric="rms",      # "rms" | "mean" | "max"
+    top_n=5,
+    absolute=True,
+    burn_in=0,
+):
+    """
+    Identify worst offending modes per experiment.
+
+    Parameters
+    ----------
+    results : dict
+        {name -> telemetry dict}
+    measurement : str
+        Telemetry key, e.g. "e_HO", "e_LO", "u_HO", "u_LO", "s"
+    metric : str
+        Reduction over time: "rms", "mean", "max"
+    top_n : int
+        Number of worst offenders to return
+    absolute : bool
+        Rank by absolute value
+    burn_in : int
+        Ignore first burn_in samples
+
+    Returns
+    -------
+    offenders : dict
+        name -> dict with keys:
+            "indices" : array of indices
+            "values"  : array of measurement values
+    """
+    offenders = {}
+
+    for name, telem in results.items():
+        if measurement not in telem:
+            continue
+
+        x = np.asarray(telem[measurement], float)
+
+        if x.ndim == 1:
+            x = x[burn_in:]
+            vals = np.abs(x) if absolute else x
+            idx = np.argsort(vals)[::-1][:top_n]
+            offenders[name] = dict(indices=idx, values=x[idx])
+            continue
+
+        # x shape: (time, modes)
+        x = x[burn_in:, :]
+
+        if metric == "rms":
+            vals = np.sqrt(np.mean(x**2, axis=0))
+        elif metric == "mean":
+            vals = np.mean(x, axis=0)
+        elif metric == "max":
+            vals = np.max(np.abs(x), axis=0)
+        else:
+            raise ValueError(f"Unknown metric '{metric}'")
+
+        rank = np.argsort(np.abs(vals) if absolute else vals)[::-1]
+        idx = rank[:top_n]
+
+        offenders[name] = dict(
+            indices=idx,
+            values=vals[idx],
+        )
+
+    return offenders
+
+
+
+def plot_offenders(
+    results_or_telem,
+    *,
+    labels=None,              # if dict provided, optionally choose subset order
+    metric="rms",             # "mean" | "absmean" | "rms"
+    topk=5,
+    include=("e_LO", "e_HO"), # any of: "e_LO","e_HO","s","u_LO","u_HO"
+    u_source="fast",          # "fast" | "slow" | "sum" (fast+slow)
+    burn=0,                   # drop first burn samples
+    max_signal_features=200,  # cap plotted pixel-features if include "s"
+    sharey=False,
+    figsize=(12, 7),
+    title_prefix="",
+):
+    """
+    Plot per-feature metrics and highlight top absolute offenders.
+
+    results_or_telem:
+      - dict[name -> telem]  OR
+      - single telem dict
+    """
+
+
+
+    def _as_2d(x, name):
+        """Convert list/array to (T, K) float array."""
+        arr = np.asarray(x, dtype=float)
+        if arr.ndim == 1:
+            arr = arr[:, None]
+        if arr.ndim != 2:
+            raise ValueError(f"{name} must be 2D after conversion, got shape {arr.shape}")
+        return arr
+
+
+    def _metric_per_feature(X, metric="rms", *, abs_before=False):
+        """
+        X: (T, K)
+        metric:
+        - "mean": mean over time (signed)
+        - "absmean": mean(|x|) over time
+        - "rms": sqrt(mean(x^2)) over time
+        abs_before: if True, apply abs before metric (useful for "mean" but usually use "absmean")
+        """
+        X = np.asarray(X, dtype=float)
+        if abs_before:
+            X = np.abs(X)
+
+        m = metric.strip().lower()
+        if m == "mean":
+            return np.mean(X, axis=0)
+        if m == "absmean":
+            return np.mean(np.abs(X), axis=0)
+        if m == "rms":
+            return np.sqrt(np.mean(X**2, axis=0))
+        raise ValueError("metric must be one of {'mean','absmean','rms'}")
+
+
+    def _topk_abs(v, k=5):
+        """Return indices of top-k by absolute value, in descending order."""
+        v = np.asarray(v, dtype=float)
+        k = int(min(k, v.size))
+        if k <= 0:
+            return np.array([], dtype=int)
+        idx = np.argpartition(np.abs(v), -k)[-k:]
+        idx = idx[np.argsort(np.abs(v[idx]))[::-1]]
+        return idx
+
+
+    # ---- normalize input to dict[name->telem] ----
+    if isinstance(results_or_telem, dict) and ("e_LO" in results_or_telem or "e_HO" in results_or_telem):
+        runs = {"run": results_or_telem}
+    else:
+        runs = dict(results_or_telem)
+
+    if labels is None:
+        labels = list(runs.keys())
+    else:
+        labels = list(labels)
+
+    include = tuple(include)
+    nrows = len(include)
+    ncols = len(labels)
+
+    fig, ax = plt.subplots(
+        nrows, ncols,
+        figsize=figsize,
+        squeeze=False,
+        sharex=False,
+        sharey=sharey
+    )
+
+    # ---- helper to fetch U arrays consistently ----
+    def _get_u(telem, which):
+        # which: "LO" or "HO"
+        if u_source == "fast":
+            key = f"u_{which}_fast"
+            return telem.get(key, None)
+        if u_source == "slow":
+            key = f"u_{which}_slow"
+            return telem.get(key, None)
+        if u_source == "sum":
+            a = np.asarray(telem.get(f"u_{which}_fast", 0.0), dtype=float)
+            b = np.asarray(telem.get(f"u_{which}_slow", 0.0), dtype=float)
+            return a + b
+        raise ValueError("u_source must be 'fast', 'slow', or 'sum'")
+
+    # ---- main plotting ----
+    for cc, name in enumerate(labels):
+        telem = runs[name]
+
+        # slice time
+        def _slice_time(arr):
+            arr = _as_2d(arr, "telem array")
+            if burn > 0:
+                return arr[int(burn):, :]
+            return arr
+
+        for rr, what in enumerate(include):
+            a = ax[rr, cc]
+
+            if what in ("e_LO", "e_HO"):
+                X = _slice_time(telem[what])
+                vals = _metric_per_feature(X, metric=metric)
+                feat_name = what
+
+            elif what == "s":
+                X = _slice_time(telem["s"])
+                # cap pixels for sanity
+                if X.shape[1] > int(max_signal_features):
+                    X = X[:, :int(max_signal_features)]
+                vals = _metric_per_feature(X, metric=metric)
+                feat_name = f"s[:{X.shape[1]}]"
+
+            elif what == "u_LO":
+                U = _get_u(telem, "LO")
+                if U is None:
+                    a.text(0.5, 0.5, "u_LO not found", ha="center", va="center")
+                    a.set_axis_off()
+                    continue
+                X = _slice_time(U)
+                vals = _metric_per_feature(X, metric=metric)
+                feat_name = f"u_LO ({u_source})"
+
+            elif what == "u_HO":
+                U = _get_u(telem, "HO")
+                if U is None:
+                    a.text(0.5, 0.5, "u_HO not found", ha="center", va="center")
+                    a.set_axis_off()
+                    continue
+                X = _slice_time(U)
+                vals = _metric_per_feature(X, metric=metric)
+                feat_name = f"u_HO ({u_source})"
+
+            else:
+                raise ValueError(f"Unknown include entry: {what}")
+
+            # base curve
+            x = np.arange(vals.size)
+            a.plot(x, vals, lw=1.5)
+
+            # highlight offenders
+            idx = _topk_abs(vals, k=topk)
+            for j, ii in enumerate(idx):
+                # use a distinct marker and label for legend
+                # label includes rounded metric value
+                v = vals[ii]
+                label = f"#{j+1} i={ii}: {v:+.3g}"
+                a.plot(ii, v, marker="x", ms=8, mew=2, linestyle="None", label=label)
+
+            a.axhline(0.0, lw=1.0, alpha=0.4)
+
+            # titles/labels
+            if rr == 0:
+                a.set_title(f"{title_prefix}{name}")
+            if cc == 0:
+                a.set_ylabel(f"{feat_name}\n({metric})")
+            if rr == nrows - 1:
+                a.set_xlabel("index")
+
+            # keep legend readable: only show if there are offenders
+            if idx.size > 0:
+                a.legend(fontsize=9, loc="best", frameon=True)
+
+    plt.tight_layout()
+    return fig, ax
+
+
+
+
+def plot_modes_in_intensity_space_per_config(
+    configs,
+    zwfs_cal_factory_from_cfg,
+    *,
+    which="HO",                       # "HO" | "LO"
+    mode_indices_by_cfg=None,         # dict[name->list] OR list-of-lists aligned with configs
+    max_modes_per_cfg=5,              # used only if mode_indices_by_cfg is None
+    pix_shape=None,                   # (ny,nx) or None -> infer from zwfs_tmp.reco.I0.shape
+    cmap="RdBu_r",
+    clip_percentile=99.5,             # per-subplot robust symmetric scaling
+    cbar_location="right",            # "right" | "bottom" | "top"
+    cbar_size="4.5%",
+    cbar_pad=0.06,
+    axis_off=True,
+    suptitle=None,
+    figsize_per_col=3.2,
+    figsize_per_row=2.6,
+):
+    """
+    Plot I2M rows (modes) reshaped into pixel/intensity space.
+
+    Supports different mode indices per config:
+      - mode_indices_by_cfg can be:
+          (a) dict keyed by cfg["name"]
+          (b) list of lists aligned with configs
+          (c) None -> uses first max_modes_per_cfg indices [0..max_modes_per_cfg-1]
+
+    Layout:
+      - columns = configs
+      - rows    = max number of modes across configs (ragged supported)
+      - each subplot gets its own colorbar + unique title describing mode index
+    """
+    # ---- resolve mode indices per config ----
+    cfg_names = [cfg.get("name", f"cfg{ii}") for ii, cfg in enumerate(configs)]
+
+    if mode_indices_by_cfg is None:
+        mode_lists = [list(range(int(max_modes_per_cfg))) for _ in configs]
+    elif isinstance(mode_indices_by_cfg, dict):
+        mode_lists = []
+        for name in cfg_names:
+            if name not in mode_indices_by_cfg:
+                mode_lists.append([])
+            else:
+                mode_lists.append(list(mode_indices_by_cfg[name]))
+    else:
+        # assume list-of-lists aligned with configs
+        if len(mode_indices_by_cfg) != len(configs):
+            raise ValueError("mode_indices_by_cfg list must have same length as configs.")
+        mode_lists = [list(v) for v in mode_indices_by_cfg]
+
+    ncols = len(configs)
+    nrows = max((len(v) for v in mode_lists), default=0)
+    if nrows == 0 or ncols == 0:
+        raise ValueError("No modes to plot (nrows==0) or no configs (ncols==0).")
+
+    fig_w = max(6.0, figsize_per_col * ncols)
+    fig_h = max(4.0, figsize_per_row * nrows)
+    fig, ax = plt.subplots(nrows, ncols, figsize=(fig_w, fig_h), squeeze=False)
+
+    # ---- helper to fetch I2M ----
+    def _get_I2M(zwfs_tmp):
+        w = which.strip().upper()
+        if w == "HO":
+            return np.asarray(zwfs_tmp.reco.I2M_HO, float), "I2M_HO"
+        elif w == "LO":
+            if hasattr(zwfs_tmp.reco, "I2M_LO"):
+                return np.asarray(zwfs_tmp.reco.I2M_LO, float), "I2M_LO"
+            if hasattr(zwfs_tmp.reco, "I2M_TT"):
+                return np.asarray(zwfs_tmp.reco.I2M_TT, float), "I2M_TT"
+            raise AttributeError("Could not find LO reconstructor (I2M_LO or I2M_TT).")
+        else:
+            raise ValueError("which must be 'HO' or 'LO'")
+
+    # ---- plot ----
+    for cc, cfg in enumerate(configs):
+        name = cfg_names[cc]
+        zwfs_tmp = zwfs_cal_factory_from_cfg(cfg)
+        I2M, I2M_name = _get_I2M(zwfs_tmp)
+
+        shp = pix_shape if pix_shape is not None else zwfs_tmp.reco.I0.shape
+        ny, nx = shp
+
+        for rr in range(nrows):
+            a = ax[rr, cc]
+
+            # this config may not have this many modes -> blank cell
+            if rr >= len(mode_lists[cc]):
+                a.set_axis_off()
+                continue
+
+            mi = int(mode_lists[cc][rr])
+
+            if mi < 0 or mi >= I2M.shape[0]:
+                a.set_axis_off()
+                a.set_title(f"{name}\n{I2M_name}[{mi}] (OOR)", fontsize=10)
+                continue
+
+            row = np.asarray(I2M[mi], float)
+            if row.size != ny * nx:
+                raise ValueError(
+                    f"{name}: {I2M_name}[{mi}] length {row.size} != ny*nx={ny*nx} for pix_shape={shp}. "
+                    f"Pass pix_shape explicitly if needed."
+                )
+
+            img = row.reshape(shp)
+
+            # per-subplot robust symmetric scaling
+            s = np.nanpercentile(np.abs(img), clip_percentile)
+            if (not np.isfinite(s)) or s == 0:
+                s = 1.0
+            vmin, vmax = -s, +s
+
+            im = a.imshow(img, origin="lower", cmap=cmap, vmin=vmin, vmax=vmax)
+
+            # unique title per subplot with mode index
+            a.set_title(f"{name}\n{I2M_name}[{mi}]", fontsize=10)
+
+            if axis_off:
+                a.set_xticks([])
+                a.set_yticks([])
+
+            # per-subplot colorbar using make_axes_locatable (stable)
+            divider = make_axes_locatable(a)
+            cax = divider.append_axes(cbar_location, size=cbar_size, pad=cbar_pad)
+            cb = fig.colorbar(im, cax=cax, orientation=("vertical" if cbar_location == "right" else "horizontal"))
+            cb.ax.tick_params(labelsize=8)
+
+    if suptitle is None:
+        suptitle = f"Mode templates in pixel/intensity space ({which.upper()})"
+    fig.suptitle(suptitle, y=0.995)
+
+    # no tight_layout (fights locatable caxes)
+    fig.subplots_adjust(left=0.05, right=0.99, top=0.93, bottom=0.06, wspace=0.25, hspace=0.35)
+
+    return fig, ax
+
+
+
+
+# # Different mode indices per config (keyed by cfg["name"])
+# mode_indices_by_cfg = { # keys from config 
+#     'CPM_Sol_Sol': [0, 1, 2, 3, 4],
+#     'CPM_Sol_AT': [10, 11, 12],   # fewer rows -> blanks below
+#     'CPM_AT_AT':[10, 11, 12],
+# }
+
+# fig, ax = plot_modes_in_intensity_space_per_config(
+#     configs=configs,
+#     zwfs_cal_factory_from_cfg=zwfs_cal_factory_from_cfg,
+#     which="HO",
+#     mode_indices_by_cfg=mode_indices_by_cfg,
+#     pix_shape=(48, 48),
+#     cbar_location="right",
+#     clip_percentile=99.5,
+#     suptitle="Per-config HO I2M templates (custom indices)",
+# )
+# plt.show()
+
+
+"""
+# A complete simple example of end-to-end comparison of different signal processing sematics 
+# under (un-optimized) closed loop control 
+
+
+import numpy as np
+import matplotlib.pyplot as plt
+
+from types import SimpleNamespace
+import importlib 
+import sys
+import copy 
+import os 
+import time
+from pathlib import Path
+if sys.version_info < (3, 0):
+    import ConfigParser
+else:
+    import configparser as ConfigParser
+import aotools
+#import pyzelda.zelda as zelda
+import pyzelda.ztools as ztools
+import pyzelda.utils.aperture as aperture
+# path to the folder that contains your module/package 
+module_dir = Path('/Users/bencb/Documents/ASGARD/BaldrApp/')  # e.g. Path.home() / "projects/my_pkg/src"
+sys.path.insert(0, str(module_dir))  
+
+from baldrapp.common import baldr_core as bldr
+#from baldrapp.common import DM_basis
+from baldrapp.common import utilities as util
+from baldrapp.common import phasescreens as ps
+from baldrapp.common import DM_registration
+from baldrapp.common import baldr_experiments as bld_experiment
+
+
+
+def update_scintillation( high_alt_phasescreen , pxl_scale, wavelength, final_size = None,jumps = 1, propagation_distance=10000):
+    for _ in range(jumps):
+        high_alt_phasescreen.add_row()
+    wavefront = np.exp(1J *  high_alt_phasescreen.scrn ) # amplitude mean ~ 1 
+    propagated_screen = aotools.opticalpropagation.angularSpectrum(inputComplexAmp=wavefront,
+                                                               z=propagation_distance, 
+                                                               wvl=wavelength, 
+                                                               inputSpacing = pxl_scale, 
+                                                               outputSpacing = pxl_scale
+                                                               )
+    #print("upsample it scintillation screen")
+    if final_size is not None:
+        amp = bldr.upsample(propagated_screen, final_size ) # This oversamples to nearest multiple size, and then pads the rest with repeated rows, not the most accurate but fastest. Negligible if +1 from even number
+    else:
+        amp = propagated_screen
+
+    return( abs(amp) ) # amplitude of field, not intensity (amp^2)! rotate 90 degrees so not correlated with phase 
+
+
+## HERE WE KEEP SYSTEMS PERFECT (NO RMSE ON DM FLAT)
+grid_dict = {
+    "telescope":"solarstein", #"DISC", #'AT',
+    "D":1.8, # diameter of beam 
+    "N" : 72, #64, # number of pixels across pupil diameter
+    "dim": 72 * 4, #64 * 4 #4 
+    #"padding_factor" : 4, # how many pupil diameters fit into grid x axis
+    # TOTAL NUMBER OF PIXELS = padding_factor * N 
+    }
+
+# I should include coldstop here!! 
+optics_dict = {
+    "wvl0" :1.65e-6, # central wavelength (m) 
+    "F_number": 21.2, # F number on phasemask
+    "mask_diam": 1.06, # diameter of phaseshifting region in diffraction limit units (physical unit is mask_diam * 1.22 * F_number * lambda)
+    "theta": 1.57079, # phaseshift of phasemask 
+    ### NEw have not consistenty propagate this in functions in baldr_core
+    "coldstop_diam": 8.4, #8, #1.22 lambda/D units
+    "coldstop_offset": (0,0) #(0,cs_offset) #(-cs_offset,cs_offset) #(cs_offset, 0.0)
+}
+
+dm_dict = {
+    "dm_model":"BMC-multi-3.5",
+    "actuator_coupling_factor": 0.75, #0.7,# std of in actuator spacing of gaussian IF applied to each actuator. (e.g actuator_coupling_factor = 1 implies std of poke is 1 actuator across.)
+    "dm_pitch":1,
+    "dm_aoi":0, # angle of incidence of light on DM 
+    "opd_per_cmd" : 3e-6, # peak opd applied at center of actuator per command unit (normalized between 0-1) 
+    "flat_rmse" : 0.0 # std (m) of flatness across Flat DM  
+    }
+
+grid_ns = SimpleNamespace(**grid_dict)
+optics_ns = SimpleNamespace(**optics_dict)
+dm_ns = SimpleNamespace(**dm_dict)
+
+zwfs_ns = bldr.init_zwfs(grid_ns, optics_ns, dm_ns)
+zwfs_ns.stellar.bandwidth = 300 # spectral bandwidth in nm (Critical to include if we do mangitude studies)
+
+
+# atmosphere 
+#wvl0 =  zwfs_ns.optics.wvl0
+dx = zwfs_ns.grid.D / zwfs_ns.grid.N
+r0=0.1 #m
+L0 = 0.1 #m
+
+include_scintillation = True # to include scintillation?
+r0_scint = 0.164
+L0_scint = 10
+r0_500 = 0.10 #m
+seeing = 0.98 * 500e-9 / r0_500 * 3600 * 180/np.pi # 
+r0 = (r0_500) * (zwfs_ns.optics.wvl0 / 0.5e-6) ** (6 / 5)
+L0 = 25
+propagation_distance = 10000 # scintillation
+
+# input phase and scintillation screens 
+scrn = ps.PhaseScreenKolmogorov(
+    nx_size=zwfs_ns.grid.dim, pixel_scale=dx, r0=r0, L0=L0, random_seed=2
+)
+scint_phasescreen = aotools.turbulence.infinitephasescreen.PhaseScreenVonKarman(
+    nx_size=zwfs_ns.grid.dim, pixel_scale=dx, r0=r0_scint, L0=L0_scint, random_seed=2
+)
+
+# first stage AO 
+ao_sys = "NAOMI faint (AT)"
+Nmodes_removed = 7            # pick the AO1 regime you want here
+N_iter = 1000                   # total closed-loop iterations
+N_burn = 0                   # throw away transient
+jumps_per_iter = 1             # scintillation decorrelation per iter
+
+phase_scaling_factor = 1.0
+it_lag = 10 #3 # how many exposures does fist stage AO lag 
+
+
+pm = zwfs_ns.grid.pupil_mask.astype(bool)
+
+# phase space basis 
+basis_cropped = ztools.zernike.zernike_basis(
+    nterms=np.max([Nmodes_removed, 5]),
+    npix=zwfs_ns.grid.N
+)
+basis_template = np.zeros(zwfs_ns.grid.pupil_mask.shape)
+basis = np.array([util.insert_concentric(np.nan_to_num(b, 0), basis_template) for b in basis_cropped])
+
+
+# stellar
+throughput = 1 #0.1
+waveband = "H"
+magnitude = 1 #-5
+# magnitude of calibration source 
+solarstein_mag = -5
+
+# Baldr detector 
+fps = 1730 # baldr camera fps 
+
+detector = bldr.detector(binning=6 ,
+                            dit=1/fps,
+                            ron=0, #12,#15.0, #15.0, # 10 # 1
+                            qe=0.7)
+zwfs_ns.detector = detector
+
+
+####### LETS BUILD IT MANUALLY 
+calibration_opd_input=0 * np.zeros_like(zwfs_ns.grid.pupil_mask)
+
+calibration_amp_input=(throughput *
+            (np.pi * (zwfs_ns.grid.D/2)**2) / 
+            (np.pi * (zwfs_ns.grid.N/2)**2) *
+            util.magnitude_to_photon_flux(magnitude=solarstein_mag,
+                                            band=waveband,
+                                            wavelength=1e9*zwfs_ns.optics.wvl0))**0.5 * zwfs_ns.grid.pupil_mask
+
+calibration_opd_internal = np.zeros_like(zwfs_ns.grid.pupil_mask)
+
+poke_amp= 0.05 # 0.02 
+poke_method='double_sided_poke'
+basis_name =  "Zonal"
+Nmodes = 140
+imgs_to_mean=10
+use_pyZelda = False 
+
+zwfs_ns.dm.current_cmd = zwfs_ns.dm.dm_flat.copy()
+
+#clear pupil intensity in pixelspace on internal source 
+N0 = bldr.get_N0( calibration_opd_input,   calibration_amp_input ,  calibration_opd_internal,  zwfs_ns , detector=detector, use_pyZelda = False)
+
+#ZWFS pupil intensity in pixelspace on internal source 
+I0 = bldr.get_I0( calibration_opd_input,   calibration_amp_input ,  calibration_opd_internal,  zwfs_ns , detector=detector, use_pyZelda = False)
+
+# Dark in pixel space
+DARK = bldr.get_I0( calibration_opd_input,   0*calibration_amp_input ,  calibration_opd_internal,  zwfs_ns , detector=detector, use_pyZelda = False)
+
+
+# classify the pupil regions 
+zwfs_ns = bldr.classify_pupil_regions( opd_input = 0 * calibration_opd_internal ,  amp_input = calibration_amp_input, \
+    opd_internal=calibration_opd_internal,  zwfs_ns = zwfs_ns , 
+    detector=zwfs_ns.detector , pupil_diameter_scaling = 1.0, 
+    pupil_offset = (0,0), use_pyZelda= False) 
+
+
+#zwfs_ns.grid.pupil_mask = aperture.disc_obstructed(dim=int(grid_ns.dim), size= grid_ns.N, obs = 1100/8000, diameter=True, strict=False )
+zwfs_ns.dm.current_cmd = zwfs_ns.dm.dm_flat.copy()
+# build interaction matrix now in pixel space with zonal basis (so we can register DM with inbuilt functions)
+zwfs_ns = bldr.build_IM( zwfs_ns ,  calibration_opd_input = 0 * calibration_opd_internal , calibration_amp_input = calibration_amp_input , \
+            opd_internal = calibration_opd_internal,  basis = basis_name , Nmodes =  Nmodes, poke_amp = poke_amp, poke_method = 'double_sided_poke',\
+                imgs_to_mean = imgs_to_mean, detector=zwfs_ns.detector,use_pyZelda= False, normalization_method='clear pupil mean')
+
+
+#from IM register the DM in the detector pixelspace 
+zwfs_ns = bldr.register_DM_in_pixelspace_from_IM( zwfs_ns, plot_intermediate_results=True  )
+
+# just look at the pupil 
+util.nice_heatmap_subplots( im_list = [zwfs_ns.grid.pupil_mask], title_list=['Solarstein pupil']) 
+
+##########
+# Experiment 1 
+##########
+# Build two calibration ZWFS objects with different normalization conventions
+#   - CPM : clear pupil mean
+#   - SFM : subframe mean
+
+HO_inv_method = "eigen"
+what_space = "pix"   # or "dm"
+
+zwfs_ns_dict = {}
+
+for tag, norm_method in {
+    "CPM": "clear pupil mean",
+    "SFM": "subframe mean",
+    "CPM_AT": "clear pupil mean",
+}.items():
+
+    # fresh copy
+    zwfs_ns_cal = copy.deepcopy(zwfs_ns)
+
+    # flatten DM
+    zwfs_ns_cal.dm.current_cmd = zwfs_ns_cal.dm.dm_flat.copy()
+
+    # 
+    if tag =='CPM_AT':
+        zwfs_ns_cal.grid.pupil_mask = aperture.baldr_AT_pupil( diameter=zwfs_ns_cal.grid.N, dim=int(zwfs_ns_cal.grid.dim), spiders_thickness=0.016, strict=False, cpix=False) #, padding_factor = 2 )
+    
+    # build interaction matrix
+    zwfs_ns_cal = bldr.build_IM(
+        zwfs_ns_cal,
+        calibration_opd_input=0 * calibration_opd_internal,
+        calibration_amp_input=calibration_amp_input,
+        opd_internal=calibration_opd_internal,
+        basis="TT_w_zonal",
+        Nmodes=Nmodes,
+        poke_amp=poke_amp,
+        poke_method="double_sided_poke",
+        imgs_to_mean=imgs_to_mean,
+        detector=zwfs_ns.detector,
+        use_pyZelda=False,
+        normalization_method=norm_method,
+    )
+
+    # build reconstructor
+    _ = bldr.reco_method(
+        zwfs_ns_cal,
+        LO=2,
+        LO_inv_method="eigen",
+        HO_inv_method=HO_inv_method,
+        project_out_of_LO=None,
+        project_out_of_HO="lo_command",
+        truncation_idx=30,
+        filter_dm_pupil=None,
+        eps=1e-12,
+        what_space=what_space,
+    )
+
+    zwfs_ns_dict[tag] = zwfs_ns_cal
+
+# # unpack if you want the original names
+# zwfs_ns_CPM = zwfs_ns_dict["CPM"]
+# zwfs_ns_SFM = zwfs_ns_dict["SFM"]
+
+
+# ---
+
+def make_ctrl(ki, leak):
+
+    return bld_experiment.LeakyIntegratorController(
+        n_lo=zwfs_ns_dict["CPM"].reco.I2M_TT.shape[0],
+        n_ho=zwfs_ns_dict["CPM"].reco.I2M_HO.shape[0],
+        ki_LO=ki,
+        ki_HO=ki,
+        leak=leak,
+    )
+
+
+def make_scrn_factory(*, nx_size, dx, r0, L0, seed=None):
+    def scrn_factory():
+        return ps.PhaseScreenKolmogorov(
+            nx_size=nx_size,
+            pixel_scale=dx,
+            r0=r0,
+            L0=L0,
+            random_seed=seed,
+        )
+    return scrn_factory
+
+
+# experiment grid
+configs = [
+    dict(
+        name="internal_CPM",
+        loop_schedule=[(0, "open"), (100, "fast")],
+        user_ref_intensities=None,
+        ctrl_slow=None,
+        ctrl_fast=make_ctrl(ki=0.25, leak=0.95),
+        cal_tag="CPM",  # used to deepcopy the relevant zwfs_ns object
+    ),
+    dict(
+        name="internal_SFM",
+        loop_schedule=[(0, "open"), (100, "fast")],
+        user_ref_intensities=None,
+        ctrl_slow=None,
+        ctrl_fast=make_ctrl(ki=0.25, leak=0.95),
+        cal_tag="SFM",  # used to deepcopy the relevant zwfs_ns object
+    ),
+]
+
+
+# callable function to copy the zwfs_ns for experiment grid
+def zwfs_cal_factory_from_cfg(cfg):
+    # BUGFIX: avoid None.strip() if cal_tag missing
+    tag = (cfg.get("cal_tag") or "").strip().lower()
+    if tag == "sfm":
+        return copy.deepcopy(zwfs_ns_dict["SFM"])
+    elif tag == "cpm":
+        return copy.deepcopy(zwfs_ns_dict["CPM"])
+    else:
+        raise UserWarning('cal tag is not valid (expected "CPM" or "SFM")')
+
+
+# run
+results = {}
+for cfg in configs:
+    # BUGFIX: ensure controller dimensions match THIS config's calibration reconstructor
+    # (otherwise SFM vs CPM could differ and the loop will error or behave incorrectly)
+    zwfs_tmp = zwfs_cal_factory_from_cfg(cfg)
+    if cfg.get("ctrl_fast") is not None:
+        if (cfg["ctrl_fast"].n_lo != zwfs_tmp.reco.I2M_TT.shape[0]) or (cfg["ctrl_fast"].n_ho != zwfs_tmp.reco.I2M_HO.shape[0]):
+            cfg["ctrl_fast"] = bld_experiment.LeakyIntegratorController(
+                n_lo=zwfs_tmp.reco.I2M_TT.shape[0],
+                n_ho=zwfs_tmp.reco.I2M_HO.shape[0],
+                ki_LO=0.25,
+                ki_HO=0.25,
+                leak=0.95,
+            )
+
+    if cfg.get("ctrl_slow") is not None:
+        if (cfg["ctrl_slow"].n_lo != zwfs_tmp.reco.I2M_TT.shape[0]) or (cfg["ctrl_slow"].n_ho != zwfs_tmp.reco.I2M_HO.shape[0]):
+            cfg["ctrl_slow"] = bld_experiment.LeakyIntegratorController(
+                n_lo=zwfs_tmp.reco.I2M_TT.shape[0],
+                n_ho=zwfs_tmp.reco.I2M_HO.shape[0],
+                ki_LO=cfg["ctrl_slow"].ki_LO[0] if np.ndim(cfg["ctrl_slow"].ki_LO) else cfg["ctrl_slow"].ki_LO,
+                ki_HO=cfg["ctrl_slow"].ki_HO[0] if np.ndim(cfg["ctrl_slow"].ki_HO) else cfg["ctrl_slow"].ki_HO,
+                leak=cfg["ctrl_slow"].leak_LO[0] if np.ndim(cfg["ctrl_slow"].leak_LO) else cfg["ctrl_slow"].leak_LO,
+            )
+
+    results.update(
+        bld_experiment.run_experiment_grid(
+            zwfs_current_factory=lambda cfg=cfg: zwfs_cal_factory_from_cfg(cfg),
+            zwfs_cal_factory=lambda cfg=cfg: zwfs_cal_factory_from_cfg(cfg),
+            scrn_factory=make_scrn_factory(
+                nx_size=grid_dict["dim"],
+                dx=dx,
+                r0=r0,
+                L0=L0,
+                seed=3,
+            ),
+            scint_factory=make_scrn_factory(
+                nx_size=grid_dict["dim"],
+                dx=dx,
+                r0=r0_scint,
+                L0=L0_scint,
+                seed=3,
+            ),
+            basis=basis,
+            detector=detector,
+            amp_input_0=calibration_amp_input,
+            dx=dx,
+            propagation_distance=propagation_distance,
+            update_scintillation_fn=update_scintillation,
+            DM_interpolate_fn=DM_registration.interpolate_pixel_intensities,
+            configs=[cfg],
+            common_kwargs=dict(
+                N_iter=300,
+                N_burn=0,
+                it_lag=it_lag,
+                Nmodes_removed=Nmodes_removed,
+                phase_scaling_factor=phase_scaling_factor,
+                include_scintillation=include_scintillation,
+                jumps_per_iter=jumps_per_iter,
+                signal_space="pix",
+                opd_threshold=np.inf,
+                verbose_every=100,
+            ),
+        )
+    )
+
+
+
+widget_handles = bld_experiment.quicklook_experiment_results(
+    results,
+    labels=["internal_CPM", "internal_SFM"],  # optional, default = all
+    wvl0=zwfs_ns.optics.wvl0,                  # important for Strehl proxy
+    init_ho=(0, 20),                           # initial HO mode range
+    init_lo=(0, 2),                            # initial LO mode range (TT)
+    plot_u=True,                               # show controller states
+    plot_errors=True,                          # show modal errors
+    interactive=True,                          # enable sliders + toggles
+    show=True,
+)
+
+
+"""

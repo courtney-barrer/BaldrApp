@@ -2747,6 +2747,188 @@ def get_N0( opd_input,  amp_input ,  opd_internal,  zwfs_ns , detector=None, inc
     return Intensity
 
 
+def estimate_clear_pupil_onsky(
+    zwfs_ns,
+    detector,
+    *,
+    # phase screen params
+    ps_module,                  # e.g. ps (poppy/soapy phase screen module you use)
+    dx,
+    r0,
+    L0,
+    phase_seed=43,
+    # scintillation screen params
+    aotools_module=None,        # provide aotools if include_scintillation=True
+    r0_scint=None,
+    L0_scint=None,
+    scint_seed=42,
+    propagation_distance=None,
+    jumps_per_iter=1,
+    include_scintillation=True,
+    update_scintillation_fn=None,  # callable: update_scintillation(high_alt_phasescreen, pxl_scale, wavelength, final_size, jumps, propagation_distance)
+    amp_input_0=1.0,               # scalar or 2D array (same shape as pupil grid)
+    # AO1 residual / latency sim
+    it_lag=0,
+    Nmodes_removed=0,
+    basis=None,
+    phase_scaling_factor=1.0,
+    ao1_add_rows_per_iter=1,
+    # simulation loop
+    N_samples=100,
+    opd_internal_onsky=0.0,      # 2D OPD internal term (or 0)
+    use_pyZelda=False,
+    return_intermediates=False,
+):
+    """
+    Estimate the clear-pupil intensity N0 on-sky by Monte-Carlo sampling phase (+ optional scintillation),
+    while including a first-stage AO residual with a rolling latency buffer.
+
+    Returns
+    -------
+    N0_est : 2D ndarray
+        Mean clear-pupil intensity estimate (same shape as zwfs pupil grid)
+    N0_samples : 3D ndarray, optional
+        Stack of samples (N_samples, ny, nx) if return_samples=True
+    screens : dict
+        The instantiated independent screens (useful for debugging/repro)
+    """
+
+    # ----------------------------
+    # basic validation / defaults
+    # ----------------------------
+    if include_scintillation:
+        if aotools_module is None:
+            raise ValueError("include_scintillation=True requires aotools_module.")
+        if update_scintillation_fn is None:
+            raise ValueError("include_scintillation=True requires update_scintillation_fn.")
+        if propagation_distance is None:
+            raise ValueError("include_scintillation=True requires propagation_distance.")
+        if (r0_scint is None) or (L0_scint is None):
+            raise ValueError("include_scintillation=True requires r0_scint and L0_scint.")
+
+    if basis is None:
+        raise ValueError("basis must be provided (AO1 residual uses it).")
+
+    # ----------------------------
+    # independent, reproducible screens
+    # ----------------------------
+    print( f"initialising new (independent) phase and scintillation screens with the given input statistics")
+    scrn_new = ps_module.PhaseScreenKolmogorov(
+        nx_size=zwfs_ns.grid.dim,
+        pixel_scale=dx,
+        r0=r0,
+        L0=L0,
+        random_seed=phase_seed,
+    )
+
+    scint_scrn_new = None
+    if include_scintillation:
+        scint_scrn_new = aotools_module.turbulence.infinitephasescreen.PhaseScreenVonKarman(
+            nx_size=zwfs_ns.grid.dim,
+            pixel_scale=dx,
+            r0=r0_scint,
+            L0=L0_scint,
+            random_seed=scint_seed,
+        )
+
+    # ----------------------------
+    # populate AO1 rolling buffer (latency)
+    # ----------------------------
+    reco_list = []
+    for _ in range(int(it_lag)):
+        scrn_new.add_row()
+        _, reco_1 = first_stage_ao(
+            atm_scrn=scrn_new,
+            Nmodes_removed=Nmodes_removed,
+            basis=basis,
+            phase_scaling_factor=phase_scaling_factor,
+            return_reconstructor=True,
+        )
+        reco_list.append(reco_1)
+
+    # ensure DM starts flat for N0 estimate
+    zwfs_ns.dm.current_cmd = zwfs_ns.dm.dm_flat.copy()
+
+    # allocate
+    N0_samples = []
+
+    for itt in range(int(N_samples)):
+        if np.mod(itt, 100):
+            print( f"complete {itt}/{N_samples}")
+        # --- evolve phase screen / AO1 residual ---
+        for _k in range(int(ao1_add_rows_per_iter)):
+            scrn_new.add_row()
+
+        _, reco_1 = first_stage_ao(
+            atm_scrn=scrn_new,
+            Nmodes_removed=Nmodes_removed,
+            basis=basis,
+            phase_scaling_factor=phase_scaling_factor,
+            return_reconstructor=True,
+        )
+        reco_list.append(reco_1)
+
+        # latency: subtract an older reconstructor output
+        delayed_reco = reco_list.pop(0) if len(reco_list) > 0 else 0.0
+        ao_1_residual_phase = basis[0] * (phase_scaling_factor * scrn_new.scrn - delayed_reco)
+
+        # convert phase [rad] -> OPD [m]
+        opd_input = phase_scaling_factor * zwfs_ns.optics.wvl0 / (2.0 * np.pi) * ao_1_residual_phase
+
+        # --- scintillation amplitude ---
+        if include_scintillation:
+            for _k in range(int(jumps_per_iter)):
+                scint_scrn_new.add_row()
+
+            amp_scint = update_scintillation_fn(
+                high_alt_phasescreen=scint_scrn_new,
+                pxl_scale=dx,
+                wavelength=zwfs_ns.optics.wvl0,
+                final_size=None,
+                jumps=0,
+                propagation_distance=propagation_distance,
+            )
+            amp_input = amp_input_0 * amp_scint
+        else:
+            amp_input = amp_input_0
+
+        # --- DM OPD contribution (flat) ---
+        opd_dm = get_dm_displacement(
+            command_vector=zwfs_ns.dm.current_cmd,
+            gain=zwfs_ns.dm.opd_per_cmd,
+            sigma=zwfs_ns.grid.dm_coord.act_sigma_wavesp,
+            X=zwfs_ns.grid.wave_coord.X,
+            Y=zwfs_ns.grid.wave_coord.Y,
+            x0=zwfs_ns.grid.dm_coord.act_x0_list_wavesp,
+            y0=zwfs_ns.grid.dm_coord.act_y0_list_wavesp,
+        )
+
+        opd_total = opd_input + opd_dm
+
+        # --- N0 measurement (clear pupil intensity) ---
+        N0 = get_N0(
+            opd_total,
+            amp_input,
+            opd_internal_onsky,
+            zwfs_ns,
+            detector=detector,
+            use_pyZelda=use_pyZelda,
+        )
+        N0_samples.append(N0)
+
+    N0_samples = np.asarray(N0_samples)  # (N, ny, nx)
+    N0_est = np.mean(N0_samples, axis=0)
+
+    
+    
+    if return_intermediates:
+        screens = {"phase": scrn_new, "scint": scint_scrn_new}
+        return N0_est, N0_samples, screens
+    
+    return N0_samples
+
+
+
 def get_frame( opd_input,  amp_input ,  opd_internal,  zwfs_ns , detector=None, include_shotnoise=True , use_pyZelda = True):
     """_summary_
     propagates the input field with phase described by opd_input and internal aberrations described by opd_internal, field flux described by amp_input
@@ -4515,48 +4697,6 @@ def process_zwfs_intensity( i, zwfs_ns, method, record_telemetry = False , **kwa
         
     
     
-## Some utils for updating scintillation (used originally in ASGARD/paranal_onsky_comissioning/simulation_experiments/)
-def upsample_by_factor(ar: np.ndarray, f: int | tuple[int, int]) -> np.ndarray:
-    """
-    Upsample 2D array by integer factor(s) via block replication (nearest-neighbour).
-    If f is an int, uses the same factor on both axes. If f=(fy, fx), uses per-axis factors.
-    """
-    ar = np.asarray(ar)
-    if ar.ndim != 2:
-        raise ValueError("ar must be 2D")
-    fy, fx = (f, f) if isinstance(f, int) else f
-    if fy < 1 or fx < 1:
-        raise ValueError("factors must be positive integers")
-    return np.repeat(np.repeat(ar, fy, axis=0), fx, axis=1)
-
-
-def pad_to_shape_edge(arr: np.ndarray, target_shape: tuple[int, int]) -> np.ndarray:
-    """
-    Grow a 2D array to target_shape by copying its edges (last row/col).
-    Equivalent to np.pad(..., mode='edge').
-    """
-    if arr.ndim != 2:
-        raise ValueError("arr must be 2D")
-    m, n = arr.shape
-    M, N = target_shape
-    if M < m or N < n:
-        raise ValueError("target_shape must be >= current shape in both dims")
-
-    pad_rows = M - m
-    pad_cols = N - n
-    return np.pad(arr, ((0, pad_rows), (0, pad_cols)), mode="edge")
-
-
-def upsample( ar, target_size ):
-    out_almost = upsample_by_factor(ar, target_size//len(ar) ) # 
-    if np.mod( target_size, len(ar) ) != 0: # not even divisor, we just pad! 
-        out = pad_to_shape_edge( out_almost , target_shape = (target_size,target_size))
-    else :
-        out = out_almost
-    return( out )
-
-
-
 # #### 
 
 # grid_dict = {
