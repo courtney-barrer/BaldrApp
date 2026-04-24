@@ -4,6 +4,8 @@ __pycache__/
 *.pyc
 *.pyo
 *.pyd
+*.logs
+*.run
 .Python
 .env
 .streamlit/credentials.toml
