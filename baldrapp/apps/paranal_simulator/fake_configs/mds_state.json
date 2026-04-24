@@ -1,0 +1,281 @@
+[
+    {
+        "name": "SDLA",
+        "is_connected": true,
+        "position": 3158.0137499999987
+    },
+    {
+        "name": "SDL12",
+        "is_connected": true,
+        "position": 4347.9958124999985
+    },
+    {
+        "name": "SDL34",
+        "is_connected": true,
+        "position": 5602.009687499998
+    },
+    {
+        "name": "SSS",
+        "is_connected": true,
+        "position": 92.50002832031245
+    },
+    {
+        "name": "SSF",
+        "is_connected": false
+    },
+    {
+        "name": "HFO1",
+        "is_connected": true,
+        "position": 11.32733
+    },
+    {
+        "name": "HFO2",
+        "is_connected": true,
+        "position": 7.933632
+    },
+    {
+        "name": "HFO3",
+        "is_connected": true,
+        "position": 12.787139
+    },
+    {
+        "name": "HFO4",
+        "is_connected": true,
+        "position": 9.026898
+    },
+    {
+        "name": "HTPP1",
+        "is_connected": true,
+        "position": -0.339
+    },
+    {
+        "name": "HTPP2",
+        "is_connected": true,
+        "position": 0.083
+    },
+    {
+        "name": "HTPP3",
+        "is_connected": true,
+        "position": -0.498
+    },
+    {
+        "name": "HTPP4",
+        "is_connected": true,
+        "position": 0.142
+    },
+    {
+        "name": "HTPI1",
+        "is_connected": true,
+        "position": 0.319
+    },
+    {
+        "name": "HTPI2",
+        "is_connected": true,
+        "position": 0.349
+    },
+    {
+        "name": "HTPI3",
+        "is_connected": true,
+        "position": 0.107
+    },
+    {
+        "name": "HTPI4",
+        "is_connected": true,
+        "position": 0.031
+    },
+    {
+        "name": "HTTP1",
+        "is_connected": true,
+        "position": -0.016
+    },
+    {
+        "name": "HTTP2",
+        "is_connected": true,
+        "position": 0.462
+    },
+    {
+        "name": "HTTP3",
+        "is_connected": true,
+        "position": 0.541
+    },
+    {
+        "name": "HTTP4",
+        "is_connected": true,
+        "position": 0.438
+    },
+    {
+        "name": "HTTI1",
+        "is_connected": true,
+        "position": 0.006
+    },
+    {
+        "name": "HTTI2",
+        "is_connected": true,
+        "position": -0.116
+    },
+    {
+        "name": "HTTI3",
+        "is_connected": true,
+        "position": 0.516
+    },
+    {
+        "name": "HTTI4",
+        "is_connected": true,
+        "position": -0.02
+    },
+    {
+        "name": "BFO",
+        "is_connected": true,
+        "position": 3500.0088749999986
+    },
+    {
+        "name": "BOTT2",
+        "is_connected": true,
+        "position": 0.026
+    },
+    {
+        "name": "BOTT3",
+        "is_connected": true,
+        "position": 0.523
+    },
+    {
+        "name": "BOTT4",
+        "is_connected": true,
+        "position": 0.116
+    },
+    {
+        "name": "BOTP2",
+        "is_connected": true,
+        "position": -0.368
+    },
+    {
+        "name": "BOTP3",
+        "is_connected": true,
+        "position": -0.375
+    },
+    {
+        "name": "BOTP4",
+        "is_connected": true,
+        "position": -0.38
+    },
+    {
+        "name": "BDS1",
+        "is_connected": true,
+        "position": 63.069978000000056
+    },
+    {
+        "name": "BDS2",
+        "is_connected": true,
+        "position": 63.069978000000056
+    },
+    {
+        "name": "BDS3",
+        "is_connected": true,
+        "position": 63.069978000000056
+    },
+    {
+        "name": "BDS4",
+        "is_connected": true,
+        "position": 63.069978000000056
+    },
+    {
+        "name": "BTT1",
+        "is_connected": true,
+        "position": 0.055
+    },
+    {
+        "name": "BTT2",
+        "is_connected": true,
+        "position": -0.196
+    },
+    {
+        "name": "BTT3",
+        "is_connected": true,
+        "position": -0.392
+    },
+    {
+        "name": "BTT4",
+        "is_connected": true,
+        "position": 0.163
+    },
+    {
+        "name": "BTP1",
+        "is_connected": true,
+        "position": 0.339
+    },
+    {
+        "name": "BTP2",
+        "is_connected": true,
+        "position": 0.569
+    },
+    {
+        "name": "BTP3",
+        "is_connected": true,
+        "position": -0.055
+    },
+    {
+        "name": "BTP4",
+        "is_connected": true,
+        "position": 0.29
+    },
+    {
+        "name": "BMX1",
+        "is_connected": true,
+        "position": 3784.9968749999985
+    },
+    {
+        "name": "BMX2",
+        "is_connected": true,
+        "position": 2900.0053124999986
+    },
+    {
+        "name": "BMX3",
+        "is_connected": true,
+        "position": 6639.996562499997
+    },
+    {
+        "name": "BMX4",
+        "is_connected": true,
+        "position": 7219.997624999996
+    },
+    {
+        "name": "BMY1",
+        "is_connected": true,
+        "position": 4055.0068124999975
+    },
+    {
+        "name": "BMY2",
+        "is_connected": true,
+        "position": 3300.0076874999986
+    },
+    {
+        "name": "BMY3",
+        "is_connected": true,
+        "position": 1929.979312499999
+    },
+    {
+        "name": "BMY4",
+        "is_connected": true,
+        "position": 1589.9844374999993
+    },
+    {
+        "name": "BLF1",
+        "is_connected": true,
+        "position": 0.0
+    },
+    {
+        "name": "BLF2",
+        "is_connected": true,
+        "position": 0.0
+    },
+    {
+        "name": "BLF3",
+        "is_connected": true,
+        "position": 0.0
+    },
+    {
+        "name": "BLF4",
+        "is_connected": true,
+        "position": 0.0
+    }
+]

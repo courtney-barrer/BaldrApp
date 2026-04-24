@@ -20,7 +20,7 @@ from scipy.stats import pearsonr
 # Utils for co-aligning (center and rotate) frames from a measured pupil, and theoretical pupil
 from scipy.ndimage import shift as nd_shift
 from scipy.ndimage import rotate as nd_rotate
-from skimage.transform import warp_polar
+#from skimage.transform import warp_polar
 
 
 def ini_to_namespace(ini_file):
