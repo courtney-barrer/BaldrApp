@@ -88,7 +88,7 @@ start_one() {                    # "cmd" "name"
   local pgid; pgid="$(pgid_of "$pid" || true)"
 
   if is_running_pid "$pid"; then
-    echo "[OK]  ${name} started (pid ${pid}, pgid ${pgid:-?}) → ${log}"
+    echo "[OK]  ${name} started (pid ${pid}, pgid ${pgid:-?}) --> ${log}"
     printf '%s:%s:%s\n' "$name" "$pid" "${pgid:-}" >> "$PIDFILE"
   else
     echo "[ERR] ${name} failed to start. Last 40 log lines:" ; tail -n 40 "$log" || true
