@@ -21,9 +21,6 @@ git clone https://github.com/courtney-barrer/BaldrApp
 ```
 The pip installation was tested on only on python 3.12.7. 
 
-## VLTI/Baldr Simulator
-BaldrApp comes with a simulator module that specifically reads the DM shared memory, updates the optical propagation of the beams based on the DM shared memory and ZWFS state, and then writes the simulated camera images to shared memory - in the exact same architecture as Baldr on the VLTI system. Therefore any RTC that consumes the camera frames from shared memory and writes to the DM shared memory can be plugged in and tested on this simulator in an agnostic fashion.
-
 
 ## VLTI/Baldr Simulator Architecture
 
