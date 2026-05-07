@@ -27,13 +27,10 @@ BaldrApp comes with a simulator module that specifically reads the DM shared mem
 
 ## VLTI/Baldr Simulator Architecture
 
-The BaldrApp comes with a module designed to replicate the data flow of the Baldr instrument on the VLTI system. It operates via a shared memory loop:
-
-    - Input: The module monitors and reads the DM shared memory for updated mirror commands.
-
-    - Optical Model: It calculates the optical propagation through the ZWFS based on the current state of the phase mask and optics.
-
-    - Output: The resulting simulated camera frames are written directly to the camera shared memory.
+The BaldrApp comes with a module designed to replicate the full 4 beam control data flow of the Baldr instrument on the VLTI system. It operates via a shared memory loop:
+- Input: The module monitors and reads the DM shared memory for updated mirror commands.
+- Optical Model: It calculates the optical propagation through the ZWFS based on the current state of the DM, phase mask and optics.
+- Output: The resulting simulated camera frames are written directly to the camera shared memory.
 
 Because this mirrors the production hardware's software interfaces, any RTC that consumes camera frames and writes DM commands via shared memory can interface with the simulator without modification. This allows for agnostic testing of the control loop against the simulated instrument.
 
@@ -45,17 +42,19 @@ then
 ```
 ./baldrapp/apps/paranal_simulator/heimbal_simulation_servers.sh start 
 ```
-This will create the camera and DM shared memory objects, begin a simulated camera and DM server, and run the 
-Baldr simulator. The Paranal DM gui () and camera shared memory viewer should open automatically and show updating frames. To stop all the server processes and close the simulator nicely, simply run 
+This will create the camera and DM shared memory objects, begin a simulated camera and DM server, and run the Baldr simulator. The Paranal DM gui and camera shared memory viewer should open automatically and show updating frames. To stop all the server processes and close the simulator nicely, simply run 
 ```
-./baldrapp/apps/paranal_simulator/heimbal_simulation_servers.sh start 
+./baldrapp/apps/paranal_simulator/heimbal_simulation_servers.sh stop
 ```
 You can also view the status of the servers processes:
 ```
-./baldrapp/apps/paranal_simulator/heimbal_simulation_servers.sh start 
+./baldrapp/apps/paranal_simulator/heimbal_simulation_servers.sh status 
 ```
-
-
+If you are running this as another user on your linux you might need to give yourself permission to read/write to shared memory which can be done by 
+```
+sudo chown <user>:<user> /dev/shm/*some_shms* 
+```
+obviously using your username and whatever shared memory addresses (SHMs) you need to use
 
 <!-- 
 Older versions of the app also included:
