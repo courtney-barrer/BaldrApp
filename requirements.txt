@@ -72,6 +72,7 @@ requests==2.32.3
 rich==13.8.1
 rpds-py==0.20.0
 scikit-learn==1.5.2
+scikit-image==0.26.0
 scipy==1.14.1
 six==1.16.0
 smmap==5.0.1
