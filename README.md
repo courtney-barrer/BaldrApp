@@ -32,7 +32,7 @@ The BaldrApp comes with a module designed to replicate the full 4 beam control d
 - Optical Model: It calculates the optical propagation through the ZWFS based on the current state of the DM, phase mask and optics.
 - Output: The resulting simulated camera frames are written directly to the camera shared memory.
 
-Because this mirrors the production hardware's software interfaces, any RTC that consumes camera frames and writes DM commands via shared memory can interface with the simulator without modification. This allows for agnostic testing of the control loop against the simulated instrument.
+Because this replicates Baldrs software interfaces, any RTC that consumes camera frames and writes DM commands via shared memory can interface with the simulator without modification. This allows for agnostic testing of the control loop against the simulated instrument.
 
 To run VLTI Asgard/Baldr simulator (with shared memory - tested on Ubuntu 20.04). Install requirements in virtual enviornment. Once activated e.g.
 ```
