@@ -165,7 +165,7 @@ def get_phasemask_phaseshift( wvl, depth, dot_material = 'N_1405' ):
     it is assumed phasemask is in air (n=1).
     N_1405 is photoresist used for making phasedots in Sydney
     """
-    print( 'reminder wvl input should be um!')
+    #print( 'reminder wvl input should be um!')
     if dot_material == 'N_1405':
         # wavelengths in csv file are in nanometers
         df = pd.read_csv('baldrapp/data/Exposed_Ma-N_1405_optical_constants.txt', sep='\s+', header=1)
