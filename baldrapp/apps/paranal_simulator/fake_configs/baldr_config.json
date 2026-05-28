@@ -51,8 +51,7 @@
   },
 
   "fresnel_relay": {
-    "enabled": true,
-
+    "enabled": true, 
     "D_entrance": 0.012,
     "f_oap": 0.254,
     "f_coll": 0.040,
