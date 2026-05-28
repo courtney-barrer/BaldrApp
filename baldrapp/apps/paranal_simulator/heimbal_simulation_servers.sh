@@ -24,10 +24,21 @@ mkdir -p "$RUNDIR" "$LOGDIR"
 declare -A PROCS=(
   [shm_creator_sim]="tail -f /dev/null | ./shm_creator_sim"
   [sim_mdm_server]="tail -f /dev/null | ./sim_mdm_server"
-  [fake_zmq_server]="python3 fake_asgard_ZMQ_CRED1_server.py"
-  [baldr_sim]="bash -c 'export PYTHONPATH=\"${GIT_ROOT}\":\${PYTHONPATH:-} && source \"${VENV_PATH}\" && python baldr_sim.py'"
+  #[fake_zmq_server]="python3 fake_asgard_ZMQ_CRED1_server.py"
+  [fake_zmq_server]="bash -c 'export PYTHONPATH=\"${GIT_ROOT}\":\${PYTHONPATH:-} && source \"${VENV_PATH}\" && python fake_asgard_ZMQ_CRED1_server.py'"
+  [baldr_sim]="bash -c 'export PYTHONPATH=\"${GIT_ROOT}\":\${PYTHONPATH:-} && source \"${VENV_PATH}\" && python baldr_sim_updated.py'"
+  #[baldr_sim]="bash -c 'export PYTHONPATH=\"${GIT_ROOT}\":\${PYTHONPATH:-} && source \"${VENV_PATH}\" && python -m baldrapp.apps.paranal_simulator.baldr_sim'"
   [lab_mdm_gui]="bash -c 'source \"${VENV_PATH}\" && lab-MDM-control'"
   [shmview_gui]="bash -c 'source \"${VENV_PATH}\" && shmview /dev/shm/cred1.im.shm'"
+)
+
+START_ORDER=(
+  shm_creator_sim
+  sim_mdm_server
+  fake_zmq_server
+  baldr_sim
+  lab_mdm_gui
+  shmview_gui
 )
 
 # #!/usr/bin/env bash
@@ -102,15 +113,37 @@ start_all() {
     echo "[WARN] PID file exists. Run '$0 status' or '$0 stop' first: $PIDFILE"
     exit 1
   fi
+
   : > "$PIDFILE"
-  # Iterate in stable order
-  for name in "${!PROCS[@]}"; do :; done
-  for name in $(printf "%s\n" "${!PROCS[@]}" | sort); do
+
+  for name in "${START_ORDER[@]}"; do
     cmd="${PROCS[$name]}"
-    start_one "$cmd" "$name" || true
+    start_one "$cmd" "$name"
+
+    case "$name" in
+      shm_creator_sim|sim_mdm_server|fake_zmq_server)
+        sleep 1
+        ;;
+    esac
   done
+
   echo "[INFO] Wrote PIDs to $PIDFILE"
 }
+
+# start_all() {
+#   if [[ -f "$PIDFILE" ]]; then
+#     echo "[WARN] PID file exists. Run '$0 status' or '$0 stop' first: $PIDFILE"
+#     exit 1
+#   fi
+#   : > "$PIDFILE"
+#   # Iterate in stable order
+#   for name in "${!PROCS[@]}"; do :; done
+#   for name in $(printf "%s\n" "${!PROCS[@]}" | sort); do
+#     cmd="${PROCS[$name]}"
+#     start_one "$cmd" "$name" || true
+#   done
+#   echo "[INFO] Wrote PIDs to $PIDFILE"
+# }
 
 stop_all() {
   if [[ ! -f "$PIDFILE" ]]; then

@@ -20,10 +20,10 @@ from baldrapp.common import utilities as util
 from baldrapp.common import phasescreens as ps
 import pyzelda.ztools as ztools
 
-try:
-    import aotools
-except ImportError:
-    aotools = None
+# try:
+#     import aotools
+# except ImportError:
+#     aotools = None
 
 
 # ============================================================
@@ -197,7 +197,6 @@ def upsample_to_size(arr, target_size):
 
     return out
 
-
 def update_scintillation_amplitude(
     scint_screen,
     zwfs,
@@ -212,18 +211,16 @@ def update_scintillation_amplitude(
 
     The returned map is amplitude, not intensity, so the source amplitude is
     multiplied by this result before calling bldr.get_frame_configured(...).
-    """
-    if aotools is None:
-        raise ImportError(
-            "aotools is required for scintillation.enabled=true in the simulator."
-        )
 
+    Uses baldrapp.common.phasescreens.angularSpectrum, avoiding the external
+    aotools dependency.
+    """
     for _ in range(int(rows_per_frame)):
         scint_screen.add_row()
 
     wavefront = np.exp(1j * scint_screen.scrn)
 
-    propagated = aotools.opticalpropagation.angularSpectrum(
+    propagated = ps.angularSpectrum(
         inputComplexAmp=wavefront,
         z=float(propagation_distance_m),
         wvl=float(wavelength_m),
@@ -241,6 +238,50 @@ def update_scintillation_amplitude(
             amp = amp / np.sqrt(mean_intensity)
 
     return amp
+
+# def update_scintillation_amplitude(
+#     scint_screen,
+#     zwfs,
+#     pxl_scale,
+#     wavelength_m,
+#     rows_per_frame=1,
+#     propagation_distance_m=10000.0,
+#     renormalize_mean_intensity=True,
+# ):
+#     """
+#     Evolve a high-altitude phase screen and return scintillation amplitude.
+
+#     The returned map is amplitude, not intensity, so the source amplitude is
+#     multiplied by this result before calling bldr.get_frame_configured(...).
+#     """
+#     if aotools is None:
+#         raise ImportError(
+#             "aotools is required for scintillation.enabled=true in the simulator."
+#         )
+
+#     for _ in range(int(rows_per_frame)):
+#         scint_screen.add_row()
+
+#     wavefront = np.exp(1j * scint_screen.scrn)
+
+#     propagated = aotools.opticalpropagation.angularSpectrum(
+#         inputComplexAmp=wavefront,
+#         z=float(propagation_distance_m),
+#         wvl=float(wavelength_m),
+#         inputSpacing=float(pxl_scale),
+#         outputSpacing=float(pxl_scale),
+#     )
+
+#     amp = np.abs(propagated)
+#     amp = upsample_to_size(amp, zwfs.grid.pupil_mask.shape[0])
+
+#     if renormalize_mean_intensity:
+#         pupil = zwfs.grid.pupil_mask.astype(bool)
+#         mean_intensity = np.mean(amp[pupil] ** 2)
+#         if mean_intensity > 0:
+#             amp = amp / np.sqrt(mean_intensity)
+
+#     return amp
 
 
 def init_dynamic_atmosphere_for_beam(zwfs):
@@ -287,10 +328,10 @@ def init_dynamic_atmosphere_for_beam(zwfs):
 
     scint_screen = None
     if scint_enabled:
-        if aotools is None:
-            raise ImportError(
-                "aotools is required for scintillation.enabled=true in the simulator."
-            )
+        # if aotools is None:
+        #     raise ImportError(
+        #         "aotools is required for scintillation.enabled=true in the simulator."
+        #     )
 
         scint_r0_500_m = float(get_cfg_value(scint_cfg, "r0_500_m", 0.126))
         scint_ref_wvl_m = float(
@@ -302,13 +343,21 @@ def init_dynamic_atmosphere_for_beam(zwfs):
             scint_ref_wvl_m,
         )
 
-        scint_screen = aotools.turbulence.infinitephasescreen.PhaseScreenVonKarman(
+        scint_screen = ps.PhaseScreenVonKarman(
             nx_size=int(zwfs.grid.dim),
             pixel_scale=dx,
             r0=scint_r0_wvl_m,
             L0=float(get_cfg_value(scint_cfg, "L0_m", 25.0)),
             random_seed=get_cfg_value(scint_cfg, "random_seed", None),
         )
+
+        # scint_screen = aotools.turbulence.infinitephasescreen.PhaseScreenVonKarman(
+        #     nx_size=int(zwfs.grid.dim),
+        #     pixel_scale=dx,
+        #     r0=scint_r0_wvl_m,
+        #     L0=float(get_cfg_value(scint_cfg, "L0_m", 25.0)),
+        #     random_seed=get_cfg_value(scint_cfg, "random_seed", None),
+        # )
 
     return {
         "dx": dx,
@@ -335,6 +384,34 @@ def init_dynamic_atmosphere_for_beam(zwfs):
         ),
     }
 
+
+def center_crop_or_pad_to_shape(arr, target_shape, fill_value=0.0):
+    """
+    Center-crop or center-pad a 2D array to target_shape = (ny, nx).
+    """
+    arr = np.asarray(arr)
+
+    if arr.ndim != 2:
+        raise ValueError("center_crop_or_pad_to_shape expects a 2D array.")
+
+    ty, tx = map(int, target_shape)
+    sy, sx = arr.shape
+
+    out = np.full((ty, tx), fill_value, dtype=arr.dtype)
+
+    src_y0 = max(0, (sy - ty) // 2)
+    src_x0 = max(0, (sx - tx) // 2)
+    src_y1 = min(sy, src_y0 + ty)
+    src_x1 = min(sx, src_x0 + tx)
+
+    dst_y0 = max(0, (ty - sy) // 2)
+    dst_x0 = max(0, (tx - sx) // 2)
+    dst_y1 = dst_y0 + (src_y1 - src_y0)
+    dst_x1 = dst_x0 + (src_x1 - src_x0)
+
+    out[dst_y0:dst_y1, dst_x0:dst_x1] = arr[src_y0:src_y1, src_x0:src_x1]
+
+    return out
 
 def generate_atmosphere_and_source_for_beam(zwfs, amp_input_0, dynamic_state):
     """
@@ -601,13 +678,21 @@ zero_opd = {
 
 sleep_time_s = float(get_cfg_value(runtime_cfg, "sleep_time_s", 0.01))
 
+
+# if using fresnel diffraction the grid size and detector binning constrains propagation accuracy for 
+# given pupil pixel diameter, so to crop to arbitary size defined by the shared memory we
+# add a post detector cropping per beam given here (optionally) in the config file         
+crop_to_pixels = getattr(zwfs_ns[beam].detector_config, "crop_to_pixels", None)
+
+
+beams2update = [1] #[1, 2, 3, 4]
 while True:
 
     # ------------------------------------------------------------
     # Read MDS phase-mask state and update each beam's optical config.
     # Empty fpm_whereami response is interpreted as mask out.
     # ------------------------------------------------------------
-    for beam in [1, 2, 3, 4]:
+    for beam in beams2update:
         mds_socket.send_string(f"fpm_whereami {beam}")
         mask = mds_socket.recv_string()
 
@@ -627,7 +712,7 @@ while True:
     # ------------------------------------------------------------
     # Per-beam propagation and subframe SHM update.
     # ------------------------------------------------------------
-    for ct, beam in enumerate([1, 2, 3, 4]):
+    for ct, beam in enumerate(beams2update): #[1, 2, 3, 4]):
 
         dmcmd = read_dm_command(dm_shms[beam])
 
@@ -652,6 +737,23 @@ while True:
             use_pyZelda=use_pyZelda,
         )
 
+
+        if crop_to_pixels is not None:
+            intensity = center_crop_or_pad_to_shape(
+                intensity,
+                tuple(crop_to_pixels),
+            )
+
+        # if beam == 1:
+        #     print(
+        #         "beam 1 intensity:",
+        #         "shape", intensity.shape,
+        #         "min", np.nanmin(intensity),
+        #         "max", np.nanmax(intensity),
+        #         "sum", np.nansum(intensity),
+        #         "dtype", intensity.dtype,
+        #         flush=True,
+        #     )
         # Detector/background model in ADU-like units. The optical image is
         # inserted concentrically into the configured Baldr subframe.
         subim_tmp = (
@@ -664,6 +766,16 @@ while True:
             np.zeros_like(subim_tmp),
         )
         subim_tmp += simImg
+
+        # if beam == 1:
+        #     print(
+        #         "beam 1 subim:",
+        #         "shape", subim_tmp.shape,
+        #         "min", np.nanmin(subim_tmp),
+        #         "max", np.nanmax(subim_tmp),
+        #         "sum", np.nansum(subim_tmp),
+        #         flush=True,
+        #     )
 
         baldr_sub_shms[beam].set_data(subim_tmp.astype(dtype=np.int32))
         baldr_sub_shms[beam].mtdata["cnt0"] = cnt0
@@ -681,7 +793,7 @@ while True:
         + noise_std * np.random.randn(*global_frame_size[:-1])
     )
 
-    for ct, beam in enumerate([1, 2, 3, 4]):
+    for ct, beam in enumerate(beams2update):#[1, 2, 3, 4]):
         x0, y0 = baldr_frame_corners[ct]
         xsz, ysz = baldr_frame_sizes[ct]
 
@@ -700,7 +812,18 @@ while True:
 
     liveindex += 1
 
-
+    # print(
+    # "global:",
+    # "gframe shape", gframe_now.shape,
+    # "global tmp min/max/sum",
+    # np.nanmin(global_im_tmp),
+    # np.nanmax(global_im_tmp),
+    # np.nansum(global_im_tmp),
+    # "cnt0/cnt1",
+    # global_frame_shm.mtdata["cnt0"],
+    # global_frame_shm.mtdata["cnt1"],
+    # flush=True,
+    # )
 
 
 

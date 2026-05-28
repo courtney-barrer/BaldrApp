@@ -76,7 +76,7 @@
 
   "source": {
     "flux_mode": "photons_per_second_per_pixel_per_nm",
-    "photons_per_second_per_pixel_per_nm": 100000.0,
+    "photons_per_second_per_pixel_per_nm": 1000.0,
     "renormalize_to_pupil_mean": true
   },
 
@@ -86,6 +86,9 @@
     "dit": 0.001,
     "ron": 0.0,
     "qe": 1.0,
+
+    "crop_to_pixels": [32, 32],
+    "crop_after_detection": true,
 
     "adu_offset": 1000.0,
     "noise_std_adu": 100.0,
@@ -99,8 +102,8 @@
     "static_opd_mode": "none",
 
     "dm_flat": {
-      "enabled": true,
-      "use_dm_flat_from_model": true
+      "enabled": false,
+      "use_dm_flat_from_model": false
     },
 
     "parabolic_scratches": {

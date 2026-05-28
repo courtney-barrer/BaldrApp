@@ -15,6 +15,107 @@ from scipy.special import gamma, kv
 #import numba
 
 
+"""
+Module containing useful FFT based function and classes
+"""
+import numpy
+
+
+
+
+def ft2(data, delta):
+    """
+    A properly scaled 2-D FFT
+
+    Parameters:
+        data (ndarray): An array on which to perform the FFT
+        delta (float): Spacing between elements
+
+    Returns:
+        ndarray: scaled FFT
+    """
+
+    DATA = numpy.fft.fftshift(
+            numpy.fft.fft2(
+                    numpy.fft.fftshift(data, axes=(-1,-2))
+                    ), axes=(-1,-2)
+            )*delta**2
+
+    return DATA
+
+def ift2(data, delta_f):
+    """
+    Scaled inverse 2-D FFT
+
+    Parameters:
+        data (ndarray): Data in Fourier Space to transform
+        delta_f (ndarray): Frequency spacing of grid
+
+    Returns:
+        ndarray: Scaled data in real space
+    """
+    N = data.shape[-1]
+    DATA = numpy.fft.ifftshift(
+            numpy.fft.ifft2(
+                    numpy.fft.ifftshift(data, axes=(-1,-2)
+                    ), axes=(-1,-2))
+            , axes=(-1,-2)) * (N * delta_f)**2
+
+    return DATA
+
+
+def angularSpectrum(inputComplexAmp, wvl, inputSpacing, outputSpacing, z):
+    """
+    Propogates light complex amplitude using an angular spectrum algorithm
+
+    Parameters:
+        inputComplexAmp (ndarray): Complex array of input complex amplitude
+        wvl (float): Wavelength of light to propagate
+        inputSpacing (float): The spacing between points on the input array in metres
+        outputSpacing (float): The desired spacing between points on the output array in metres
+        z (float): Distance to propagate in metres
+
+    Returns:
+        ndarray: propagated complex amplitude
+    """
+    
+    # If propagation distance is 0, don't bother 
+    if z==0:
+        return inputComplexAmp
+
+    N = inputComplexAmp.shape[0] #Assumes Uin is square.
+    k = 2*numpy.pi/wvl     #optical wavevector
+
+    (x1,y1) = numpy.meshgrid(inputSpacing*numpy.arange(-N/2,N/2),
+                             inputSpacing*numpy.arange(-N/2,N/2))
+    r1sq = (x1**2 + y1**2) + 1e-10
+
+    #Spatial Frequencies (of source plane)
+    df1 = 1. / (N*inputSpacing)
+    fX,fY = numpy.meshgrid(df1*numpy.arange(-N/2,N/2),
+                           df1*numpy.arange(-N/2,N/2))
+    fsq = fX**2 + fY**2
+
+    #Scaling Param
+    mag = float(outputSpacing)/inputSpacing
+
+    #Observation Plane Co-ords
+    x2,y2 = numpy.meshgrid( outputSpacing*numpy.arange(-N/2,N/2),
+                            outputSpacing*numpy.arange(-N/2,N/2) )
+    r2sq = x2**2 + y2**2
+
+    #Quadratic phase factors
+    Q1 = numpy.exp( 1j * k/2. * (1-mag)/z * r1sq)
+
+    Q2 = numpy.exp(-1j * numpy.pi**2 * 2 * z/mag/k*fsq)
+
+    Q3 = numpy.exp(1j * k/2. * (mag-1)/(mag*z) * r2sq)
+
+    #Compute propagated field
+    outputComplexAmp = Q3 * ift2(
+                    Q2 * ft2(Q1 * inputComplexAmp/mag,inputSpacing), df1)
+    return outputComplexAmp
+
 
 def ft_sh_phase_screen(r0, N, delta, L0, l0, FFT=None, seed=None):
 
