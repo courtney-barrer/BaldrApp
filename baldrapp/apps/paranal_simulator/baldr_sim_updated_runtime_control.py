@@ -916,6 +916,8 @@ zero_opd = {
 
 sleep_time_s = float(get_cfg_value(runtime_cfg, "sleep_time_s", 0.01))
 
+beams_shown = [1] #[1, 2, 3, 4]
+
 while True:
 
     poll_control_socket(
@@ -954,7 +956,7 @@ while True:
     # ------------------------------------------------------------
     # Per-beam propagation and subframe SHM update.
     # ------------------------------------------------------------
-    for ct, beam in enumerate([1, 2, 3, 4]):
+    for ct, beam in enumerate(beams_shown ):
 
         dmcmd = read_dm_command(dm_shms[beam])
 
@@ -1014,16 +1016,16 @@ while True:
 
         if beam == 1:
             runtime_status["last_beam1_intensity_sum"] = float(np.nansum(intensity))
-            print(
-                "beam 1 intensity:",
-                "shape", intensity.shape,
-                "min", np.nanmin(intensity),
-                "max", np.nanmax(intensity),
-                "sum", np.nansum(intensity),
-                "mode", sim_control["mode"],
-                "dtype", intensity.dtype,
-                flush=True,
-            )
+            # print(
+            #     "beam 1 intensity:",
+            #     "shape", intensity.shape,
+            #     "min", np.nanmin(intensity),
+            #     "max", np.nanmax(intensity),
+            #     "sum", np.nansum(intensity),
+            #     "mode", sim_control["mode"],
+            #     "dtype", intensity.dtype,
+            #     flush=True,
+            # )
 
         # Detector/background model in ADU-like units. The optical image is
         # inserted concentrically into the configured Baldr subframe.
@@ -1034,16 +1036,16 @@ while True:
 
         subim_tmp += intensity
 
-        if beam == 1:
-            runtime_status["last_beam1_subim_sum"] = float(np.nansum(subim_tmp))
-            print(
-                "beam 1 subim:",
-                "shape", subim_tmp.shape,
-                "min", np.nanmin(subim_tmp),
-                "max", np.nanmax(subim_tmp),
-                "sum", np.nansum(subim_tmp),
-                flush=True,
-            )
+        # if beam == 1:
+        #     runtime_status["last_beam1_subim_sum"] = float(np.nansum(subim_tmp))
+        #     print(
+        #         "beam 1 subim:",
+        #         "shape", subim_tmp.shape,
+        #         "min", np.nanmin(subim_tmp),
+        #         "max", np.nanmax(subim_tmp),
+        #         "sum", np.nansum(subim_tmp),
+        #         flush=True,
+        #     )
 
         baldr_sub_shms[beam].set_data(subim_tmp.astype(dtype=np.int32))
         baldr_sub_shms[beam].mtdata["cnt0"] = cnt0
@@ -1061,7 +1063,7 @@ while True:
         + noise_std * np.random.randn(*global_frame_size[:-1])
     )
 
-    for ct, beam in enumerate([1, 2, 3, 4]):
+    for ct, beam in enumerate(beams_shown ):
         x0, y0 = baldr_frame_corners[ct]
         ysz, xsz = baldr_frame_sizes[ct]
 
