@@ -394,8 +394,8 @@ class BaldrSimControlGui(QtWidgets.QMainWindow):
 
         # Requires fake_asgard_ZMQ_CRED1_server.py to support this.
         # If it returns NOK, add fpm_out handling to the fake MDS server next.
-        self.send_mds(f"fpm_out {beam}")
-
+        #self.send_mds(f"fpm_out {beam}")
+        self.send_mds(f"moverel BMX{beam} 10") # just does a small offset, the MDS registers that this is off the mask so changes state to phasemask "out"
     def fpm_in_all(self):
         mask = self.selected_mask()
         for beam in BEAMS:
@@ -403,7 +403,8 @@ class BaldrSimControlGui(QtWidgets.QMainWindow):
 
     def fpm_out_all(self):
         for beam in BEAMS:
-            self.send_mds(f"fpm_out {beam}")
+            #self.send_mds(f"fpm_out {beam}")
+            self.send_mds(f"moverel BMX{beam} 10") # just does a small offset, the MDS registers that this is off the mask so changes state to phasemask "out"
 
     def fpm_where_selected(self):
         beam = self.selected_beam()
