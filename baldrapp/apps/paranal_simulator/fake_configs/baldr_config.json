@@ -31,7 +31,7 @@
     "spectrum": {
       "enabled": true,
       "mode": "blackbody",
-      "temperature_K": 3500.0,
+      "temperature_K": 1900.0,
       "weighting": "photon",
       "wvl_min": 1.5e-6,
       "wvl_max": 1.8e-6,

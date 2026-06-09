@@ -1151,3 +1151,43 @@ def normalise_phasemask_entry(mask_name, mask_entry, optics):
     )
 
     return pm
+
+
+
+
+### Tests 
+# from types import SimpleNamespace
+# import numpy as np
+# from baldrapp.common import spectrum as spec
+
+# optics = SimpleNamespace(
+#     wvl0=1.65e-6,
+#     F_number=21.2,
+#     theta=1.5707963267948966,
+#     theta_mode="constant",
+#     mask_diam=1.06,
+#     mask_diam_mode="lambda_over_D",
+# )
+
+# entry = {
+#     "theta_model": "physical_depth",
+#     "mask_depth_um": 0.654,
+#     "dot_material": "N_1405",
+#     "diameter_model": "physical",
+#     "mask_diam_um": 44.0,
+# }
+
+# pm = spec.normalise_phasemask_entry(
+#     mask_name="J3",
+#     mask_entry=entry,
+#     optics=optics,
+# )
+
+# optics.active_phasemask = pm
+
+# for w in np.linspace(1.5e-6, 1.8e-6, 7):
+#     print(
+#         f"{w*1e6:.3f} um",
+#         "theta =", spec.theta_at_wavelength(optics, w),
+#         "diam =", spec.phasemask_diameter_at_wavelength(optics, w),
+#     )
