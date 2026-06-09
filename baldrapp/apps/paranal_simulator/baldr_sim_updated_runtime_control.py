@@ -66,7 +66,66 @@ def restore_optics_state(optics, state):
         setattr(optics, key, value)
 
 
+def precompute_active_phasemask_spectrum_cache(zwfs):
+    """
+    Precompute theta(lambda) and mask_diam(lambda) for the current active mask
+    on the current zwfs.spectrum wavelength grid.
 
+    This avoids repeated material interpolation during the frame loop.
+    """
+    if not hasattr(zwfs.optics, "active_phasemask"):
+        return None
+
+    pm = zwfs.optics.active_phasemask
+
+    # Prevent stale cache being used while rebuilding.
+    for key in [
+        "cached_wavelengths_m",
+        "cached_theta_rad",
+        "cached_mask_diam_lambdaD",
+    ]:
+        if hasattr(pm, key):
+            delattr(pm, key)
+
+    wavelengths_m = np.asarray(zwfs.spectrum.wavelengths, dtype=float)
+
+    theta_grid = np.array([
+        spec.theta_at_wavelength(zwfs.optics, w)
+        for w in wavelengths_m
+    ], dtype=float)
+
+    mask_diam_grid = np.array([
+        spec.phasemask_diameter_at_wavelength(
+            zwfs.optics,
+            wavelength_m=w,
+            default_wvl0=zwfs.optics.wvl0,
+        )
+        for w in wavelengths_m
+    ], dtype=float)
+
+    if not np.all(np.isfinite(theta_grid)):
+        raise ValueError(
+            f"active phasemask theta grid contains non-finite values "
+            f"for mask {getattr(pm, 'name', '<unknown>')!r}"
+        )
+
+    if not np.all(np.isfinite(mask_diam_grid)):
+        raise ValueError(
+            f"active phasemask diameter grid contains non-finite values "
+            f"for mask {getattr(pm, 'name', '<unknown>')!r}"
+        )
+
+    if np.any(mask_diam_grid <= 0):
+        raise ValueError(
+            f"active phasemask diameter grid contains non-positive values "
+            f"for mask {getattr(pm, 'name', '<unknown>')!r}"
+        )
+
+    pm.cached_wavelengths_m = wavelengths_m.copy()
+    pm.cached_theta_rad = theta_grid
+    pm.cached_mask_diam_lambdaD = mask_diam_grid
+
+    return pm
 
 # ============================================================
 # Helpers
@@ -96,9 +155,16 @@ def convert_12x12_to_140(arr):
     return np.delete(flat, corner_indices)
 
 
+# def get_cfg_value(ns, name, default=None):
+#     return getattr(ns, name, default) if ns is not None else default
 def get_cfg_value(ns, name, default=None):
-    return getattr(ns, name, default) if ns is not None else default
+    if ns is None:
+        return default
 
+    if isinstance(ns, dict):
+        return ns.get(name, default)
+
+    return getattr(ns, name, default)
 
 def get_photon_flux_density_from_config(zwfs):
     """
@@ -122,6 +188,117 @@ def get_photon_flux_density_from_config(zwfs):
             1.0e5,
         )
     )
+
+
+def apply_source_profile_fixed_grid(zwfs, profile_name, source_profiles):
+    """
+    Apply source flux and blackbody temperature while keeping the existing
+    wavelength grid fixed.
+
+    This updates:
+        zwfs.source.photons_per_second_per_pixel_per_nm
+        zwfs.source.active_profile
+        zwfs.spectrum.weights
+        zwfs.spectrum.weights_normalized
+        zwfs.spectrum.weights_nm
+        zwfs.stellar.spectrum.temperature_K
+
+    It does NOT change:
+        zwfs.spectrum.wavelengths
+
+    Therefore it does NOT invalidate the active_phasemask wavelength cache.
+    """
+    if source_profiles is None:
+        raise ValueError("source_profiles is None")
+
+    if isinstance(source_profiles, dict):
+        profiles = source_profiles
+    else:
+        profiles = vars(source_profiles)
+
+    if profile_name not in profiles:
+        raise ValueError(
+            f"Unknown source profile {profile_name!r}. "
+            f"Available profiles: {sorted(profiles.keys())}"
+        )
+
+    profile = profiles[profile_name]
+
+    flux_model = str(get_cfg_value(profile, "flux_model", "")).strip()
+    if flux_model != "photon_density":
+        raise ValueError(
+            f"Unsupported flux_model={flux_model!r} for source profile "
+            f"{profile_name!r}. Only 'photon_density' is supported."
+        )
+
+    flux_density = float(
+        get_cfg_value(
+            profile,
+            "photons_per_second_per_pixel_per_nm",
+            np.nan,
+        )
+    )
+
+    if not np.isfinite(flux_density) or flux_density < 0:
+        raise ValueError(
+            f"Invalid photons_per_second_per_pixel_per_nm for profile "
+            f"{profile_name!r}: {flux_density!r}"
+        )
+
+    temperature_K = float(get_cfg_value(profile, "temperature_K", np.nan))
+
+    if not np.isfinite(temperature_K) or temperature_K <= 0:
+        raise ValueError(
+            f"Invalid temperature_K for profile {profile_name!r}: "
+            f"{temperature_K!r}"
+        )
+
+    # Update flux source.
+    if not hasattr(zwfs, "source") or zwfs.source is None:
+        from types import SimpleNamespace
+        zwfs.source = SimpleNamespace()
+
+    zwfs.source.photons_per_second_per_pixel_per_nm = flux_density
+    zwfs.source.active_profile = profile_name
+    zwfs.source.flux_model = flux_model
+
+    # Keep existing wavelength grid fixed.
+    wavelengths_m = np.asarray(zwfs.spectrum.wavelengths, dtype=float)
+
+    # Get weighting mode from current stellar.spectrum if present.
+    stellar_spectrum = getattr(getattr(zwfs, "stellar", None), "spectrum", None)
+    weighting = get_cfg_value(stellar_spectrum, "weighting", "photon")
+    normalize = get_cfg_value(stellar_spectrum, "normalize", "sum")
+
+    # Recompute blackbody weights on the fixed wavelength grid.
+    weights = spec.blackbody_weights(
+        wavelengths_m,
+        temperature_K=temperature_K,
+        weighting=weighting,
+    )
+
+    weights_normalized = spec.normalize_weights(
+        weights,
+        normalize=normalize,
+    )
+
+    zwfs.spectrum.weights = weights
+    zwfs.spectrum.weights_normalized = weights_normalized
+
+    # Preserve current effective bandwidth convention.
+    bandwidth_nm = float(getattr(zwfs.stellar, "bandwidth", 1.0))
+    zwfs.spectrum.weights_nm = weights_normalized * bandwidth_nm
+
+    # Keep stellar metadata informative.
+    if stellar_spectrum is not None:
+        if isinstance(stellar_spectrum, dict):
+            stellar_spectrum["temperature_K"] = temperature_K
+        else:
+            stellar_spectrum.temperature_K = temperature_K
+
+    zwfs.stellar.active_source_profile = profile_name
+
+    return zwfs
 
 
 def get_internal_opd_from_config(zwfs):
@@ -244,8 +421,17 @@ def set_phase_mask_state(
     )
 
     zwfs.optics.active_phasemask = pm
+    precompute_active_phasemask_spectrum_cache(zwfs)
     zwfs.optics.current_mask = mask_name
 
+    # if verbose and hasattr(pm, "cached_theta_rad"):
+
+    #     print(
+    #         f"[PHASEMASK CACHE] {mask_name}: "
+    #         f"{len(pm.cached_wavelengths_m)} wavelengths cached",
+    #         flush=True,
+    #     )
+        
     # Legacy compatibility fields at wvl0.
     zwfs.optics.theta = pm.theta_rad_wvl0
     zwfs.optics.theta_mode = "constant"
@@ -584,15 +770,38 @@ def make_initial_sim_control():
     intentionally runtime overrides for a future GUI/control client.
     """
     return {
-        "mode": "onsky",              # "onsky" or "internal"
-        "phase_enabled": True,         # used if atmosphere generation is present
-        "ao_enabled": True,            # used if atmosphere generation is present
-        "scint_enabled": True,         # used if atmosphere generation is present
-        "edge_offset_m": None,         # None => JSON/default Fresnel value
-        "coldstop_x_offset_m": None,   # None => JSON/default Fresnel value
-        "coldstop_y_offset_m": None,   # None => JSON/default Fresnel value
-        "sleep_time_s": None,          # None => JSON/default value
+        "mode": "onsky",
+        "phase_enabled": True,
+        "ao_enabled": True,
+        "scint_enabled": True,
+        "edge_offset_m": None,
+        "coldstop_x_offset_m": None,
+        "coldstop_y_offset_m": None,
+        "pupil_misconjugation_m": None,
+        "sleep_time_s": None,
     }
+    # return {
+    #     "mode": "onsky",              # "onsky" or "internal"
+    #     "phase_enabled": True,         # used if atmosphere generation is present
+    #     "ao_enabled": True,            # used if atmosphere generation is present
+    #     "scint_enabled": True,         # used if atmosphere generation is present
+    #     "edge_offset_m": None,         # None => JSON/default Fresnel value
+    #     "coldstop_x_offset_m": None,   # None => JSON/default Fresnel value
+    #     "coldstop_y_offset_m": None,   # None => JSON/default Fresnel value
+    #     "sleep_time_s": None,          # None => JSON/default value
+    # }
+
+
+def desired_source_profile_from_mode(sim_control):
+    mode = str(sim_control["mode"]).lower()
+
+    if mode == "internal":
+        return "internal"
+
+    if mode == "onsky":
+        return "onsky"
+
+    raise ValueError(f"Unknown simulator mode: {mode!r}")
 
 
 def json_safe(value):
@@ -655,8 +864,18 @@ def apply_fresnel_control_to_all_beams(zwfs_ns, original_fresnel_state, sim_cont
             if sim_control["coldstop_y_offset_m"] is None
             else float(sim_control["coldstop_y_offset_m"])
         )
+        fr.pupil_misconjugation = (
+            original["pupil_misconjugation"]
+            if sim_control["pupil_misconjugation_m"] is None
+            else float(sim_control["pupil_misconjugation_m"])
+        )
 
-
+        if hasattr(fr, "z_focus_to_detector_nominal"):
+            fr.z_focus_to_detector = (
+                float(fr.z_focus_to_detector_nominal)
+                + float(fr.pupil_misconjugation)
+            )
+            
 def runtime_dynamic_state_from_control(dynamic_state, sim_control):
     """
     Return a shallow runtime view of a dynamic-atmosphere state dictionary.
@@ -716,6 +935,7 @@ def handle_control_command(command, sim_control, runtime_status=None):
                 "preset onsky|internal|phase_only|scint_only; "
                 "set edge_offset_mm <x>; set coldstop_x_um <x>; "
                 "set coldstop_y_um <y>; set coldstop_offset_um <x> <y>; "
+                "set pupil_misconjugation_mm <z>; "
                 "set sleep_time_s <s>; reset_offsets",
                 sim_control,
                 runtime_status,
@@ -766,7 +986,19 @@ def handle_control_command(command, sim_control, runtime_status=None):
             sim_control["edge_offset_m"] = None
             sim_control["coldstop_x_offset_m"] = None
             sim_control["coldstop_y_offset_m"] = None
-            return make_control_reply(True, "Fresnel offsets reset to JSON defaults", sim_control, runtime_status)
+            sim_control["pupil_misconjugation_m"] = None
+            return make_control_reply(
+                True,
+                "Fresnel offsets reset to JSON defaults",
+                sim_control,
+                runtime_status,
+            )
+
+        # if cmd == "reset_offsets":
+        #     sim_control["edge_offset_m"] = None
+        #     sim_control["coldstop_x_offset_m"] = None
+        #     sim_control["coldstop_y_offset_m"] = None
+        #     return make_control_reply(True, "Fresnel offsets reset to JSON defaults", sim_control, runtime_status)
 
         if cmd == "set":
             if len(tokens) < 3:
@@ -791,6 +1023,14 @@ def handle_control_command(command, sim_control, runtime_status=None):
                     return make_control_reply(False, "Usage: set coldstop_offset_um <x_um> <y_um>", sim_control, runtime_status)
                 sim_control["coldstop_x_offset_m"] = float(tokens[2]) * 1e-6
                 sim_control["coldstop_y_offset_m"] = float(tokens[3]) * 1e-6
+
+            elif key == "pupil_misconjugation_mm":
+                sim_control["pupil_misconjugation_m"] = float(tokens[2]) * 1e-3
+            elif key == "pupil_misconjugation_um":
+                sim_control["pupil_misconjugation_m"] = float(tokens[2]) * 1e-6
+            elif key == "pupil_misconjugation_m":
+                sim_control["pupil_misconjugation_m"] = float(tokens[2])
+
             elif key == "sleep_time_s":
                 sim_control["sleep_time_s"] = float(tokens[2])
             else:
@@ -806,6 +1046,7 @@ def handle_control_command(command, sim_control, runtime_status=None):
 
 def poll_control_socket(control_socket, sim_control, runtime_status=None):
     """Drain all pending simulator-control commands without blocking."""
+    
     while True:
         try:
             command = control_socket.recv_string(flags=zmq.NOBLOCK)
@@ -872,13 +1113,25 @@ for beam in [1, 2, 3, 4]:
             "edge_offset": float(getattr(zwfs.fresnel_relay, "edge_offset", 0.0)),
             "coldstop_x_offset": float(getattr(zwfs.fresnel_relay, "coldstop_x_offset", 0.0)),
             "coldstop_y_offset": float(getattr(zwfs.fresnel_relay, "coldstop_y_offset", 0.0)),
+            "pupil_misconjugation": float(getattr(zwfs.fresnel_relay, "pupil_misconjugation", 0.0)),
         }
+        # original_fresnel_state[beam] = {
+        #     "edge_offset": float(getattr(zwfs.fresnel_relay, "edge_offset", 0.0)),
+        #     "coldstop_x_offset": float(getattr(zwfs.fresnel_relay, "coldstop_x_offset", 0.0)),
+        #     "coldstop_y_offset": float(getattr(zwfs.fresnel_relay, "coldstop_y_offset", 0.0)),
+        # }
     else:
         original_fresnel_state[beam] = {
             "edge_offset": 0.0,
             "coldstop_x_offset": 0.0,
             "coldstop_y_offset": 0.0,
+            "pupil_misconjugation": 0.0,
         }
+        # original_fresnel_state[beam] = {
+        #     "edge_offset": 0.0,
+        #     "coldstop_x_offset": 0.0,
+        #     "coldstop_y_offset": 0.0,
+        # }
 
     zwfs_ns[beam] = zwfs
 
@@ -908,6 +1161,22 @@ print("scintillation enabled:", dynamic_atmosphere_state[default_tel]["scint_ena
 # Prefer split JSON from simulator_runtime config if present.
 runtime_cfg = getattr(zwfs_ns[default_tel], "simulator_runtime", None)
 shared_memory_cfg = getattr(runtime_cfg, "shared_memory", None)
+
+source_profiles = getattr(zwfs_ns[default_tel], "source_profiles", None)
+
+if source_profiles is None:
+    print(
+        "[SOURCE] No source_profiles block found; using existing source/stellar config.",
+        flush=True,
+    )
+else:
+    if not isinstance(source_profiles, dict):
+        source_profiles = vars(source_profiles)
+
+    print(
+        f"[SOURCE] Available source profiles: {sorted(source_profiles.keys())}",
+        flush=True,
+    )
 
 split_filename = get_cfg_value(
     shared_memory_cfg,
@@ -988,12 +1257,23 @@ ctx = zmq.Context()
 # on-sky/internal mode and adjust Fresnel alignment parameters without editing
 # the JSON config or restarting the simulator.
 sim_control = make_initial_sim_control()
+# runtime_status = {
+#     "frame": None,
+#     "cnt0": None,
+#     "cnt1": None,
+#     "last_beam1_intensity_sum": None,
+#     "last_beam1_subim_sum": None,
+# }
+
 runtime_status = {
     "frame": None,
     "cnt0": None,
     "cnt1": None,
     "last_beam1_intensity_sum": None,
     "last_beam1_subim_sum": None,
+    "source_profile": None,
+    "source_flux_density": None,
+    "source_temperature_K": None,
 }
 
 control_zmq = get_cfg_value(
@@ -1110,6 +1390,53 @@ sleep_time_s = float(get_cfg_value(runtime_cfg, "sleep_time_s", 0.01))
 
 beams_shown = [1] #[1, 2, 3, 4]
 
+last_mask_name = {beam: None for beam in [1, 2, 3, 4]}
+
+
+# ============================================================
+# Initial source profile
+# ============================================================
+
+last_source_profile = {beam: None for beam in [1, 2, 3, 4]}
+
+if source_profiles is not None:
+    desired_profile = desired_source_profile_from_mode(sim_control)
+
+    for beam in [1, 2, 3, 4]:
+        zwfs_ns[beam] = apply_source_profile_fixed_grid(
+            zwfs_ns[beam],
+            desired_profile,
+            source_profiles,
+        )
+
+        amp_input[beam] = (
+            np.sqrt(get_photon_flux_density_from_config(zwfs_ns[beam]))
+            * zwfs_ns[beam].grid.pupil_mask
+        )
+
+        last_source_profile[beam] = desired_profile
+
+    profile = source_profiles[desired_profile]
+
+    runtime_status["source_profile"] = desired_profile
+    runtime_status["source_flux_density"] = get_photon_flux_density_from_config(
+        zwfs_ns[default_tel]
+    )
+    runtime_status["source_temperature_K"] = get_cfg_value(
+        profile,
+        "temperature_K",
+        None,
+    )
+
+    print(
+        f"[SOURCE] Initial source profile {desired_profile!r}: "
+        f"flux_density={runtime_status['source_flux_density']:.6g} "
+        f"phot/s/pix/nm, "
+        f"T={runtime_status['source_temperature_K']} K",
+        flush=True,
+    )
+
+
 while True:
 
     poll_control_socket(
@@ -1125,30 +1452,113 @@ while True:
     )
 
     # ------------------------------------------------------------
+    # Check source change
+    # ------------------------------------------------------------
+    if source_profiles is not None:
+        desired_profile = desired_source_profile_from_mode(sim_control)
+
+        for beam in [1, 2, 3, 4]:
+            if desired_profile != last_source_profile[beam]:
+                old_wavelengths = np.asarray(
+                    zwfs_ns[beam].spectrum.wavelengths,
+                    dtype=float,
+                ).copy()
+
+                zwfs_ns[beam] = apply_source_profile_fixed_grid(
+                    zwfs_ns[beam],
+                    desired_profile,
+                    source_profiles,
+                )
+
+                new_wavelengths = np.asarray(
+                    zwfs_ns[beam].spectrum.wavelengths,
+                    dtype=float,
+                )
+
+                # This should not happen under the fixed-grid convention.
+                # If it ever does, force the phasemask state/cache to rebuild.
+                if not np.array_equal(old_wavelengths, new_wavelengths):
+                    last_mask_name[beam] = None
+                    print(
+                        f"[SOURCE] wavelength grid changed for beam {beam}; "
+                        "forcing phasemask cache rebuild",
+                        flush=True,
+                    )
+
+                amp_input[beam] = (
+                    np.sqrt(get_photon_flux_density_from_config(zwfs_ns[beam]))
+                    * zwfs_ns[beam].grid.pupil_mask
+                )
+
+                last_source_profile[beam] = desired_profile
+
+                if beam == default_tel:
+                    profile = source_profiles[desired_profile]
+
+                    runtime_status["source_profile"] = desired_profile
+                    runtime_status["source_flux_density"] = (
+                        get_photon_flux_density_from_config(zwfs_ns[beam])
+                    )
+                    runtime_status["source_temperature_K"] = get_cfg_value(
+                        profile,
+                        "temperature_K",
+                        None,
+                    )
+
+                    print(
+                        f"[SOURCE] switched to {desired_profile!r}: "
+                        f"flux_density="
+                        f"{runtime_status['source_flux_density']:.6g} "
+                        f"phot/s/pix/nm, "
+                        f"T={runtime_status['source_temperature_K']} K",
+                        flush=True,
+                    )
+
+
+
+
+
+    # ------------------------------------------------------------
     # Read MDS phase-mask state and update each beam's optical config.
     # Empty fpm_whereami response is interpreted as mask out.
     # ------------------------------------------------------------
+
     for beam in [1, 2, 3, 4]:
         mds_socket.send_string(f"fpm_whereami {beam}")
         mask_name = mds_socket.recv_string().strip()
 
-        set_phase_mask_state(
-            zwfs=zwfs_ns[beam],
-            mask_name=mask_name,
-            original_optics_state=original_optics_state[beam],
-            phasemask_properties=phasemask_properties,
-            verbose=(beam == 1 and liveindex % 100 == 0),
-        )
+        if mask_name != last_mask_name[beam]:
+            set_phase_mask_state(
+                zwfs=zwfs_ns[beam],
+                mask_name=mask_name,
+                original_optics_state=original_optics_state[beam],
+                phasemask_properties=phasemask_properties,
+                verbose=True,
+            )
+
+            last_mask_name[beam] = mask_name
+            
     # for beam in [1, 2, 3, 4]:
     #     mds_socket.send_string(f"fpm_whereami {beam}")
-    #     mask = mds_socket.recv_string()
+    #     mask_name = mds_socket.recv_string().strip()
 
-    #     mask_inserted = (mask != "")
     #     set_phase_mask_state(
-    #         zwfs_ns[beam],
-    #         mask_inserted=mask_inserted,
+    #         zwfs=zwfs_ns[beam],
+    #         mask_name=mask_name,
     #         original_optics_state=original_optics_state[beam],
+    #         phasemask_properties=phasemask_properties,
+    #         verbose=(beam == 1 and liveindex % 100 == 0),
     #     )
+    # # for beam in [1, 2, 3, 4]:
+    # #     mds_socket.send_string(f"fpm_whereami {beam}")
+    # #     mask = mds_socket.recv_string()
+
+    # #     mask_inserted = (mask != "")
+    # #     set_phase_mask_state(
+    # #         zwfs_ns[beam],
+    # #         mask_inserted=mask_inserted,
+    # #         original_optics_state=original_optics_state[beam],
+    # #     )
 
     # ------------------------------------------------------------
     # Camera shared-memory counters.

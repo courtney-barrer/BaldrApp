@@ -5678,6 +5678,15 @@ def init_zwfs_from_json(
     # Attach optional metadata/runtime sections.
     zwfs_ns = cfghelp.attach_optional_config_sections(zwfs_ns, cfg)
 
+
+    # Optional runtime source profiles.
+    # This is metadata for higher-level simulators. It is not interpreted here,
+    # so old configs remain fully backwards compatible.
+    if "source_profiles" in cfg:
+        zwfs_ns.source_profiles = cfghelp.dict_to_namespace_recursive(
+            cfg["source_profiles"]
+        )
+
     # Detector config/object.
     # Detector instantiation stays here, not in config_helper.py, because the
     # detector class is defined in baldr_core.py.

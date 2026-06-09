@@ -39,7 +39,18 @@
       "normalize": "sum"
     }
   },
-
+"source_profiles": {
+  "internal": {
+    "flux_model": "photon_density",
+    "photons_per_second_per_pixel_per_nm": 1000.0,
+    "temperature_K": 3000.0
+  },
+  "onsky": {
+    "flux_model": "photon_density",
+    "photons_per_second_per_pixel_per_nm": 500.0,
+    "temperature_K": 4500.0
+  }
+},
   "dm": {
     "dm_model": "BMC-multi-3.5",
     "actuator_coupling_factor": 0.75,
