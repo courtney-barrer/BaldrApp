@@ -1,4 +1,5 @@
 import numpy as np 
+from pathlib import Path
 import matplotlib.pyplot as plt
 from matplotlib.gridspec import GridSpec
 from mpl_toolkits.axes_grid1 import make_axes_locatable
@@ -156,7 +157,7 @@ def insert_concentric(smaller_array, larger_array):
 
 
 
-def get_phasemask_phaseshift( wvl, depth, dot_material = 'N_1405' ):
+def get_phasemask_phaseshift( wvl, depth, dot_material = 'N_1405', extrapolate=True ):
     """
     wvl is wavelength in micrometers
     depth is the physical depth of the phasemask in micrometers
@@ -165,11 +166,24 @@ def get_phasemask_phaseshift( wvl, depth, dot_material = 'N_1405' ):
     it is assumed phasemask is in air (n=1).
     N_1405 is photoresist used for making phasedots in Sydney
     """
+    
+
+    optical_constants_path = (
+        Path(__file__).resolve().parent.parent
+        / "data"
+        / "Exposed_Ma-N_1405_optical_constants.txt"
+    )
+
+
     #print( 'reminder wvl input should be um!')
     if dot_material == 'N_1405':
         # wavelengths in csv file are in nanometers
-        df = pd.read_csv('baldrapp/data/Exposed_Ma-N_1405_optical_constants.txt', sep='\s+', header=1)
-        f = interp1d(df['Wavelength(nm)'], df['n'], kind='linear',fill_value=np.nan, bounds_error=False)
+        #df = pd.read_csv(optical_constants_path, sep='\s+', header=1)
+        df = pd.read_csv(optical_constants_path, sep=r'\s+', header=1)
+        if extrapolate:
+            f = interp1d(df['Wavelength(nm)'], df['n'], kind='linear',bounds_error=False, fill_value="extrapolate" ) #fill_value=np.nan, bounds_error=False)
+        else:
+            f = interp1d(df['Wavelength(nm)'], df['n'], kind='linear',fill_value=np.nan, bounds_error=False)
         n = f( wvl * 1e3 ) # convert input wavelength um - > nm
         phaseshift = 2 * np.pi/ wvl  * depth * (n -1)
         return( phaseshift )

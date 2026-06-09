@@ -24,7 +24,6 @@
     "coldstop_diam": 8.4,
     "coldstop_offset": [0, 0]
   },
-
   "stellar": {
     "bandwidth": 300.0,
     "bandwidth_unit": "nm",
@@ -185,8 +184,10 @@
     },
 
     "phasemask": {
-      "default_mask": "J3",
+      "default_mask": "H3",
+      "properties_file": "baldrapp/apps/paranal_simulator/fake_configs/phasemask_properties.json",
+      "verbose": true,
       "mask_out_theta": 0.0
+      }
     }
-  }
 }
