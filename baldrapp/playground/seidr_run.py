@@ -14,6 +14,25 @@ This follows the older working BaldrApp calibration path:
   8. ask for confirmation before running a rolling-atmosphere closed-loop AO simulation
 
 The control IM is DM-command based, not direct OPD-modal based.
+
+
+e.g. 
+
+python3 baldrapp/playground/seidr.py \
+  --config /Users/bencb/Downloads/baldr_naomi_fast_mono_config_v2.json \
+  --outdir baldr_json_im_then_ao_test \
+  --output test_baldr_closed_loop_1000_tt_watchdog.h5 \
+  --control-modes 50 \
+  --gain 0.2 \
+  --leak 0.995 \
+  --control-sign 1 \
+  --n-frames 1000 \
+  --target-pre-naomi-rms-nm 600 \
+  --tt-rms-nm 50 \
+  --tt-frequencies-hz 15,50 \
+  --reset-on-fail \
+  --reset-rms-threshold-nm 250
+
 """
 
 from __future__ import annotations
