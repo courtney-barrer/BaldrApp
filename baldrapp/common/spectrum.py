@@ -615,17 +615,25 @@ def phasemask_diameter_at_wavelength(
                 return float(optics.mask_diam)
             return 0.0
 
+        if hasattr(pm, "cached_wavelengths_m") and hasattr(pm, "cached_mask_diam_lambdaD"):
+            idx = np.where(
+                np.isclose(
+                    pm.cached_wavelengths_m,
+                    wavelength_m,
+                    rtol=0.0,
+                    atol=1e-15,
+                )
+            )[0]
+            if len(idx) == 1:
+                return float(pm.cached_mask_diam_lambdaD[idx[0]])
+
+
         if not hasattr(pm, "diameter_model"):
             raise ValueError("active_phasemask must contain diameter_model.")
 
         diameter_model = str(pm.diameter_model)
 
 
-        if hasattr(pm, "cached_wavelengths_m") and hasattr(pm, "cached_mask_diam_lambdaD"):
-            idx = np.where(pm.cached_wavelengths_m == wavelength_m)[0]
-            if len(idx) == 1:
-                return float(pm.cached_mask_diam_lambdaD[idx[0]])
-            
         if diameter_model == "lambda_over_D":
             if not hasattr(pm, "mask_diam_lambdaD") or pm.mask_diam_lambdaD is None:
                 raise ValueError(

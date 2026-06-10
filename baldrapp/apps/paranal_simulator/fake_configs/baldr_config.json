@@ -24,6 +24,11 @@
     "coldstop_diam": 8.4,
     "coldstop_offset": [0, 0]
   },
+  "source": {
+    "flux_mode": "photons_per_second_per_pixel_per_nm",
+    "photons_per_second_per_pixel_per_nm": 1000.0,
+    "renormalize_to_pupil_mean": true
+  },
   "stellar": {
     "bandwidth": 300.0,
     "bandwidth_unit": "nm",
@@ -83,18 +88,13 @@
     "z_mirror_to_lens": null
   },
 
-  "source": {
-    "flux_mode": "photons_per_second_per_pixel_per_nm",
-    "photons_per_second_per_pixel_per_nm": 1000.0,
-    "renormalize_to_pupil_mean": true
-  },
 
   "detector": {
     "enabled": true,
     "binning": 4,
     "dit": 0.001,
-    "ron": 0.0,
-    "qe": 1.0,
+    "ron": 0.1,
+    "qe": 0.7,
 
     "crop_to_pixels": [32, 32],
     "crop_after_detection": true,

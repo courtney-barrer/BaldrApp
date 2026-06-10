@@ -18,8 +18,8 @@ The control IM is DM-command based, not direct OPD-modal based.
 
 e.g. 
 
-python3 baldrapp/playground/seidr.py \
-  --config /Users/bencb/Downloads/baldr_naomi_fast_mono_config_v2.json \
+python3 baldrapp/playground/seidr_run.py \
+  --config baldrapp/playground/baldr_naomi_fast_mono_config_v2.json \
   --outdir baldr_json_im_then_ao_test \
   --output test_baldr_closed_loop_1000_tt_watchdog.h5 \
   --control-modes 50 \
