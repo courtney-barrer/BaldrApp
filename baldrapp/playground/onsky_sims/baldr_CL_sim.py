@@ -15,8 +15,9 @@ This follows the older working BaldrApp calibration path:
 
 The control IM is DM-command based, not direct OPD-modal based.
 
-python baldrapp/playground/seidr_run_updated.py \
-  --config baldrapp/playground/baldr_naomi_fast_mono_config_v2.json \
+from BaldrApp in virtual environment (if you have it setup) run:
+python baldrapp/playground/onsky_sims/baldr_CL_sim.py \
+  --config baldrapp/playground/onsky_sims/baldr_naomi_fast_mono_config_v2.json \
   --outdir baldr_json_im_then_ao_test \
   --output test_baldr_closed_loop_1000_tt_watchdog.h5 \
   --control-modes 50 \
@@ -25,15 +26,15 @@ python baldrapp/playground/seidr_run_updated.py \
   --control-sign 1 \
   --n-frames 1000 \
   --target-pre-naomi-rms-nm 600 \
-  --tt-rms-nm 100 \
-  --tt-frequencies-hz 50 \
-  --tt-axis tilt
+  --tt-rms-nm 150 \
+  --tt-frequencies-hz 15 \
+  --tt-axis tilt \
   --reset-on-fail \
   --reset-rms-threshold-nm 400 \
   --first-stage-lag-frames 2 \
   --baldr-lag-frames 1 \
   --include-shotnoise \
-  --frames-per-output-file 500
+  --frames-per-output-file 10000
 """
 
 from __future__ import annotations
