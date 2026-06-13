@@ -24,16 +24,16 @@ python baldrapp/playground/onsky_sims/make_baldr_residual_movie_batches.py \
 
 Drop frames where Baldr opened/reset:
 
-python baldrapp/playground/onsky_sims/make_baldr_residual_movie_batches.py \
+python baldrapp/playground/onsky_sims/analysis_scripts/make_baldr_residual_movie_batches.py \
   --input-dir ~/Downloads \
   --stem test_baldr_closed_loop_1000_tt_watchdog \
   --part-start 0 \
-  --part-stop 7 \
-  --output baldr_residual_phase_movie_parts0000_0007.mp4 \
+  --part-stop 9 \
+  --output ~/Downloads/baldr_residual_phase_movie_parts0000_0009.mp4 \
   --drop-reset \
   --drop-invalid \
   --frame-stride 30 \
-  --movie-fps 30
+  --movie-fps 40
 """
 
 from __future__ import annotations

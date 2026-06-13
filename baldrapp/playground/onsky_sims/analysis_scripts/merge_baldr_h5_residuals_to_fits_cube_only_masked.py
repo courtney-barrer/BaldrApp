@@ -30,33 +30,35 @@ Examples
 --------
 Keep all frames:
 
-python3 merge_baldr_h5_residuals_to_fits_cube_only.py \
-  --input-dir baldr_json_im_then_ao_test \
+python baldrapp/playground/onsky_sims/merge_baldr_h5_residuals_to_fits_cube_only_masked.py \
+  --input-dir ~/Downloads/ \
   --stem test_baldr_closed_loop_1000_tt_watchdog \
   --part-start 0 \
-  --part-stop 6 \
-  --output post_baldr_residual_cube_parts0000_0006.fits \
+  --part-stop 7 \
+  --output post_baldr_residual_cube_parts0000_0007.fits \
   --overwrite
 
 Drop frames where the watchdog reset/opened Baldr:
 
-python3 merge_baldr_h5_residuals_to_fits_cube_only.py \
-  --input-dir baldr_json_im_then_ao_test \
+python baldrapp/playground/onsky_sims/merge_baldr_h5_residuals_to_fits_cube_only.py \
+  --input-dir ~/Downloads/ \
   --stem test_baldr_closed_loop_1000_tt_watchdog \
   --part-start 0 \
-  --part-stop 6 \
-  --output post_baldr_residual_cube_parts0000_0006_noresets.fits \
+  --part-stop 7 \
+  --output post_baldr_residual_cube_parts0000_0007_noresets.fits \
   --drop-reset \
   --overwrite
 
 Drop frames marked invalid/replaced by the patched writer:
 
-python3 merge_baldr_h5_residuals_to_fits_cube_only.py \
-  --input-dir baldr_json_im_then_ao_test \
+
+
+python baldrapp/playground/onsky_sims/analysis_scripts/merge_baldr_h5_residuals_to_fits_cube_only_masked.py \
+  --input-dir ~/Downloads/ \
   --stem test_baldr_closed_loop_1000_tt_watchdog \
   --part-start 0 \
-  --part-stop 6 \
-  --output post_baldr_residual_cube_parts0000_0006_validonly.fits \
+  --part-stop 9 \
+  --output ~/Downloads/post_baldr_residual_cube_parts0000_0009_noresets.fits \
   --drop-invalid \
   --overwrite
 """

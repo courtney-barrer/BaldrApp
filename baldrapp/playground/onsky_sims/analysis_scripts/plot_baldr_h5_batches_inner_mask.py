@@ -21,12 +21,12 @@ will use it automatically when --before-source auto is selected.
 
 Example
 -------
-python plot_baldr_h5_batches_inner_mask.py \
+python baldrapp/playground/onsky_sims/analysis_scripts/plot_baldr_h5_batches_inner_mask.py \
   --input-dir /Users/bencb/Downloads \
   --stem test_baldr_closed_loop_1000_tt_watchdog \
   --part-start 0 \
-  --part-stop 7 \
-  --outdir batch_summary_inner_mask \
+  --part-stop 9 \
+  --outdir /Users/bencb/Downloads/batch_summary_inner_mask \
   --boundary-erosion-pixels 2 \
   --drop-invalid \
   --smooth-frames 10
