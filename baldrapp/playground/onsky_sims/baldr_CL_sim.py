@@ -24,9 +24,9 @@ python baldrapp/playground/onsky_sims/baldr_CL_sim.py \
   --gain 0.2 \
   --leak 0.98 \
   --control-sign 1 \
-  --n-frames 1000 \
+  --n-frames 100000 \
   --target-pre-naomi-rms-nm 600 \
-  --tt-rms-nm 150 \
+  --tt-rms-nm 80 \
   --tt-frequencies-hz 15 \
   --tt-axis tilt \
   --reset-on-fail \
