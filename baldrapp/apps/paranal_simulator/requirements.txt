@@ -83,3 +83,4 @@ wcwidth==0.2.13
 xaosim==1.0.11
 zmq==0.0.0
 shmview==0.0.10
+asgard_lab_DM_tools==0.0.10

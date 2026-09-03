@@ -30,6 +30,8 @@ dependencies = [
     "shmview>=0.0.10",
     "streamlit>=1.58.0",
     "zmq>=0.0.0",
+    "asgard_lab_DM_tools==0.0.10",
+
 ]
 classifiers = [
     "Programming Language :: Python :: 3",

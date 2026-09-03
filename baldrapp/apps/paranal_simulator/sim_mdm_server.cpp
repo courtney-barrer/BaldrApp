@@ -1,244 +1,152 @@
-// sim_mdm_server.cpp
-// Hardware-independent version of the Asgard Multi DM server
-//  g++ -O2 -std=c++17 -o sim_mdm_server sim_mdm_server.cpp -lImageStreamIO -lpthread
+#include "ImageStreamIO.h"
 
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <time.h>
-#include <sys/stat.h>
-#include <fcntl.h>
-#include <sys/mman.h>
-#include <math.h>
-#include <pthread.h>
-#include <unistd.h>
-#include <iostream>
-#include <ImageStreamIO.h>
 #include <algorithm>
-//#include <commander/commander.h>
+#include <array>
+#include <atomic>
+#include <cstdint>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <iostream>
+#include <memory>
+#include <string>
+#include <time.h>
 
-#define LINESIZE 256
-#define CMDSIZE 200
+#include <pthread.h>
 
-int wxsz, wysz;
-int ii;
-IMAGE **shmarray = NULL;
-int nch = 5;
-int dms = 12;
-int nact = 140;
-int nvact = 144;
-int keepgoing = 0;
-int nch_prev = 0;
-char dashline[80] = "-----------------------------------------------------------------------------\n";
+namespace {
 
-int ndm = 4;
-int simmode = 1;
-int timelog = 0;
-char drv_status[8] = "idle";
+constexpr int kDmCount = 4;
+constexpr int kDmSize = 12;
+constexpr int kVirtualActuatorCount = kDmSize * kDmSize;
+constexpr int kChannelCount = 5;
+constexpr int kKeywordCount = 10;
 
-pthread_t tid_loop;
-unsigned int targs[4] = {1, 2, 3, 4};
+using ImageRow = std::unique_ptr<IMAGE[]>;
+using ImageArray = std::array<ImageRow, kDmCount>;
 
-int shm_setup();
-void* dm_control_loop(void *_dmid);
-double* map2D_2_cmd(double *map2D);
+ImageArray images;
+std::array<pthread_t, kDmCount> control_threads{};
+std::array<unsigned int, kDmCount> thread_dm_ids{1, 2, 3, 4};
+std::atomic<bool> keep_running{false};
+bool time_logging = false;
 
-int shm_setup() {
-    int ii, kk;
-    int shared = 1;
-    int NBkw = 10;
-    long naxis = 2;
-    uint8_t atype = _DATATYPE_DOUBLE;
-    uint32_t *imsize;
-    char shmname[20];
+int create_one_image(IMAGE& image, const std::string& name) {
+    constexpr long number_of_axes = 2;
+    constexpr uint8_t datatype = _DATATYPE_DOUBLE;
+    constexpr int shared = 1;
+    std::array<uint32_t, 2> dimensions{kDmSize, kDmSize};
 
-    imsize = (uint32_t *) malloc(sizeof(uint32_t) * naxis);
-    imsize[0] = dms;
-    imsize[1] = dms;
-
-    if (shmarray != NULL) {
-        for (kk = 0; kk < ndm; kk++)
-            for (ii = 0; ii < nch_prev; ii++)
-                ImageStreamIO_destroyIm(&shmarray[kk][ii]);
-        free(shmarray);
-        shmarray = NULL;
+    const errno_t result = ImageStreamIO_createIm_gpu(
+        &image, name.c_str(), number_of_axes, dimensions.data(), datatype,
+        -1, shared, IMAGE_NB_SEMAPHORE, kKeywordCount, MATH_DATA);
+    if (result != 0) {
+        std::cerr << "ERROR: Could not create " << name
+                  << " (ImageStreamIO error " << result << ")\n";
+        return EXIT_FAILURE;
     }
-
-    shmarray = (IMAGE**) malloc(ndm * sizeof(IMAGE*));
-    for (kk = 0; kk < ndm; kk++) {
-        shmarray[kk] = (IMAGE*) malloc((nch + 1) * sizeof(IMAGE));
-    }
-
-    for (kk = 0; kk < ndm; kk++) {
-        for (ii = 0; ii < nch; ii++) {
-            sprintf(shmname, "dm%ddisp%02d", kk + 1, ii);
-            ImageStreamIO_createIm_gpu(&shmarray[kk][ii], shmname, naxis, imsize, atype, -1,
-                                       shared, IMAGE_NB_SEMAPHORE, NBkw, MATH_DATA);
-        }
-        sprintf(shmname, "dm%d", kk + 1);
-        ImageStreamIO_createIm_gpu(&shmarray[kk][nch], shmname, naxis, imsize, atype, -1,
-                                   shared, IMAGE_NB_SEMAPHORE, NBkw, MATH_DATA);
-    }
-    free(imsize);
-    return 0;
+    return EXIT_SUCCESS;
 }
 
-double* map2D_2_cmd(double *map2D) {
-    int ii, jj = 0;
-    double* cmd = (double*) malloc(nact * sizeof(double));
-    for (ii = 0; ii < nvact; ii++) {
-        if ((ii == 0) || (ii == 11) || (ii == 132) || (ii == 143)) continue;
-        cmd[jj++] = map2D[ii];
-    }
-    return cmd;
-}
+int create_shared_memory_images() {
+    for (int dm = 0; dm < kDmCount; ++dm) {
+        images[dm] = std::make_unique<IMAGE[]>(kChannelCount + 1);
 
-void* dm_control_loop(void *_dmid) {
-    uint64_t cntrs[nch];
-    int ii, kk;
-    double tmp_map[nvact];
-    struct timespec now;
-
-    unsigned int dmid = *((unsigned int *) _dmid);
-    FILE* fd = nullptr;
-    char fname[20];
-    sprintf(fname, "speed_log_%1d.log", dmid);
-    if (timelog) fd = fopen(fname, "w");
-
-    for (ii = 0; ii < nch; ii++)
-        cntrs[ii] = shmarray[dmid - 1][nch].md->cnt0;
-
-    while (keepgoing > 0) {
-        ImageStreamIO_semwait(&shmarray[dmid - 1][nch], 1);
-        for (ii = 0; ii < nch; ii++)
-            cntrs[ii] = shmarray[dmid - 1][ii].md->cnt0;
-
-        for (ii = 0; ii < nvact; ii++) {
-            tmp_map[ii] = 0.0;
-            for (kk = 0; kk < nch; kk++)
-                tmp_map[ii] += shmarray[dmid - 1][kk].array.D[ii];
-            tmp_map[ii] = std::clamp(tmp_map[ii], 0.0, 1.0);
+        for (int channel = 0; channel < kChannelCount; ++channel) {
+            const std::string name =
+                "dm" + std::to_string(dm + 1) + "disp" +
+                (channel < 10 ? "0" : "") + std::to_string(channel);
+            if (create_one_image(images[dm][channel], name) != EXIT_SUCCESS) {
+                return EXIT_FAILURE;
+            }
         }
 
-        shmarray[dmid - 1][nch].md->write = 1;
-        for (ii = 0; ii < nvact; ii++)
-            shmarray[dmid - 1][nch].array.D[ii] = tmp_map[ii];
-        shmarray[dmid - 1][nch].md->cnt1 = 0;
-        shmarray[dmid - 1][nch].md->cnt0++;
-        shmarray[dmid - 1][nch].md->write = 0;
-
-        clock_gettime(CLOCK_REALTIME, &now);
-        if (timelog) fprintf(fd, "%f\n", 1.0 * now.tv_sec + 1e-9 * now.tv_nsec);
+        const std::string combined_name = "dm" + std::to_string(dm + 1);
+        if (create_one_image(images[dm][kChannelCount], combined_name) != EXIT_SUCCESS) {
+            return EXIT_FAILURE;
+        }
     }
-    if (timelog && fd) fclose(fd);
+    return EXIT_SUCCESS;
+}
+
+void* dm_control_loop(void* argument) {
+    const unsigned int dm_id = *static_cast<unsigned int*>(argument);
+    IMAGE& combined = images.at(dm_id - 1)[kChannelCount];
+    std::array<double, kVirtualActuatorCount> combined_map{};
+
+    FILE* timing_file = nullptr;
+    if (time_logging) {
+        const std::string filename = "speed_log_" + std::to_string(dm_id) + ".log";
+        timing_file = std::fopen(filename.c_str(), "w");
+    }
+
+    while (keep_running.load()) {
+        ImageStreamIO_semwait(&combined, 1);
+        if (!keep_running.load()) {
+            break;
+        }
+
+        for (int actuator = 0; actuator < kVirtualActuatorCount; ++actuator) {
+            double value = 0.0;
+            for (int channel = 0; channel < kChannelCount; ++channel) {
+                value += images[dm_id - 1][channel].array.D[actuator];
+            }
+            combined_map[actuator] = std::clamp(value, 0.0, 1.0);
+        }
+
+        combined.md->write = 1;
+        std::copy(combined_map.begin(), combined_map.end(), combined.array.D);
+        combined.md->cnt1 = 0;
+        ++combined.md->cnt0;
+        combined.md->write = 0;
+
+        if (timing_file != nullptr) {
+            timespec now{};
+            clock_gettime(CLOCK_REALTIME, &now);
+            std::fprintf(timing_file, "%f\n", now.tv_sec + 1e-9 * now.tv_nsec);
+        }
+    }
+
+    if (timing_file != nullptr) {
+        std::fclose(timing_file);
+    }
     return nullptr;
 }
 
-void start() {
-    if (keepgoing == 0) {
-        keepgoing = 1;
-        std::cout << "DM control loop START\n";
-        for (int kk = 0; kk < ndm; kk++)
-            pthread_create(&tid_loop, NULL, dm_control_loop, &targs[kk]);
-        snprintf(drv_status, sizeof(drv_status), "running");
-    } else {
-        std::cout << "DM control loop already running!\n";
-    }
-}
-
-void stop() {
-    keepgoing = 0;
-    snprintf(drv_status, sizeof(drv_status), "idle");
-}
-
-std::string status() {
-    return drv_status;
-}
-
-int get_nch() {
-    return nch;
-}
-
-void set_nch(int ival) {
-    nch_prev = nch;
-    nch = ival;
-    shm_setup();
-    std::cout << "Success: # channels = " << ival << "\n";
-}
-
-void reset(int dmid, int channel) {
-    double reset_map[nvact] = {0};
-    double *live_channel;
-
-    if (dmid > ndm || dmid <= 0) return;
-
-    if (channel < 0) {
-        for (int kk = 0; kk < nch; kk++) {
-            live_channel = shmarray[dmid - 1][kk].array.D;
-            shmarray[dmid - 1][kk].md->write = 1;
-            memcpy(live_channel, reset_map, sizeof(double) * nvact);
-            shmarray[dmid - 1][kk].md->cnt0++;
-            ImageStreamIO_sempost(&shmarray[dmid - 1][kk], -1);
-            shmarray[dmid - 1][kk].md->write = 0;
+int start_control_threads() {
+    keep_running.store(true);
+    for (int dm = 0; dm < kDmCount; ++dm) {
+        const int result = pthread_create(
+            &control_threads[dm], nullptr, dm_control_loop, &thread_dm_ids[dm]);
+        if (result != 0) {
+            std::cerr << "ERROR: Could not start DM " << dm + 1
+                      << " control thread: " << std::strerror(result) << '\n';
+            keep_running.store(false);
+            return EXIT_FAILURE;
         }
-    } else if (channel < nch) {
-        live_channel = shmarray[dmid - 1][channel].array.D;
-        shmarray[dmid - 1][channel].md->write = 1;
-        memcpy(live_channel, reset_map, sizeof(double) * nvact);
-        shmarray[dmid - 1][channel].md->cnt0++;
-        ImageStreamIO_sempost(&shmarray[dmid - 1][channel], -1);
-        shmarray[dmid - 1][channel].md->write = 0;
     }
+    return EXIT_SUCCESS;
 }
 
-void quit() {
-    if (keepgoing == 1) stop();
-    std::cout << "DM driver server shutting down!\n";
-    if (shmarray != nullptr) {
-        for (int kk = 0; kk < ndm; kk++) {
-            for (int ii = 0; ii < nch + 1; ii++)
-                ImageStreamIO_destroyIm(&shmarray[kk][ii]);
-        }
-        free(shmarray);
-        shmarray = nullptr;
+}  // namespace
+
+int main() {
+    std::cout << "-----------------------------------------------------------------------------\n"
+              << "Simulated DM scenario: no drivers connected\n";
+
+    if (create_shared_memory_images() != EXIT_SUCCESS) {
+        return EXIT_FAILURE;
     }
-    exit(0);
-}
+    if (start_control_threads() != EXIT_SUCCESS) {
+        return EXIT_FAILURE;
+    }
 
-// namespace co = commander;
-// COMMANDER_REGISTER(m) {
-//     using namespace co::literals;
-//     m.def("start", start, "Start DM loop");
-//     m.def("stop", stop, "Stop DM loop");
-//     m.def("status", status, "Return DM server status");
-//     m.def("get_nch", get_nch, "Get number of channels");
-//     m.def("set_nch", set_nch, "Set number of channels");
-//     m.def("reset", reset, "Reset channel(s) of a DM");
-//     m.def("quit", quit, "Quit server");
-// }
-
-int main(int argc, char** argv) {
-    std::cout << dashline;
-    std::cout << "Simulated DM scenario: no drivers connected\n";
-
-    shm_setup();
-    start();
-
-    // Wait for user input to quit
-    std::cout << "Press Enter to stop...\n";
+    // The startup script keeps stdin open with `tail -f /dev/null`.
+    std::cout << "DM control loop running. Press Enter to stop.\n";
     std::cin.get();
 
-    stop();
-    quit();
-    return 0;
+    // Normally the launcher terminates this process with SIGTERM. Retaining
+    // process-lifetime SHM ownership avoids changing that established flow.
+    keep_running.store(false);
+    return EXIT_SUCCESS;
 }
-// int main(int argc, char** argv) {
-//     std::cout << dashline;
-//     std::cout << "Simulated DM scenario: no drivers connected\n";
-//     shm_setup();
-//     start();
-//     co::Server s(argc, argv);
-//     s.run();
-//     quit();
-//     return 0;
-// }

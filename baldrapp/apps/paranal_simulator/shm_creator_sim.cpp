@@ -1,325 +1,154 @@
-// // shm_creator_sim.cpp
-// #include "ImageStreamIO.h"
-// #include <iostream>
-// #include <fstream>
-// #include <string>
-// #include <nlohmann/json.hpp>
-// #include <unistd.h>
-// #include <vector>
-// #include <algorithm>
-
-// using json = nlohmann::json;
-
-// /// Compile with:
-// /// g++ shm_creator_sim.cpp -o shm_creator_sim -I/home/benjamin/Documents/dcs/libImageStreamIO -L/home/rtc/Documents/dcs/libImageStreamIO -lImageStreamIO -I/usr/include/nlohmann -pthread
-
-// int create_and_init_image(const std::string& name, int width, int height, int datatype, int nbsem) {
-//     IMAGE* img = (IMAGE*) malloc(sizeof(IMAGE));
-//     if (!img) {
-//         std::cerr << "ERROR: malloc failed for IMAGE struct\n";
-//         return -1;
-//     }
-
-//     uint32_t dims[2] = { static_cast<uint32_t>(width), static_cast<uint32_t>(height) };
-//     errno_t ret = ImageStreamIO_createIm_gpu(img, name.c_str(), 2, dims, datatype, -1, 1, nbsem, 0, 0);
-
-//     if (ret != 0) {
-//         std::cerr << "ERROR: Failed to create SHM " << name << "\n";
-//         free(img);
-//         return ret;
-//     }
-
-//     // Initialize array to zero based on datatype
-//     size_t npix = static_cast<size_t>(width) * height;
-//     switch (datatype) {
-//         case _DATATYPE_UINT8:  std::fill_n(img->array.UI8,  npix, 0); break;
-//         case _DATATYPE_UINT16: std::fill_n(img->array.UI16, npix, 0); break;
-//         case _DATATYPE_UINT32: std::fill_n(img->array.UI32, npix, 0); break;
-//         case _DATATYPE_INT16:  std::fill_n(img->array.SI16, npix, 0); break;
-//         case _DATATYPE_INT32:  std::fill_n(img->array.SI32, npix, 0); break;
-//         case _DATATYPE_FLOAT:  std::fill_n(img->array.F,    npix, 0.0f); break;
-//         case _DATATYPE_DOUBLE: std::fill_n(img->array.D,    npix, 0.0); break;
-//         default:
-//             std::cerr << "WARNING: Unknown datatype, cannot zero-initialize.\n";
-//     }
-
-//     // Optional: post semaphore 0 if needed
-//     ImageStreamIO_sempost(img, 0);
-
-//     // Cleanup
-//     ImageStreamIO_destroyIm(img);
-//     free(img);
-
-//     return 0;
-// }
-
-// int main() {
-//     const std::string json_path = "/home/rtc/Documents/dcs/asgard-cred1-server/cred1_split.json";
-//     std::ifstream file(json_path);
-//     if (!file.is_open()) {
-//         std::cerr << "ERROR: Failed to open " << json_path << "\n";
-//         return 1;
-//     }
-
-//     json j;
-//     file >> j;
-
-//     const int NBsem = 10;
-//     const int datatype = _DATATYPE_UINT16;
-
-//     // Create baldr1 to baldr4
-//     for (int i = 1; i <= 4; ++i) {
-//         std::string key = "baldr" + std::to_string(i);
-//         if (!j.contains(key)) {
-//             std::cerr << "ERROR: Missing " << key << " in JSON.\n";
-//             continue;
-//         }
-
-//         int xsz = j[key]["xsz"];
-//         int ysz = j[key]["ysz"];
-//         std::string shm_name = key;  // e.g., "baldr1" → creates "baldr1.im.shm"
-
-//         if (create_and_init_image(shm_name, xsz, ysz, datatype, NBsem) == 0) {
-//             std::cout << "Created " << shm_name << ".im.shm OK.\n";
-//         }
-//     }
-
-//     // Create global frame SHM "cred1"
-//     if (create_and_init_image("cred1", 320, 256, datatype, NBsem) == 0) {
-//         std::cout << "Created cred1.im.shm OK.\n";
-//     }
-
-//     return 0;
-// }
-
-// shm_creator_sim.cpp
 #include "ImageStreamIO.h"
-#include <iostream>
-#include <fstream>
-#include <string>
-#include <map>
-#include <nlohmann/json.hpp>
-#include <unistd.h>
 
+#include <algorithm>
+#include <array>
+#include <cstdint>
+#include <cstdlib>
+#include <filesystem>
+#include <fstream>
+#include <iostream>
+#include <stdexcept>
+#include <string>
+
+#include <nlohmann/json.hpp>
+
+namespace fs = std::filesystem;
 using json = nlohmann::json;
 
-/// compile
-// g++ shm_creator_sim.cpp -o shm_creator_sim -I/home/benjamin/Documents/dcs/libImageStreamIO -L/home/benjamin/Documents/dcs/libImageStreamIO -lImageStreamIO -I/usr/include/nlohmann -pthread
+namespace {
 
+constexpr int kNumberOfSemaphores = 10;
+constexpr int kCred1Width = 320;
+constexpr int kCred1Height = 256;
+constexpr int kCred1Reads = 5;
 
-
-int create_image(const std::string& name, int width, int height, int datatype, int nbsem) {
-    
-    IMAGE* img = (IMAGE*) malloc(sizeof(IMAGE));
-    
-    // Check if name includes "cred" (case-sensitive)
-    bool is_cred = name.find("cred") != std::string::npos;
-
-    errno_t ret;
-    if (is_cred) {
-        // 3D image: width x height x nrs
-        const int nrs = 5; //200;  // or get this from a config/env
-        uint32_t dims[3] = {
-            static_cast<uint32_t>(width),
-            static_cast<uint32_t>(height),
-            static_cast<uint32_t>(nrs)
-        };
-
-        std::cout << "Creating 3D image: " << name << " with dims (" << dims[0] << ", " << dims[1] << ", " << dims[2] << ")" << std::endl;
-
-        ret = ImageStreamIO_createIm_gpu(img, name.c_str(), 3, dims, datatype, -1, 1, nbsem, 0, 0);
-    } else {
-        // 2D image
-        uint32_t dims[2] = {
-            static_cast<uint32_t>(width),
-            static_cast<uint32_t>(height)
-        };
-
-        std::cout << "Creating 2D image: " << name << " with dims (" << dims[0] << ", " << dims[1] << ")" << std::endl;
-
-        ret = ImageStreamIO_createIm_gpu(img, name.c_str(), 2, dims, datatype, -1, 1, nbsem, 0, 0);
+fs::path executable_directory(const char* argv0) {
+    std::error_code error;
+    const fs::path proc_executable = fs::read_symlink("/proc/self/exe", error);
+    if (!error) {
+        return proc_executable.parent_path();
     }
 
-    if (ret != 0) {
-        std::cerr << "Error creating image " << name << ", error code: " << ret << std::endl;
-        free(img);
+    const fs::path executable = fs::absolute(argv0, error);
+    if (error) {
+        throw std::runtime_error("could not determine the executable directory");
+    }
+    return executable.parent_path();
+}
+
+fs::path default_config_path(const char* argv0) {
+    return executable_directory(argv0) / "fake_configs" / "cred1_split.json";
+}
+
+json read_config(const fs::path& path) {
+    std::ifstream input(path);
+    if (!input) {
+        throw std::runtime_error("could not open configuration file: " + path.string());
+    }
+
+    json config;
+    try {
+        input >> config;
+    } catch (const json::exception& error) {
+        throw std::runtime_error(
+            "could not parse configuration file " + path.string() + ": " + error.what());
+    }
+    return config;
+}
+
+std::array<int, 2> subframe_size(const json& config, const std::string& key) {
+    try {
+        const int width = config.at(key).at("xsz").get<int>();
+        const int height = config.at(key).at("ysz").get<int>();
+        if (width <= 0 || height <= 0) {
+            throw std::runtime_error("invalid " + key + ": dimensions must be positive");
+        }
+        return {width, height};
+    } catch (const json::exception& error) {
+        throw std::runtime_error("invalid " + key + " configuration: " + error.what());
+    }
+}
+
+template <typename T>
+void zero_image(T* data, std::size_t element_count) {
+    std::fill_n(data, element_count, T{});
+}
+
+int create_image(
+    const std::string& name,
+    int width,
+    int height,
+    int depth,
+    int datatype) {
+    IMAGE image{};
+    std::array<uint32_t, 3> dimensions{
+        static_cast<uint32_t>(width),
+        static_cast<uint32_t>(height),
+        static_cast<uint32_t>(depth),
+    };
+    const uint8_t number_of_axes = depth > 1 ? 3 : 2;
+
+    std::cout << "Creating " << static_cast<int>(number_of_axes) << "D image " << name
+              << " (" << width << " x " << height;
+    if (number_of_axes == 3) {
+        std::cout << " x " << depth;
+    }
+    std::cout << ")\n";
+
+    const errno_t result = ImageStreamIO_createIm_gpu(
+        &image, name.c_str(), number_of_axes, dimensions.data(), datatype,
+        -1, 1, kNumberOfSemaphores, 0, 0);
+    if (result != 0) {
+        std::cerr << "ERROR: Could not create " << name
+                  << " (ImageStreamIO error " << result << ")\n";
         return EXIT_FAILURE;
     }
 
-    //IMAGE* img = (IMAGE*) malloc(sizeof(IMAGE));
-    //uint32_t dims[2] = { static_cast<uint32_t>(width), static_cast<uint32_t>(height) };
+    const std::size_t element_count =
+        static_cast<std::size_t>(width) * static_cast<std::size_t>(height) *
+        static_cast<std::size_t>(depth);
+    switch (datatype) {
+        case _DATATYPE_UINT8:  zero_image(image.array.UI8, element_count); break;
+        case _DATATYPE_UINT16: zero_image(image.array.UI16, element_count); break;
+        case _DATATYPE_UINT32: zero_image(image.array.UI32, element_count); break;
+        case _DATATYPE_INT16:  zero_image(image.array.SI16, element_count); break;
+        case _DATATYPE_INT32:  zero_image(image.array.SI32, element_count); break;
+        case _DATATYPE_FLOAT:  zero_image(image.array.F, element_count); break;
+        case _DATATYPE_DOUBLE: zero_image(image.array.D, element_count); break;
+        default:
+            std::cerr << "WARNING: Unknown datatype; " << name
+                      << " was not zero-initialised\n";
+    }
+    return EXIT_SUCCESS;
+}
 
-    //errno_t ret = ImageStreamIO_createIm_gpu(img, name.c_str(), 2, dims, datatype, -1, 1, nbsem, 0, 0);
-    //ImageStreamIO_createIm_gpu(img, name.c_str(), 2, dims, datatype, -1, 1, nbsem, 0, 0);
+}  // namespace
 
-    if (ret == 0) {
-        // Zero initialize the array depending on datatype
-        size_t npix = (size_t) width * height;
-        switch (datatype) {
-            case _DATATYPE_UINT8:
-                std::fill_n(img->array.UI8, npix, 0);
-                break;
-            case _DATATYPE_UINT16:
-                std::fill_n(img->array.UI16, npix, 0);
-                break;
-            case _DATATYPE_UINT32:
-                std::fill_n(img->array.UI32, npix, 0);
-                break;
-            case _DATATYPE_INT16:
-                std::fill_n(img->array.SI16, npix, 0);
-                break;
-            case _DATATYPE_INT32:
-                std::fill_n(img->array.SI32, npix, 0);
-                break;
-            case _DATATYPE_FLOAT:
-                std::fill_n(img->array.F, npix, 0.0f);
-                break;
-            case _DATATYPE_DOUBLE:
-                std::fill_n(img->array.D, npix, 0.0);
-                break;
-            default:
-                std::cerr << "WARNING: Unknown datatype, cannot zero array.\n";
+int main(int argc, char* argv[]) {
+    if (argc > 2) {
+        std::cerr << "Usage: " << argv[0] << " [cred1_split.json]\n";
+        return EXIT_FAILURE;
+    }
+
+    try {
+        const fs::path config_path =
+            argc == 2 ? fs::absolute(argv[1]) : default_config_path(argv[0]);
+        std::cout << "Using configuration: " << config_path << '\n';
+        const json config = read_config(config_path);
+
+        bool creation_failed = false;
+        for (int beam = 1; beam <= 4; ++beam) {
+            const std::string name = "baldr" + std::to_string(beam);
+            const auto [width, height] = subframe_size(config, name);
+            creation_failed |=
+                create_image(name, width, height, 1, _DATATYPE_INT32) != EXIT_SUCCESS;
         }
+        creation_failed |= create_image(
+                               "cred1", kCred1Width, kCred1Height, kCred1Reads,
+                               _DATATYPE_UINT16) != EXIT_SUCCESS;
+        return creation_failed ? EXIT_FAILURE : EXIT_SUCCESS;
+    } catch (const std::exception& error) {
+        std::cerr << "ERROR: " << error.what() << '\n';
+        return EXIT_FAILURE;
     }
-
-    return ret;
 }
-// int create_image(const std::string& name, int width, int height, int datatype, int nbsem) {
-//     IMAGE* img = (IMAGE*) malloc(sizeof(IMAGE));
-//     if (!img) {
-//         std::cerr << "ERROR: malloc failed\n";
-//         return -1;
-//     }
-
-//     uint32_t dims[2] = { static_cast<uint32_t>(width), static_cast<uint32_t>(height) };
-//     int status = ImageStreamIO_createIm_gpu(
-//         img, name.c_str(), 2, dims, datatype,
-//         -1, 1,  // NBkw = -1 (disable), shared = 1 (SHM), 
-//         nbsem, 0, 0);  // NBkw, CBflag, Zflag
-
-//     if (status != 0) {
-//         std::cerr << "ERROR: Failed to create image " << name << "\n";
-//     }
-
-//     free(img);
-//     return status;
-// }
-// // int create_image(const std::string& name, int width, int height, int datatype, int nbsem) {
-// //     IMAGE img;
-// //     uint32_t dims[2] = { static_cast<uint32_t>(width), static_cast<uint32_t>(height) };
-
-// //     return ImageStreamIO_createIm(&img, name.c_str(), 2, dims, datatype, nbsem, 0);
-// // }
-// // // int create_image(const std::string& shm_name, int width, int height, int datatype, int nbsem) {
-// // //     IMAGE image;
-// // //     uint32_t size[2] = { static_cast<uint32_t>(width), static_cast<uint32_t>(height) };
-// // //     return ImageStreamIO_createIm(&image, shm_name.c_str(), 2, size, datatype, 1, 0);
-// // // }
-// // // // int create_image(const std::string& shm_name, int width, int height, int datatype, int nbsem) {
-// // // //     remove(shm_name.c_str());  // clean existing
-// // // //     std::cout << "Creating " << shm_name << " [" << width << " x " << height << "]\n";
-// // // //     return ImageStreamIO_createIm(shm_name.c_str(), width, height, datatype, nbsem);
-// // // // }
-
-#include <unistd.h>
-#include <limits.h>
-#include <string>
-#include <stdexcept>
-
-std::string get_executable_dir() {
-    char buf[PATH_MAX];
-    ssize_t len = ::readlink("/proc/self/exe", buf, sizeof(buf)-1);
-    if (len == -1) throw std::runtime_error("cannot read /proc/self/exe");
-    buf[len] = '\0';
-    std::string exe_path(buf);
-    auto pos = exe_path.find_last_of('/');
-    return exe_path.substr(0, pos);
-}
-
-std::string get_json_path() {
-    std::string exe_dir = get_executable_dir();
-    // binary lives in dcs/simulation → go up one, then into asgard-cred1-server
-    return exe_dir + "/../asgard-cred1-server/cred1_split.json";
-}
-
-int main() {
-    const std::string json_path = get_json_path();//"/home/rtc/Documents/dcs/asgard-cred1-server/cred1_split.json";
-    std::ifstream file(json_path);
-    if (!file.is_open()) {
-        std::cerr << "ERROR: Failed to open " << json_path << "\n";
-        return 1;
-    }
-
-    json j;
-    file >> j;
-
-    int NBsem = 10;
-    // cross check these data types with real CRED 1 server : asgard-cred1-server/asgard_ZMQ_CRED1_server.c
-    int datatype_subframe = _DATATYPE_INT32;//_DATATYPE_UINT16;
-    int datatype_global = _DATATYPE_UINT16; 
-
-    for (int i = 1; i <= 4; ++i) {
-        std::string key = "baldr" + std::to_string(i);
-        if (!j.contains(key)) {
-            std::cerr << "ERROR: Missing " << key << " in JSON.\n";
-            continue;
-        }
-        int xsz = j[key]["xsz"];
-        int ysz = j[key]["ysz"];
-        //std::string shm_name = key + ".im.shm";  // FIXED: no "/dev/shm/"
-        std::string shm_name = "baldr" + std::to_string(i); // dont nee the .im.shm extention - this is created automatically 
-        if (create_image(shm_name, xsz, ysz, datatype_subframe, NBsem) == 0) {
-            std::cout << "Created " << shm_name << " OK.\n";
-        } else {
-            std::cerr << "ERROR: Could not create " << shm_name << "\n";
-        }
-        // if (create_image(shm_name, xsz, ysz, datatype, NBsem) != 0) {
-        //     std::cerr << "ERROR: Could not create " << shm_name << "\n";
-        // }
-    }
-
-    // Also create global SHM
-    if (create_image("cred1", 320, 256, datatype_global, NBsem) == 0) {\
-        std::cout << "Created " << "cred1" << " OK.\n";
-    } else{
-        std::cerr << "ERROR: Could not create cred1.im.shm\n";
-    }
-
-    return 0;
-}
-// int main() {
-//     const std::string json_path = "/home/rtc/Documents/dcs/asgard-cred1-server/cred1_split.json";
-//     std::ifstream file(json_path);
-//     if (!file.is_open()) {
-//         std::cerr << "ERROR: Failed to open " << json_path << "\n";
-//         return 1;
-//     }
-
-//     json j;
-//     file >> j;
-
-//     int NBsem = 10;
-//     int datatype = _DATATYPE_UINT16;
-
-//     // Create SHM for baldr1–4 from JSON
-//     for (int i = 1; i <= 4; ++i) {
-//         std::string key = "baldr" + std::to_string(i);
-//         if (!j.contains(key)) {
-//             std::cerr << "ERROR: Missing " << key << " in JSON.\n";
-//             continue;
-//         }
-//         int xsz = j[key]["xsz"];
-//         int ysz = j[key]["ysz"];
-//         std::string shm_name = "/dev/shm/" + key + ".im.shm";
-//         if (create_image(shm_name, xsz, ysz, datatype, NBsem) != 0) {
-//             std::cerr << "ERROR: Could not create " << shm_name << "\n";
-//         }
-//     }
-
-//     // Also create global frame SHM (fixed size 320 x 256)
-//     if (create_image("/dev/shm/cred1.im.shm", 320, 256, datatype, NBsem) != 0) {
-//         std::cerr << "ERROR: Could not create cred1.im.shm\n";
-//     }
-
-//     return 0;
-// }
