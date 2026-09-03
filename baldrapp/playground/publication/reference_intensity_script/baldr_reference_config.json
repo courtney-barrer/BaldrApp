@@ -1,0 +1,107 @@
+{
+  "meta": {
+    "name": "baldr_theoretical_reference_32x32",
+    "description": "Deterministic configuration for clear-pupil and phase-mask reference intensities.",
+    "version": 1
+  },
+  "reference_source": {
+    "profile": "internal"
+  },
+  "source_profiles": {
+    "internal": {
+      "flux_model": "photon_density",
+      "photons_per_second_per_pixel_per_nm": 1000.0,
+      "temperature_K": 3000.0
+    },
+    "onsky": {
+      "flux_model": "photon_density",
+      "photons_per_second_per_pixel_per_nm": 500.0,
+      "temperature_K": 4500.0
+    }
+  },
+  "grid": {
+    "telescope": "solarstein",
+    "D": 1.8,
+    "N": 64,
+    "dim": 256
+  },
+  "optics": {
+    "wvl0": 1.65e-6,
+    "F_number": 21.2,
+    "mask_diam": 1.06,
+    "mask_diam_mode": "lambda_over_D",
+    "theta": 1.5707963267948966,
+    "theta_mode": "constant",
+    "coldstop_diam": 8.4,
+    "coldstop_offset": [0, 0]
+  },
+  "source": {
+    "flux_mode": "photons_per_second_per_pixel_per_nm",
+    "photons_per_second_per_pixel_per_nm": 1000.0,
+    "renormalize_to_pupil_mean": true
+  },
+  "stellar": {
+    "bandwidth": 300.0,
+    "bandwidth_unit": "nm",
+    "spectrum": {
+      "enabled": true,
+      "mode": "blackbody",
+      "temperature_K": 3000.0,
+      "weighting": "photon",
+      "wvl_min": 1.5e-6,
+      "wvl_max": 1.8e-6,
+      "n_wvl": 7,
+      "normalize": "sum"
+    }
+  },
+  "dm": {
+    "dm_model": "BMC-multi-3.5",
+    "actuator_coupling_factor": 0.75,
+    "dm_pitch": 1.0,
+    "dm_aoi": 0.0,
+    "opd_per_cmd": 3.0e-6,
+    "flat_rmse": 0.0
+  },
+  "fresnel_relay": {
+    "enabled": true,
+    "D_entrance": 0.012,
+    "f_oap": 0.254,
+    "f_coll": 0.040,
+    "z_to_mirror": 0.50,
+    "D_mirror": 0.0254,
+    "edge_offset": -0.001,
+    "edge_angle": 0.0,
+    "f_imaging": 0.184,
+    "D_coldstop": 0.002145,
+    "coldstop_x_offset": 0.0,
+    "coldstop_y_offset": 0.0,
+    "D_detector_pupil": 0.000288,
+    "pupil_misconjugation": 0.0,
+    "use_nominal_pupil_conjugation": true,
+    "z_mirror_to_lens": null
+  },
+  "detector": {
+    "enabled": true,
+    "binning": 4,
+    "dit": 0.001,
+    "ron": 0.0,
+    "qe": 0.7,
+    "crop_to_pixels": [32, 32],
+    "crop_after_detection": false,
+    "adu_offset": 0.0,
+    "noise_std_adu": 0.0,
+    "include_shotnoise": false,
+    "include_readnoise": false
+  },
+  "internal_aberrations": {"enabled": false},
+  "atmosphere": {"enabled": false},
+  "first_stage_ao": {"enabled": false},
+  "simulator_runtime": {
+    "phasemask": {
+      "default_mask": "H3",
+      "properties_file": "baldrapp/apps/paranal_simulator/fake_configs/phasemask_properties.json",
+      "verbose": false,
+      "mask_out_theta": 0.0
+    }
+  }
+}
