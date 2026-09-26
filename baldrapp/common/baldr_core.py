@@ -2790,40 +2790,37 @@ def init_zwfs(grid_ns, optics_ns, dm_ns):
 
 
 def first_stage_ao( atm_scrn, Nmodes_removed , basis  , phase_scaling_factor = 1, return_reconstructor = False ):
-    """_summary_
+    """Remove the first Nmodes_removed modes by a sampled least-squares fit.
 
-    simple first stage AO that perfectly reconstructs Nmodes_removed Zernike modes from the input phase screen
-    returns the reconstructor
-    
-    if return_reco = True the reconstructor is also returned so AO latency can be simulated by applying reconstructor after 
-    rolling the phase screen a few times 
-    e.g.
-    atm_scrn.add_row()
-    ao_1 = pupil * (phase_scaling_factor * atm_scrn.scrn - reco)    
-     
-    
+    Fit and reconstruct using the supplied basis on the same pupil pixels.
+    Sampled Zernikes are not exactly orthogonal, so independent projections
+    can leak atmospheric piston into other modes as the phase screen evolves.
+
+    If return_reconstructor is True, also return the fitted phase so AO
+    latency can be simulated by applying it after advancing the phase screen.
+
     Args:
         atm_scrn (phasescreens.PhaseScreenKolmogorov): atmospheric phase screen object initialized from aotools or common/phasescreens.py
         Nmodes_removed (int): Number of Zernike modes removed in first stage ao 
         basis (list of 2D arrays): Zernike basis function on the input atm_scrn pupil footprint
             IMPORTANT - basis[0] should be the pupil disk without secondary mirror  
-        phase_scaling_factor (int, optional): _description_. Defaults to 1. to scale the phase screen before projecting onto Zernike modes
-        return_reco (bool) : return the reconstructor if you want to add latency in the simulation
+        phase_scaling_factor (float, optional): Scale the phase screen before fitting. Defaults to 1.
+        return_reconstructor (bool): Also return the fitted phase for latency simulation.
     """
-    pupil_disk = basis[0] # we define a disk pupil without secondary - so Zernike modes are orthogonal
+    basis = np.asarray(basis)
+    pupil_disk = basis[0]
+    pupil_pixels = pupil_disk > 0
+    phase = phase_scaling_factor * atm_scrn.scrn
+    modes = basis[:Nmodes_removed]
 
-    # crop the pupil disk and the phasescreen within it (remove padding outside pupil)
-    pupil_disk_cropped, atm_in_pupil = util.crop_pupil(pupil_disk ,  phase_scaling_factor * atm_scrn.scrn)
+    # Solve all requested modes together on their original sampling, including
+    # piston. Do not crop and regenerate a differently sampled Zernike basis.
+    mode_coefficients = np.linalg.lstsq(
+        modes[:, pupil_pixels].T, phase[pupil_pixels], rcond=None
+    )[0]
+    reco = np.sum(mode_coefficients[:, np.newaxis, np.newaxis] * modes, axis=0)
 
-    # project onto Zernike modes 
-    mode_coefficients = np.array( ztools.zernike.opd_expand(atm_in_pupil * pupil_disk_cropped,\
-        nterms=len(basis), aperture =pupil_disk_cropped))
-
-    # do the reconstruction for N modes
-    reco = np.sum( mode_coefficients[:Nmodes_removed,np.newaxis, np.newaxis] * basis[:Nmodes_removed,:,:] ,axis = 0) 
-
-    # remove N modes 
-    ao_1 = pupil_disk * (phase_scaling_factor * atm_scrn.scrn - reco)     
+    ao_1 = pupil_disk * (phase - reco)
     
     if return_reconstructor:
         return ao_1, reco 
