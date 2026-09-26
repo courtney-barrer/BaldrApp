@@ -23,6 +23,7 @@ from baldrapp.common import utilities as util
 from baldrapp.common import phasescreens as ps
 from baldrapp.common import spectrum as spec
 import pyzelda.ztools as ztools
+import pyzelda.utils.aperture as aperture
 
 
 ############### ADDING IN TO TRY FIX PHASEMASK CHANGE ISSUES 
@@ -165,6 +166,70 @@ def get_cfg_value(ns, name, default=None):
         return ns.get(name, default)
 
     return getattr(ns, name, default)
+
+def make_source_pupil_profiles(zwfs):
+    """Build optional source_profiles.<name>.pupil.model masks at startup.
+
+    Supported models match init_zwfs: SOLARSTEIN, AT, UT and DISC. All use
+    the existing grid sampling and diameter. Missing pupil settings retain
+    the original mask, including when returning from an overridden profile.
+    """
+    default_model = str(getattr(zwfs.grid, "telescope", "DISC")).upper()
+    default_mask = zwfs.grid.pupil_mask.copy()
+    zwfs.grid.active_pupil_model = default_model
+    profiles = getattr(zwfs, "source_profiles", None)
+    if profiles is None:
+        return {}
+    if not isinstance(profiles, dict):
+        profiles = vars(profiles)
+
+    pupils = {}
+    for name, profile in profiles.items():
+        pupil_cfg = get_cfg_value(profile, "pupil", None)
+        if pupil_cfg is None:
+            pupils[name] = {"model": default_model, "mask": default_mask}
+            continue
+
+        model = str(get_cfg_value(pupil_cfg, "model", "")).strip().upper()
+        diameter = zwfs.grid.N
+        dim = int(zwfs.grid.dim)
+        if model == "SOLARSTEIN":
+            mask = aperture.disc_obstructed(
+                dim=dim, size=diameter, obs=1100/8000,
+                diameter=True, strict=False,
+            )
+        elif model == "AT":
+            mask = aperture.baldr_AT_pupil(
+                diameter=diameter, dim=dim, spiders_thickness=0.016,
+                strict=False, cpix=False,
+            )
+        elif model == "UT":
+            mask = aperture.baldr_UT_pupil(
+                diameter=diameter, dim=dim, spiders_thickness=0.008,
+            )
+        elif model == "DISC":
+            mask = aperture.disc(
+                dim=dim, size=diameter, diameter=True, strict=False,
+                center=(), cpix=False, invert=False, mask=False,
+            )
+        else:
+            raise ValueError(
+                f"Invalid source_profiles.{name}.pupil.model: {model!r}. "
+                "Expected SOLARSTEIN, AT, UT or DISC."
+            )
+        pupils[name] = {"model": model, "mask": mask}
+    return pupils
+
+
+def apply_source_pupil(zwfs, profile_name, pupil_profiles):
+    """Select a prebuilt pupil; return whether masked OPD needs rebuilding."""
+    pupil = pupil_profiles[profile_name]
+    changed = not np.array_equal(zwfs.grid.pupil_mask, pupil["mask"])
+    if changed:
+        zwfs.grid.pupil_mask = pupil["mask"].copy()
+    zwfs.grid.active_pupil_model = pupil["model"]
+    return changed
+
 
 def get_photon_flux_density_from_config(zwfs):
     """
@@ -1080,9 +1145,11 @@ opd_internal = {}
 original_optics_state = {}
 original_fresnel_state = {}
 dynamic_atmosphere_state = {}
+source_pupil_profiles = {}
 
 for beam in [1, 2, 3, 4]:
     zwfs = bldr.init_zwfs_from_json(config_path)
+    source_pupil_profiles[beam] = make_source_pupil_profiles(zwfs)
 
     # Optional per-simulator override retained from the old script.
     zwfs.dm.actuator_coupling_factor = 0.7
@@ -1274,6 +1341,7 @@ runtime_status = {
     "source_profile": None,
     "source_flux_density": None,
     "source_temperature_K": None,
+    "pupil_model": zwfs_ns[default_tel].grid.active_pupil_model,
 }
 
 control_zmq = get_cfg_value(
@@ -1409,6 +1477,9 @@ if source_profiles is not None:
             source_profiles,
         )
 
+        if apply_source_pupil(zwfs_ns[beam], desired_profile, source_pupil_profiles[beam]):
+            opd_internal[beam] = get_internal_opd_from_config(zwfs_ns[beam])
+
         amp_input[beam] = (
             np.sqrt(get_photon_flux_density_from_config(zwfs_ns[beam]))
             * zwfs_ns[beam].grid.pupil_mask
@@ -1419,6 +1490,7 @@ if source_profiles is not None:
     profile = source_profiles[desired_profile]
 
     runtime_status["source_profile"] = desired_profile
+    runtime_status["pupil_model"] = zwfs_ns[default_tel].grid.active_pupil_model
     runtime_status["source_flux_density"] = get_photon_flux_density_from_config(
         zwfs_ns[default_tel]
     )
@@ -1432,7 +1504,8 @@ if source_profiles is not None:
         f"[SOURCE] Initial source profile {desired_profile!r}: "
         f"flux_density={runtime_status['source_flux_density']:.6g} "
         f"phot/s/pix/nm, "
-        f"T={runtime_status['source_temperature_K']} K",
+        f"T={runtime_status['source_temperature_K']} K, "
+        f"pupil={runtime_status['pupil_model']}",
         flush=True,
     )
 
@@ -1470,6 +1543,9 @@ while True:
                     source_profiles,
                 )
 
+                if apply_source_pupil(zwfs_ns[beam], desired_profile, source_pupil_profiles[beam]):
+                    opd_internal[beam] = get_internal_opd_from_config(zwfs_ns[beam])
+
                 new_wavelengths = np.asarray(
                     zwfs_ns[beam].spectrum.wavelengths,
                     dtype=float,
@@ -1496,6 +1572,7 @@ while True:
                     profile = source_profiles[desired_profile]
 
                     runtime_status["source_profile"] = desired_profile
+                    runtime_status["pupil_model"] = zwfs_ns[beam].grid.active_pupil_model
                     runtime_status["source_flux_density"] = (
                         get_photon_flux_density_from_config(zwfs_ns[beam])
                     )
@@ -1510,7 +1587,8 @@ while True:
                         f"flux_density="
                         f"{runtime_status['source_flux_density']:.6g} "
                         f"phot/s/pix/nm, "
-                        f"T={runtime_status['source_temperature_K']} K",
+                        f"T={runtime_status['source_temperature_K']} K, "
+                        f"pupil={runtime_status['pupil_model']}",
                         flush=True,
                     )
 

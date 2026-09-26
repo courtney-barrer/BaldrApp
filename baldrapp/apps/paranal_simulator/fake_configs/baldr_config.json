@@ -48,12 +48,14 @@
   "internal": {
     "flux_model": "photon_density",
     "photons_per_second_per_pixel_per_nm": 1000.0,
-    "temperature_K": 3000.0
+    "temperature_K": 3000.0,
+    "pupil": {"model": "SOLARSTEIN"}
   },
   "onsky": {
     "flux_model": "photon_density",
     "photons_per_second_per_pixel_per_nm": 500.0,
-    "temperature_K": 4500.0
+    "temperature_K": 4500.0,
+    "pupil": {"model": "AT"}
   }
 },
   "dm": {
