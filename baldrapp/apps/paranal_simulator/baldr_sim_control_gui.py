@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import json
+import math
 import time
 from pathlib import Path
 
@@ -263,6 +264,24 @@ class BaldrSimControlGui(QtWidgets.QMainWindow):
 
         main_layout.addLayout(controls_layout)
 
+        opd_group = QtWidgets.QGroupBox("ZWFS entrance OPD — nm RMS")
+        opd_layout = QtWidgets.QGridLayout(opd_group)
+        opd_group.setToolTip(
+            "Total entrance wavefront including atmosphere, internal aberrations "
+            "and Baldr DM. Uniform weight over the active pupil. Tip = X/columns; "
+            "tilt = Y/rows. HO excludes piston, tip and tilt. Values are unsigned "
+            "OPD RMS, not pointing angles. Updated with status; — means unavailable."
+        )
+        for column, title in enumerate(("Beam", "Tip (X)", "Tilt (Y)", "HO", "Source", "Frame")):
+            opd_layout.addWidget(QtWidgets.QLabel(title), 0, column)
+        self.opd_labels = {}
+        for row, beam in enumerate(BEAMS, start=1):
+            opd_layout.addWidget(QtWidgets.QLabel(str(beam)), row, 0)
+            self.opd_labels[str(beam)] = [QtWidgets.QLabel("—") for _ in range(5)]
+            for column, label in enumerate(self.opd_labels[str(beam)], start=1):
+                opd_layout.addWidget(label, row, column)
+        main_layout.addWidget(opd_group)
+
         # ---------------- status + command output + log ----------------
         split = QtWidgets.QSplitter(QtCore.Qt.Vertical)
 
@@ -381,6 +400,13 @@ class BaldrSimControlGui(QtWidgets.QMainWindow):
     def handle_command_reply(self, command, reply, ok, target, quiet):
         prefix = "OK" if ok else "ERR"
 
+        if target == "control":
+            try:
+                payload = json.loads(reply.split("\n(reply time:")[0]) if ok else {}
+                self.update_opd_readouts(payload.get("runtime_status", {}))
+            except (ValueError, TypeError, AttributeError):
+                self.update_opd_readouts({})
+
         if target == "control" and command == "status" and ok:
             pretty = self.pretty_json(reply)
             self.status_text.setPlainText(pretty)
@@ -388,6 +414,21 @@ class BaldrSimControlGui(QtWidgets.QMainWindow):
 
         if not quiet:
             self.append_command(f"[{prefix}] {reply}")
+
+    def update_opd_readouts(self, runtime_status):
+        """Tolerate older servers and clear missing/invalid measurements."""
+        diagnostics = runtime_status.get("opd_diagnostics", {})
+        for beam, labels in self.opd_labels.items():
+            metrics = diagnostics.get(beam, {})
+            for label, key in zip(labels[:3], (
+                "opd_tip_rms_nm", "opd_tilt_rms_nm", "opd_ho_rms_nm"
+            )):
+                value = metrics.get(key)
+                valid = isinstance(value, (int, float)) and math.isfinite(value)
+                label.setText(f"{value:.2f}" if valid else "—")
+            labels[3].setText(str(metrics.get("source_mode") or "—"))
+            frame = metrics.get("frame")
+            labels[4].setText(str(frame) if frame is not None else "—")
 
     def cleanup_worker(self, worker):
         try:

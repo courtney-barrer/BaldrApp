@@ -17,6 +17,7 @@ import os
 from xaosim.shmlib import shm
 import subprocess
 from pathlib import Path
+from types import SimpleNamespace
 
 from baldrapp.common import baldr_core as bldr
 from baldrapp.common import utilities as util
@@ -229,6 +230,68 @@ def apply_source_pupil(zwfs, profile_name, pupil_profiles):
         zwfs.grid.pupil_mask = pupil["mask"].copy()
     zwfs.grid.active_pupil_model = pupil["model"]
     return changed
+
+
+def measure_opd_components(opd, pupil):
+    """Return tip (columns/X), tilt (rows/Y), and HO OPD RMS in nm.
+
+    Fit piston and both ramps jointly with uniform weight on pupil > 0.
+    Ramp coordinates have zero mean and unit RMS on that pupil, so the
+    absolute fitted coefficients are their OPD RMS, not pointing angles.
+    HO is the residual after removing the fitted plane. Amplitude/scintillation
+    does not weight these metrics. Invalid pupils or OPD return unavailable.
+    """
+    result = dict(opd_tip_rms_nm=None, opd_tilt_rms_nm=None, opd_ho_rms_nm=None)
+    pupil = np.asarray(pupil)
+    opd = np.asarray(opd, dtype=float)
+    if opd.shape != pupil.shape or opd.ndim != 2:
+        raise ValueError("OPD and pupil must be matching 2D arrays")
+    mask = pupil > 0
+    if not np.isfinite(pupil).all() or np.count_nonzero(mask) < 3:
+        return result
+    values = opd[mask]
+    if not np.isfinite(values).all():
+        return result
+    y, x = np.nonzero(mask)
+    x = x - np.mean(x)
+    y = y - np.mean(y)
+    x_rms = np.sqrt(np.mean(x**2))
+    y_rms = np.sqrt(np.mean(y**2))
+    if x_rms == 0 or y_rms == 0:
+        return result
+    design = np.column_stack((np.ones(values.size), x / x_rms, y / y_rms))
+    # Subtract the mean first for numerical stability with large piston.
+    values = values - np.mean(values)
+    coefficients, _, rank, _ = np.linalg.lstsq(design, values, rcond=None)
+    if rank < 3:
+        return result
+    residual = values - design @ coefficients
+    result.update(
+        opd_tip_rms_nm=float(abs(coefficients[1]) * 1e9),
+        opd_tilt_rms_nm=float(abs(coefficients[2]) * 1e9),
+        opd_ho_rms_nm=float(np.sqrt(np.mean(residual**2)) * 1e9),
+    )
+    return result
+
+
+def update_opd_diagnostics(zwfs, opd_input, opd_internal, frame, source_mode):
+    """Measure the entrance wavefront using this frame's current DM command.
+
+    The DM contribution is added once here for diagnostics only. Propagation
+    continues to receive the original OPD inputs and adds the DM itself.
+    """
+    opd_dm = zwfs.compiled_dm.eval(zwfs.dm.current_cmd * zwfs.dm.opd_per_cmd)
+    metrics = measure_opd_components(
+        opd_input + opd_internal + opd_dm, zwfs.grid.pupil_mask
+    )
+    metrics.update(
+        frame=int(frame), source_mode=source_mode,
+        pupil_model=getattr(zwfs.grid, "active_pupil_model", None),
+    )
+    if not hasattr(zwfs, "diagnostics"):
+        zwfs.diagnostics = SimpleNamespace()
+    vars(zwfs.diagnostics).update(metrics)
+    return metrics
 
 
 def get_photon_flux_density_from_config(zwfs):
@@ -1342,6 +1405,7 @@ runtime_status = {
     "source_flux_density": None,
     "source_temperature_K": None,
     "pupil_model": zwfs_ns[default_tel].grid.active_pupil_model,
+    "opd_diagnostics": {},
 }
 
 control_zmq = get_cfg_value(
@@ -1684,6 +1748,11 @@ while True:
             detector=zwfs_ns[beam].detector,
             include_shotnoise=include_shotnoise,
             use_pyZelda=use_pyZelda,
+        )
+
+        runtime_status["opd_diagnostics"][str(beam)] = update_opd_diagnostics(
+            zwfs_ns[beam], opd_input_runtime, opd_internal[beam],
+            liveindex, sim_control["mode"],
         )
 
         det_cfg_beam = getattr(zwfs_ns[beam], "detector_config", None)
