@@ -1,10 +1,4 @@
 {
-  "meta": {
-    "name": "baldr_fresnel_polychromatic_paranal_median",
-    "description": "Generic Baldr configuration with Fresnel relay, blackbody spectrum, Kolmogorov turbulence, optional first-stage AO, and scintillation.",
-    "version": 1
-  },
-
   "grid": {
     "telescope": "solarstein",
     "D": 1.8,
@@ -53,7 +47,7 @@
   },
   "onsky": {
     "flux_model": "photon_density",
-    "photons_per_second_per_pixel_per_nm": 500.0,
+    "photons_per_second_per_pixel_per_nm": 1500.0,
     "temperature_K": 4500.0,
     "pupil": {"model": "AT"}
   }
@@ -75,7 +69,7 @@
 
     "z_to_mirror": 0.50,
     "D_mirror": 0.0254,
-    "edge_offset": -0.001,
+    "edge_offset": -1.001,
     "edge_angle": 0.0,
 
     "f_imaging": 0.184,
@@ -180,6 +174,7 @@
   },
 
   "simulator_runtime": {
+    "publish_opd": false,
     "active_beams": [1, 2, 3, 4],
     "nrs": 5,
     "sleep_time_s": 0.01,

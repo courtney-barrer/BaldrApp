@@ -274,13 +274,14 @@ def measure_opd_components(opd, pupil):
     return result
 
 
-def update_opd_diagnostics(zwfs, opd_input, opd_internal, frame, source_mode):
+def update_opd_diagnostics(zwfs, opd_input, opd_internal, frame, source_mode, opd_dm=None):
     """Measure the entrance wavefront using this frame's current DM command.
 
     The DM contribution is added once here for diagnostics only. Propagation
     continues to receive the original OPD inputs and adds the DM itself.
     """
-    opd_dm = zwfs.compiled_dm.eval(zwfs.dm.current_cmd * zwfs.dm.opd_per_cmd)
+    if opd_dm is None:
+        opd_dm = zwfs.compiled_dm.eval(zwfs.dm.current_cmd * zwfs.dm.opd_per_cmd)
     metrics = measure_opd_components(
         opd_input + opd_internal + opd_dm, zwfs.grid.pupil_mask
     )
@@ -1522,6 +1523,21 @@ sleep_time_s = float(get_cfg_value(runtime_cfg, "sleep_time_s", 0.01))
 
 beams_shown = [1] #[1, 2, 3, 4]
 
+telemetry_publisher = None
+if bool(get_cfg_value(runtime_cfg, "publish_opd", False)):
+    try:
+        import atexit
+        from baldrapp.apps.paranal_simulator.sim_telemetry import TelemetryPublisher
+        telemetry_publisher = TelemetryPublisher(
+            {beam: zwfs_ns[beam].grid.pupil_mask.shape for beam in beams_shown},
+            zwfs_ns[default_tel].config_json,
+        )
+        atexit.register(telemetry_publisher.close)
+        print(f"[TELEMETRY] Publishing OPD; run {telemetry_publisher.run_id}", flush=True)
+    except Exception as exc:
+        print(f"[TELEMETRY] Disabled: {exc}", flush=True)
+runtime_status["telemetry_enabled"] = telemetry_publisher is not None
+
 last_mask_name = {beam: None for beam in [1, 2, 3, 4]}
 
 
@@ -1713,7 +1729,12 @@ while True:
     # ------------------------------------------------------------
     for ct, beam in enumerate(beams_shown ):
 
+        if telemetry_publisher is not None:
+            telemetry_sample_ns = time.time_ns()
+            telemetry_dm_before = int(dm_shms[beam].get_counter())
         dmcmd = read_dm_command(dm_shms[beam])
+        if telemetry_publisher is not None:
+            telemetry_dm_after = int(dm_shms[beam].get_counter())
 
         # Current BaldrApp get_frame_configured/get_frame_fresnel internally
         # adds the OPD from zwfs_ns.dm.current_cmd, so do not also pass the DM
@@ -1750,9 +1771,14 @@ while True:
             use_pyZelda=use_pyZelda,
         )
 
+        telemetry_dm_opd = None
+        if telemetry_publisher is not None:
+            telemetry_dm_opd = zwfs_ns[beam].compiled_dm.eval(
+                zwfs_ns[beam].dm.current_cmd * zwfs_ns[beam].dm.opd_per_cmd
+            )
         runtime_status["opd_diagnostics"][str(beam)] = update_opd_diagnostics(
             zwfs_ns[beam], opd_input_runtime, opd_internal[beam],
-            liveindex, sim_control["mode"],
+            liveindex, sim_control["mode"], opd_dm=telemetry_dm_opd,
         )
 
         det_cfg_beam = getattr(zwfs_ns[beam], "detector_config", None)
@@ -1811,6 +1837,30 @@ while True:
         baldr_sub_shms[beam].mtdata["cnt0"] = cnt0
         baldr_sub_shms[beam].mtdata["cnt1"] = cnt1
         baldr_sub_shms[beam].post_sems(1)
+
+        if telemetry_publisher is not None:
+            try:
+                telemetry_publisher.publish_frame(
+                    beam, opd_input_runtime, opd_internal[beam], telemetry_dm_opd,
+                    zwfs_ns[beam].grid.pupil_mask,
+                    {
+                        "frame": int(liveindex), "sample_ns": telemetry_sample_ns,
+                        "source_mode": sim_control["mode"],
+                        "pupil_model": zwfs_ns[beam].grid.active_pupil_model,
+                        "camera_counter": int(baldr_sub_shms[beam].get_counter()),
+                        "dm_counter_before": telemetry_dm_before,
+                        "dm_counter_after": telemetry_dm_after,
+                        "dm_shape": [12, 12], "camera_shape": list(subim_tmp.shape),
+                        "diagnostics": runtime_status["opd_diagnostics"][str(beam)],
+                        "control": dict(sim_control),
+                        "phase_mask": last_mask_name[beam],
+                    },
+                )
+            except Exception as exc:
+                print(f"[TELEMETRY] Disabled after publication error: {exc}", flush=True)
+                telemetry_publisher.close()
+                telemetry_publisher = None
+                runtime_status["telemetry_enabled"] = False
 
     # ------------------------------------------------------------
     # Global CRED1 frame SHM update for display/debugging.
