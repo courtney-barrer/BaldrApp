@@ -174,7 +174,7 @@
   },
 
   "simulator_runtime": {
-    "publish_opd": false,
+    "publish_opd": true,
     "active_beams": [1, 2, 3, 4],
     "nrs": 5,
     "sleep_time_s": 0.01,

@@ -2672,9 +2672,9 @@ def init_zwfs(grid_ns, optics_ns, dm_ns):
 
     if hasattr(grid_ns, "telescope"):
         if grid_ns.telescope.upper() == 'UT':
-            pupil = aperture.baldr_UT_pupil(  diameter=grid_ns.N, dim=int(grid_ns.dim), spiders_thickness=0.008) #padding_factor = 2 )
+            pupil = aperture.baldr_UT_pupil(  diameter=grid_ns.N, dim=int(grid_ns.dim), spiders_thickness=0.008* grid_ns.N / int(grid_ns.dim)) #padding_factor = 2 )
         elif grid_ns.telescope.upper() == 'AT':
-            pupil = aperture.baldr_AT_pupil( diameter=grid_ns.N, dim=int(grid_ns.dim), spiders_thickness=0.016, strict=False, cpix=False) #, padding_factor = 2 )
+            pupil = aperture.baldr_AT_pupil( diameter=grid_ns.N, dim=int(grid_ns.dim), spiders_thickness=0.016 * grid_ns.N / int(grid_ns.dim), strict=False, cpix=False) #, padding_factor = 2 )
         elif grid_ns.telescope.upper() == 'DISC':
             pupil = aperture.disc(dim=int(grid_ns.dim), size= grid_ns.N, diameter=True, strict=False, center=(), cpix=False, invert=False, mask=False)
         elif grid_ns.telescope.upper() == 'SOLARSTEIN': # ASGARD internal source SOLARSTEIN which has UT like secondary with no spiders 

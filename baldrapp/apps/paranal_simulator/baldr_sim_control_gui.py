@@ -75,6 +75,7 @@ class BaldrSimControlGui(QtWidgets.QMainWindow):
         self.setWindowTitle("Baldr simulator control")
         self.resize(1150, 800)
 
+        self.ncpa_dialog = None
         self.workers = []
         self.last_log_text = ""
 
@@ -281,6 +282,8 @@ class BaldrSimControlGui(QtWidgets.QMainWindow):
             for column, label in enumerate(self.opd_labels[str(beam)], start=1):
                 opd_layout.addWidget(label, row, column)
         main_layout.addWidget(opd_group)
+        self.ncpa_button = QtWidgets.QPushButton("NCPA…")
+        main_layout.addWidget(self.ncpa_button)
 
         # ---------------- status + command output + log ----------------
         split = QtWidgets.QSplitter(QtCore.Qt.Vertical)
@@ -310,6 +313,7 @@ class BaldrSimControlGui(QtWidgets.QMainWindow):
         main_layout.addWidget(split)
 
     def _connect_signals(self):
+        self.ncpa_button.clicked.connect(self.open_ncpa_dialog)
         self.status_button.clicked.connect(lambda: self.send_control("status"))
 
         self.preset_onsky_button.clicked.connect(lambda: self.send_control("preset onsky"))
@@ -397,7 +401,25 @@ class BaldrSimControlGui(QtWidgets.QMainWindow):
         self.workers.append(worker)
         worker.start()
 
+    def open_ncpa_dialog(self):
+        from baldrapp.apps.paranal_simulator.ncpa_dialog import NcpaDialog
+        if self.ncpa_dialog is not None and self.ncpa_dialog.isVisible():
+            self.ncpa_dialog.raise_()
+            return
+        self.ncpa_dialog = NcpaDialog(lambda cmd: self.send_control(cmd, quiet=True), self)
+        self.ncpa_dialog.show()
+        self.ncpa_dialog.load_profile()
+
     def handle_command_reply(self, command, reply, ok, target, quiet):
+        if target == "control" and command.startswith("ncpa "):
+            try:
+                payload = json.loads(reply.split("\n(reply time:")[0]) if ok else {}
+            except (ValueError, TypeError):
+                payload = {}
+            if self.ncpa_dialog is not None:
+                self.ncpa_dialog.handle_reply(command, payload, ok)
+            return
+
         prefix = "OK" if ok else "ERR"
 
         if target == "control":

@@ -17,6 +17,8 @@ import os
 from xaosim.shmlib import shm
 import subprocess
 from pathlib import Path
+from copy import copy
+from baldrapp.apps.paranal_simulator.sim_ncpa import NcpaProfile, handle_ncpa_command
 from types import SimpleNamespace
 
 from baldrapp.common import baldr_core as bldr
@@ -201,12 +203,12 @@ def make_source_pupil_profiles(zwfs):
             )
         elif model == "AT":
             mask = aperture.baldr_AT_pupil(
-                diameter=diameter, dim=dim, spiders_thickness=0.016,
+                diameter=diameter, dim=dim, spiders_thickness=0.016 * diameter / dim,
                 strict=False, cpix=False,
             )
         elif model == "UT":
             mask = aperture.baldr_UT_pupil(
-                diameter=diameter, dim=dim, spiders_thickness=0.008,
+                diameter=diameter, dim=dim, spiders_thickness=0.008 * diameter / dim,
             )
         elif model == "DISC":
             mask = aperture.disc(
@@ -1030,7 +1032,7 @@ def runtime_dynamic_state_from_control(dynamic_state, sim_control):
     return state
 
 
-def handle_control_command(command, sim_control, runtime_status=None):
+def handle_control_command(command, sim_control, runtime_status=None, ncpa_profiles=None):
     """
     Supported commands:
       status
@@ -1057,6 +1059,10 @@ def handle_control_command(command, sim_control, runtime_status=None):
     cmd = tokens[0].lower()
 
     try:
+        if cmd == "ncpa":
+            if ncpa_profiles is None:
+                raise ValueError("NCPA unavailable")
+            return handle_ncpa_command(command, ncpa_profiles)
         if cmd in ["help", "?"]:
             return make_control_reply(
                 True,
@@ -1065,7 +1071,7 @@ def handle_control_command(command, sim_control, runtime_status=None):
                 "set edge_offset_mm <x>; set coldstop_x_um <x>; "
                 "set coldstop_y_um <y>; set coldstop_offset_um <x> <y>; "
                 "set pupil_misconjugation_mm <z>; "
-                "set sleep_time_s <s>; reset_offsets",
+                "set sleep_time_s <s>; reset_offsets; ncpa get|set <JSON>",
                 sim_control,
                 runtime_status,
             )
@@ -1173,7 +1179,7 @@ def handle_control_command(command, sim_control, runtime_status=None):
         return make_control_reply(False, f"Error handling command {command!r}: {exc}", sim_control, runtime_status)
 
 
-def poll_control_socket(control_socket, sim_control, runtime_status=None):
+def poll_control_socket(control_socket, sim_control, runtime_status=None, ncpa_profiles=None):
     """Drain all pending simulator-control commands without blocking."""
     
     while True:
@@ -1182,9 +1188,10 @@ def poll_control_socket(control_socket, sim_control, runtime_status=None):
         except zmq.Again:
             break
 
-        reply = handle_control_command(command, sim_control, runtime_status)
+        reply = handle_control_command(command, sim_control, runtime_status, ncpa_profiles)
         control_socket.send_string(reply)
-        print(f"[SIM_CONTROL] {command} -> {reply}", flush=True)
+        logged_reply = "NCPA preview returned" if command.startswith("ncpa get ") else reply
+        print(f"[SIM_CONTROL] {command} -> {logged_reply}", flush=True)
 
 # ============================================================
 # Configuration / initialisation
@@ -1210,6 +1217,7 @@ original_optics_state = {}
 original_fresnel_state = {}
 dynamic_atmosphere_state = {}
 source_pupil_profiles = {}
+ncpa_profiles = {}
 
 for beam in [1, 2, 3, 4]:
     zwfs = bldr.init_zwfs_from_json(config_path)
@@ -1229,6 +1237,17 @@ for beam in [1, 2, 3, 4]:
     amp_input[beam] = np.sqrt(flux_density) * zwfs.grid.pupil_mask
 
     opd_internal[beam] = get_internal_opd_from_config(zwfs)
+    ncpa_profiles[beam] = {}
+    for source_name in ("internal", "onsky"):
+        profile_zwfs = copy(zwfs)
+        profile_zwfs.grid = copy(zwfs.grid)
+        profile_zwfs.grid.pupil_mask = source_pupil_profiles[beam].get(
+            source_name, {"mask": zwfs.grid.pupil_mask}
+        )["mask"]
+        ncpa_profiles[beam][source_name] = NcpaProfile(
+            profile_zwfs.grid.pupil_mask, zwfs.grid.N,
+            get_internal_opd_from_config(profile_zwfs),
+        )
 
     dynamic_atmosphere_state[beam] = init_dynamic_atmosphere_for_beam(zwfs)
 
@@ -1596,6 +1615,7 @@ while True:
         control_socket=control_socket,
         sim_control=sim_control,
         runtime_status=runtime_status,
+        ncpa_profiles=ncpa_profiles,
     )
 
     apply_fresnel_control_to_all_beams(
@@ -1675,6 +1695,11 @@ while True:
 
 
 
+
+    # Select one complete NCPA profile before propagation/diagnostics/telemetry.
+    ncpa_source = desired_source_profile_from_mode(sim_control)
+    for beam in zwfs_ns:
+        opd_internal[beam] = ncpa_profiles[beam][ncpa_source].combined
 
     # ------------------------------------------------------------
     # Read MDS phase-mask state and update each beam's optical config.
@@ -1854,6 +1879,8 @@ while True:
                         "diagnostics": runtime_status["opd_diagnostics"][str(beam)],
                         "control": dict(sim_control),
                         "phase_mask": last_mask_name[beam],
+                        "ncpa": dict(ncpa_profiles[beam][ncpa_source].metadata(),
+                                     source=ncpa_source),
                     },
                 )
             except Exception as exc:
