@@ -23,6 +23,9 @@ from typing import Literal, Optional, Tuple
 import numpy as np
 
 
+from functools import lru_cache
+
+
 ArrayLike = np.ndarray
 NormalizationMode = Optional[Literal["peak", "sum"]]
 
@@ -90,6 +93,7 @@ def make_frequency_grid(
 # Transfer functions
 # ============================================================
 
+@lru_cache
 def angular_spectrum_transfer_function(
     shape: Tuple[int, int],
     wavelength: float,
@@ -295,6 +299,7 @@ def propagate(
 # Simple optical elements
 # ============================================================
 
+@lru_cache
 def thin_lens_phase(
     shape: Tuple[int, int],
     wavelength: float,
@@ -655,6 +660,34 @@ def assert_energy_conserved(
 # Scaled Fresnel / focal-plane transforms
 # ============================================================
 
+@lru_cache
+def cached_quad_calcs(*, field_shape, wavelength, dx, dy, z):
+    # field = np.asarray(field, dtype=np.complex128)
+    ny, nx = field_shape
+
+    k = 2.0 * np.pi / wavelength
+
+    # Input coordinates
+    X1, Y1 = make_coordinate_grid(field_shape, dx, dy)
+
+    # Output sampling
+    dx_out = wavelength * abs(z) / (nx * dx)
+    dy_out = wavelength * abs(z) / (ny * dy)
+
+    X2, Y2 = make_coordinate_grid(field_shape, dx_out, dy_out)
+
+    # Fresnel one-step form:
+    #
+    # U2(x2,y2) = exp(ikz)/(i lambda z)
+    #             exp[i k/(2z) (x2^2+y2^2)]
+    #             FFT{ U1(x1,y1) exp[i k/(2z)(x1^2+y1^2)] } dx dy
+    #
+    # With centred FFT bookkeeping.
+    quad_in = np.exp(1j * k * (X1**2 + Y1**2) / (2.0 * z))
+    quad_out = np.exp(1j * k * (X2**2 + Y2**2) / (2.0 * z))
+    return quad_in, quad_out, dx_out, dy_out
+
+
 def fresnel_one_step_propagate(
     field: ArrayLike,
     wavelength: float,
@@ -699,29 +732,10 @@ def fresnel_one_step_propagate(
     if dy is None:
         dy = dx
 
-    field = np.asarray(field, dtype=complex)
-    ny, nx = field.shape
-
-    k = 2.0 * np.pi / wavelength
-
-    # Input coordinates
-    X1, Y1 = make_coordinate_grid(field.shape, dx, dy)
-
-    # Output sampling
-    dx_out = wavelength * abs(z) / (nx * dx)
-    dy_out = wavelength * abs(z) / (ny * dy)
-
-    X2, Y2 = make_coordinate_grid(field.shape, dx_out, dy_out)
-
-    # Fresnel one-step form:
-    #
-    # U2(x2,y2) = exp(ikz)/(i lambda z)
-    #             exp[i k/(2z) (x2^2+y2^2)]
-    #             FFT{ U1(x1,y1) exp[i k/(2z)(x1^2+y1^2)] } dx dy
-    #
-    # With centred FFT bookkeeping.
-    quad_in = np.exp(1j * k * (X1**2 + Y1**2) / (2.0 * z))
-    quad_out = np.exp(1j * k * (X2**2 + Y2**2) / (2.0 * z))
+    quad_in, quad_out, dx_out, dy_out = cached_quad_calcs(
+        field_shape=field.shape, wavelength=wavelength,
+        dx=dx, dy=dy, z=z
+    )
 
     spectrum = np.fft.fftshift(
         np.fft.fft2(
