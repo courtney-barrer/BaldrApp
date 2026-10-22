@@ -19,3 +19,5 @@ build/
 profile.out
 output.svg
 output.prof
+BaldrApp.egg-info/
+.venv/
