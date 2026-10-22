@@ -30,12 +30,16 @@ camera_state = {
 
 phasemask_positions = {}
 for beam in [1,2,3,4]:
-    with open(root_path / f"baldrapp/apps/paranal_simulator/fake_configs/phase_positions_beam{beam}_2025-01-01T00-00-00.json") as f:
-        phasemask_positions[beam] = json.load( f ) 
-
+    # with open(root_path / f"baldrapp/apps/paranal_simulator/fake_configs/phase_positions_beam{beam}_2025-01-01T00-00-00.json") as f:
+    #     phasemask_positions[beam] = json.load( f ) 
+    with open(root_path / f"src/baldrapp/paranal_simulator/fake_configs/phase_positions_beam{beam}_2025-01-01T00-00-00.json") as f:
+            phasemask_positions[beam] = json.load( f )
 #/home/rtc/Documents/dcs/simulation/fake_configs/phase_positions_beam4_2025-07-11T15-04-05.json
 
-with open(root_path / "baldrapp/apps/paranal_simulator/fake_configs/mds_state.json") as f:
+# with open(root_path / "baldrapp/apps/paranal_simulator/fake_configs/mds_state.json") as f:
+#     mds_state = json.load( f )
+# CHANGED: Added 'src/' and removed 'apps/'
+with open(root_path / "src/baldrapp/paranal_simulator/fake_configs/mds_state.json") as f:
     mds_state = json.load( f )
 
 motor_state = {d["name"]: d for d in mds_state}

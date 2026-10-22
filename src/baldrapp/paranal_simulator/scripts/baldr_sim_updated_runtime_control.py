@@ -18,15 +18,22 @@ from xaosim.shmlib import shm
 import subprocess
 from pathlib import Path
 from copy import copy
-from baldrapp.apps.paranal_simulator.sim_ncpa import NcpaProfile, handle_ncpa_command
+
+# CHANGED: Removed 'apps' and added 'scripts'
+from baldrapp.paranal_simulator.scripts.sim_ncpa import NcpaProfile, handle_ncpa_command
+
+# CHANGED: Replaced 'common' with 'utils'
+from baldrapp.utils import baldr_core as bldr
+from baldrapp.utils import utilities as util
+from baldrapp.utils import phasescreens as ps
+from baldrapp.utils import spectrum as spec
+
+
 from types import SimpleNamespace
 
-from baldrapp.common import baldr_core as bldr
-from baldrapp.common import utilities as util
-from baldrapp.common import phasescreens as ps
-from baldrapp.common import spectrum as spec
 import pyzelda.ztools as ztools
 import pyzelda.utils.aperture as aperture
+
 
 beams_shown = [1] #[1, 2, 3, 4]
 
@@ -1205,7 +1212,7 @@ root_path = get_git_root()
 #   grid, optics, dm, stellar.spectrum, fresnel_relay, detector, source, etc.
 config_path = (
     root_path
-    / "baldrapp/apps/paranal_simulator/fake_configs/baldr_config.json"
+    / "src/baldrapp/paranal_simulator/fake_configs/baldr_config.json"
 )
 
 # Initialise one independent ZWFS namespace per beam.
@@ -1333,8 +1340,16 @@ else:
 split_filename = get_cfg_value(
     shared_memory_cfg,
     "split_json",
-    str(root_path / "baldrapp/apps/paranal_simulator/fake_configs/cred1_split.json"),
+    str(root_path / "src/baldrapp/paranal_simulator/fake_configs/cred1_split.json"),
 )
+# New generic BaldrApp JSON config. This should include:
+#   grid, optics, dm, stellar.spectrum, fresnel_relay, detector, source, etc.
+config_path = (
+    root_path
+    # CHANGED: Added 'src/' and removed 'apps/'
+    / "src/baldrapp/paranal_simulator/fake_configs/baldr_config.json"
+)
+
 split_filename = Path(split_filename)
 if not split_filename.is_absolute():
     split_filename = root_path / split_filename

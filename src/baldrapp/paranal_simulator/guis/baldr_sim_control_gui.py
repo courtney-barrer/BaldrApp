@@ -7,7 +7,7 @@ from pathlib import Path
 
 import zmq
 from PyQt5 import QtCore, QtGui, QtWidgets
-
+from baldrapp.paranal_simulator.scripts.ncpa_dialog import NcpaDialog
 
 # ============================================================
 # Defaults
@@ -402,7 +402,7 @@ class BaldrSimControlGui(QtWidgets.QMainWindow):
         worker.start()
 
     def open_ncpa_dialog(self):
-        from baldrapp.apps.paranal_simulator.ncpa_dialog import NcpaDialog
+        
         if self.ncpa_dialog is not None and self.ncpa_dialog.isVisible():
             self.ncpa_dialog.raise_()
             return

@@ -3,7 +3,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 
-from baldrapp.common import baldr_core as bldr
+from baldrapp.utils import baldr_core as bldr
 
 
 """
@@ -1917,12 +1917,12 @@ import pyzelda.utils.aperture as aperture
 module_dir = Path('/Users/bencb/Documents/ASGARD/BaldrApp/')  # e.g. Path.home() / "projects/my_pkg/src"
 sys.path.insert(0, str(module_dir))  
 
-from baldrapp.common import baldr_core as bldr
-#from baldrapp.common import DM_basis
-from baldrapp.common import utilities as util
-from baldrapp.common import phasescreens as ps
-from baldrapp.common import DM_registration
-from baldrapp.common import baldr_experiments as bld_experiment
+from baldrapp.utils import baldr_core as bldr
+#from baldrapp.utils import DM_basis
+from baldrapp.utils import utilities as util
+from baldrapp.utils import phasescreens as ps
+from baldrapp.utils import DM_registration
+from baldrapp.utils import baldr_experiments as bld_experiment
 
 
 

@@ -34,7 +34,7 @@
       "weighting": "photon",
       "wvl_min": 1.5e-6,
       "wvl_max": 1.8e-6,
-      "n_wvl": 7,
+      "n_wvl": 3,
       "normalize": "sum"
     }
   },
@@ -183,7 +183,7 @@
       "cred1_global": "/dev/shm/cred1.im.shm",
       "baldr_template": "/dev/shm/baldr{beam}.im.shm",
       "dm_template": "/dev/shm/dm{beam}.im.shm",
-      "split_json": "baldrapp/apps/paranal_simulator/fake_configs/cred1_split.json"
+      "split_json": "src/baldrapp/paranal_simulator/fake_configs/cred1_split.json"
     },
 
     "servers": {
@@ -193,7 +193,7 @@
 
     "phasemask": {
       "default_mask": "H3",
-      "properties_file": "baldrapp/apps/paranal_simulator/fake_configs/phasemask_properties.json",
+      "properties_file": "src/baldrapp/paranal_simulator/fake_configs/phasemask_properties.json",
       "verbose": true,
       "mask_out_theta": 0.0
       }

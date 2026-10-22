@@ -5,8 +5,8 @@ import numpy as np
 from PyQt5 import QtCore, QtWidgets
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg
-from baldrapp.apps.paranal_simulator.sim_ncpa import MODE_NAMES, make_ncpa_basis, compose_ncpa
 
+from baldrapp.paranal_simulator.scripts.sim_ncpa import MODE_NAMES, make_ncpa_basis, compose_ncpa
 
 class NcpaDialog(QtWidgets.QDialog):
     def __init__(self, send_command, parent=None):

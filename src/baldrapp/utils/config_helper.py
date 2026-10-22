@@ -1173,7 +1173,7 @@ def apply_stellar_bandwidth_to_spectrum(
 # # import numpy as np ##(version 2.1.1 works but incompatiple with numba)
 # # import json
 # # from types import SimpleNamespace
-# # #from baldrapp.common import spectrum as spec
+# # #from baldrapp.utils import spectrum as spec
 
 # # ##########################################
 # # ##########################################

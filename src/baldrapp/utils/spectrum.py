@@ -55,7 +55,7 @@ from types import SimpleNamespace
 
 import numpy as np
 
-from baldrapp.common import utilities as util
+from baldrapp.utils import utilities as util
 
 
 # ============================================================
@@ -1186,7 +1186,7 @@ def normalise_phasemask_entry(mask_name, mask_entry, optics):
 ### Tests 
 # from types import SimpleNamespace
 # import numpy as np
-# from baldrapp.common import spectrum as spec
+# from baldrapp.utils import spectrum as spec
 
 # optics = SimpleNamespace(
 #     wvl0=1.65e-6,

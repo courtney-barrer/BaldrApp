@@ -36,10 +36,14 @@ fs::path executable_directory(const char* argv0) {
     return executable.parent_path();
 }
 
-fs::path default_config_path(const char* argv0) {
-    return executable_directory(argv0) / "fake_configs" / "cred1_split.json";
-}
 
+// fs::path default_config_path(const char* argv0) {
+//     return executable_directory(argv0) / "fake_configs" / "cred1_split.json";
+// }
+fs::path default_config_path(const char* argv0) {
+    // CHANGED: Added ".." to step out of the scripts directory
+    return executable_directory(argv0) / ".." / "fake_configs" / "cred1_split.json";
+}
 json read_config(const fs::path& path) {
     std::ifstream input(path);
     if (!input) {
