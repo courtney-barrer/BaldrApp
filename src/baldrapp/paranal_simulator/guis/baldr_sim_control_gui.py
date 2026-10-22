@@ -4,7 +4,7 @@ import json
 import math
 import time
 from pathlib import Path
-
+import subprocess
 import zmq
 from PyQt5 import QtCore, QtGui, QtWidgets
 from baldrapp.paranal_simulator.scripts.ncpa_dialog import NcpaDialog
