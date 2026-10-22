@@ -19,8 +19,17 @@ MDS_ADDR = "tcp://127.0.0.1:5555"
 DEFAULT_MASK = "J3"
 BEAMS = [1, 2, 3, 4]
 
-SCRIPT_DIR = Path(__file__).resolve().parent
-DEFAULT_LOG_PATH = SCRIPT_DIR / ".logs" / "baldr_sim.log"
+
+def get_git_root() -> Path:
+    return Path(
+        subprocess.check_output(
+            ["git", "rev-parse", "--show-toplevel"],
+            text=True,
+        ).strip()
+    )
+
+ROOT_DIR = get_git_root() #Path(__file__).resolve().parent.parent
+DEFAULT_LOG_PATH = ROOT_DIR / "logs" / "baldr_sim.log"
 
 
 # ============================================================
