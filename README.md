@@ -72,3 +72,15 @@ If you are running this as another user on your linux you might need to give you
 sudo chown <user>:<user> /dev/shm/*some_shms* 
 ```
 obviously using your username and whatever shared memory addresses (SHMs) you need to use
+
+## Profiling
+Profiling the simulator is now straightforward. Simply run the standard `baldr start` command,
+but with the `PROFILE` environment variable set to something truthy:
+
+```bash
+PROFILE=1 baldr start
+```
+
+This will run for 100 iterations, and then save the profiling results to `profile.out`. Note
+that this profile only captures the loop components of the simulation, not the initialisation
+or guis. That is, improving this profile will certainly improve the loop-rate of the simulator.
