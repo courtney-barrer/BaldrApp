@@ -31,7 +31,7 @@ dependencies = [
     "pyzmq>=25.0.0",
     "asgard_lab_DM_tools==0.0.10",
     "hcipy>=0.7.1",
-    "fresnel-prop==0.1.3",
+    "fresnel-prop==0.1.5",
 ]
 classifiers = [
     "Programming Language :: Python :: 3",
