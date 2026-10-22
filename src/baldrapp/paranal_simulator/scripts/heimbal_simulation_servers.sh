@@ -41,12 +41,23 @@ GIT_ROOT="$(git -C "$SCRIPT_DIR" rev-parse --show-toplevel)"
 VENV_PATH="${GIT_ROOT}/.venv/bin/activate"
 
 # 4. Run everything from the main paranal_simulator directory
+
+# 4. Run everything from the main paranal_simulator directory
 cd "$SIM_DIR"
 
-RUNDIR="${SIM_DIR}/.run"
-LOGDIR="${SIM_DIR}/.logs"
+# CHANGED: Moved logs and run files to the project root
+RUNDIR="${GIT_ROOT}/.run"
+LOGDIR="${GIT_ROOT}/.logs"
 PIDFILE="${RUNDIR}/pids"
 mkdir -p "$RUNDIR" "$LOGDIR"
+
+
+# cd "$SIM_DIR"
+
+# RUNDIR="${SIM_DIR}/.run"
+# LOGDIR="${SIM_DIR}/.logs"
+# PIDFILE="${RUNDIR}/pids"
+# mkdir -p "$RUNDIR" "$LOGDIR"
 
 # 5. Update paths to point to the new subdirectories
 SIM_SCRIPT="scripts/baldr_sim_updated_runtime_control.py"
