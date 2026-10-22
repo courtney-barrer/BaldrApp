@@ -6,11 +6,13 @@
 ##############################################################################################################
 # reverted back to stable version, i tried to implement adding dynamic phasemask changing throug baldrapp/apps/paranal_simulator/fake_configs/phasemask_properties_physica_NOTWORKING.json
 # which relies on an updated (still backwards compatible) spectrum.py script which is here
-# These changes have not been commited or implemented  
+# These changes have not been commited or implemented
 
 
+from hcipy import make_pupil_grid
 import numpy as np
 import json
+from numpy.typing import NDArray
 import zmq
 import time
 import os
@@ -27,18 +29,17 @@ from baldrapp.utils import baldr_core as bldr
 from baldrapp.utils import utilities as util
 from baldrapp.utils import phasescreens as ps
 from baldrapp.utils import spectrum as spec
-
+from baldrapp.utils import pupils as aperture
 
 from types import SimpleNamespace
 
-import pyzelda.ztools as ztools
-import pyzelda.utils.aperture as aperture
+from hcipy.mode_basis import make_zernike_basis
+
+beams_shown = [1]  # [1, 2, 3, 4]
 
 
-beams_shown = [1] #[1, 2, 3, 4]
+############### ADDING IN TO TRY FIX PHASEMASK CHANGE ISSUES
 
-
-############### ADDING IN TO TRY FIX PHASEMASK CHANGE ISSUES 
 
 def load_phasemask_properties(path):
     path = Path(path)
@@ -56,7 +57,6 @@ def load_phasemask_properties(path):
         raise ValueError("phasemask_properties.json must contain phasemask.masks")
 
     return cfg
-
 
 
 def restore_optics_state(optics, state):
@@ -102,19 +102,21 @@ def precompute_active_phasemask_spectrum_cache(zwfs):
 
     wavelengths_m = np.asarray(zwfs.spectrum.wavelengths, dtype=float)
 
-    theta_grid = np.array([
-        spec.theta_at_wavelength(zwfs.optics, w)
-        for w in wavelengths_m
-    ], dtype=float)
+    theta_grid = np.array(
+        [spec.theta_at_wavelength(zwfs.optics, w) for w in wavelengths_m], dtype=float
+    )
 
-    mask_diam_grid = np.array([
-        spec.phasemask_diameter_at_wavelength(
-            zwfs.optics,
-            wavelength_m=w,
-            default_wvl0=zwfs.optics.wvl0,
-        )
-        for w in wavelengths_m
-    ], dtype=float)
+    mask_diam_grid = np.array(
+        [
+            spec.phasemask_diameter_at_wavelength(
+                zwfs.optics,
+                wavelength_m=w,
+                default_wvl0=zwfs.optics.wvl0,
+            )
+            for w in wavelengths_m
+        ],
+        dtype=float,
+    )
 
     if not np.all(np.isfinite(theta_grid)):
         raise ValueError(
@@ -140,9 +142,11 @@ def precompute_active_phasemask_spectrum_cache(zwfs):
 
     return pm
 
+
 # ============================================================
 # Helpers
 # ============================================================
+
 
 def get_git_root() -> Path:
     return Path(
@@ -179,6 +183,7 @@ def get_cfg_value(ns, name, default=None):
 
     return getattr(ns, name, default)
 
+
 def make_source_pupil_profiles(zwfs):
     """Build optional source_profiles.<name>.pupil.model masks at startup.
 
@@ -207,22 +212,36 @@ def make_source_pupil_profiles(zwfs):
         dim = int(zwfs.grid.dim)
         if model == "SOLARSTEIN":
             mask = aperture.disc_obstructed(
-                dim=dim, size=diameter, obs=1100/8000,
-                diameter=True, strict=False,
+                dim=dim,
+                size=diameter,
+                obs=1100 / 8000,
+                diameter=True,
+                strict=False,
             )
         elif model == "AT":
-            mask = aperture.baldr_AT_pupil(
-                diameter=diameter, dim=dim, spiders_thickness=0.016 * diameter / dim,
-                strict=False, cpix=False,
+            mask = aperture.AT_pupil(
+                diameter=diameter,
+                dim=dim,
+                spiders_thickness=0.016 * diameter / dim,
+                strict=False,
+                cpix=False,
             )
         elif model == "UT":
-            mask = aperture.baldr_UT_pupil(
-                diameter=diameter, dim=dim, spiders_thickness=0.008 * diameter / dim,
+            mask = aperture.vlt_pupil(
+                diameter=diameter,
+                dim=dim,
+                spiders_thickness=0.008 * diameter / dim,
             )
         elif model == "DISC":
             mask = aperture.disc(
-                dim=dim, size=diameter, diameter=True, strict=False,
-                center=(), cpix=False, invert=False, mask=False,
+                dim=dim,
+                size=diameter,
+                diameter=True,
+                strict=False,
+                center=(),
+                cpix=False,
+                invert=False,
+                mask=False,
             )
         else:
             raise ValueError(
@@ -285,7 +304,9 @@ def measure_opd_components(opd, pupil):
     return result
 
 
-def update_opd_diagnostics(zwfs, opd_input, opd_internal, frame, source_mode, opd_dm=None):
+def update_opd_diagnostics(
+    zwfs, opd_input, opd_internal, frame, source_mode, opd_dm=None
+):
     """Measure the entrance wavefront using this frame's current DM command.
 
     The DM contribution is added once here for diagnostics only. Propagation
@@ -297,7 +318,8 @@ def update_opd_diagnostics(zwfs, opd_input, opd_internal, frame, source_mode, op
         opd_input + opd_internal + opd_dm, zwfs.grid.pupil_mask
     )
     metrics.update(
-        frame=int(frame), source_mode=source_mode,
+        frame=int(frame),
+        source_mode=source_mode,
         pupil_model=getattr(zwfs.grid, "active_pupil_model", None),
     )
     if not hasattr(zwfs, "diagnostics"):
@@ -316,8 +338,6 @@ def get_photon_flux_density_from_config(zwfs):
     Fallback:
         1.0e5 photons / s / pixel / nm
 
-    This keeps the simulator independent of the old pyZELDA/throughput/magnitude
-    calculation path.
     """
     source_cfg = getattr(zwfs, "source", None)
 
@@ -389,13 +409,13 @@ def apply_source_profile_fixed_grid(zwfs, profile_name, source_profiles):
 
     if not np.isfinite(temperature_K) or temperature_K <= 0:
         raise ValueError(
-            f"Invalid temperature_K for profile {profile_name!r}: "
-            f"{temperature_K!r}"
+            f"Invalid temperature_K for profile {profile_name!r}: " f"{temperature_K!r}"
         )
 
     # Update flux source.
     if not hasattr(zwfs, "source") or zwfs.source is None:
         from types import SimpleNamespace
+
         zwfs.source = SimpleNamespace()
 
     zwfs.source.photons_per_second_per_pixel_per_nm = flux_density
@@ -497,6 +517,7 @@ def get_internal_opd_from_config(zwfs):
 #         zwfs.optics.theta = 0.0
 #         zwfs.optics.theta_mode = "constant"
 
+
 def set_phase_mask_state(
     zwfs,
     mask_name,
@@ -571,7 +592,7 @@ def set_phase_mask_state(
     #         f"{len(pm.cached_wavelengths_m)} wavelengths cached",
     #         flush=True,
     #     )
-        
+
     # Legacy compatibility fields at wvl0.
     zwfs.optics.theta = pm.theta_rad_wvl0
     zwfs.optics.theta_mode = "constant"
@@ -596,9 +617,6 @@ def set_phase_mask_state(
     return True
 
 
-
-
-
 def read_dm_command(dm_shm):
     """
     Read the combined 12x12 simulated DM shared-memory image and convert it to
@@ -612,19 +630,19 @@ def read_dm_command(dm_shm):
     return convert_12x12_to_140(dmcmd_2d)
 
 
-
 # ============================================================
 # Dynamic atmosphere / AO / scintillation helpers
 # ============================================================
 
+
 def scale_r0_to_wavelength(r0_ref_m, wavelength_m, reference_wavelength_m):
     """Scale Fried parameter from reference_wavelength_m to wavelength_m."""
-    return float(r0_ref_m) * (
-        float(wavelength_m) / float(reference_wavelength_m)
-    ) ** (6.0 / 5.0)
+    return float(r0_ref_m) * (float(wavelength_m) / float(reference_wavelength_m)) ** (
+        6.0 / 5.0
+    )
 
 
-def make_first_stage_ao_basis(zwfs, n_modes_removed):
+def make_first_stage_ao_basis(zwfs, n_modes_removed: int) -> NDArray:
     """
     Build a Zernike basis on the BaldrApp wave-space grid for first-stage AO.
 
@@ -632,18 +650,10 @@ def make_first_stage_ao_basis(zwfs, n_modes_removed):
     modal projection/removal.
     """
     nterms = max(50, int(n_modes_removed) + 5)
-
-    basis_cropped = ztools.zernike.zernike_basis(
-        nterms=nterms,
-        npix=int(zwfs.grid.N),
-    )
-
-    basis_template = np.zeros_like(zwfs.grid.pupil_mask, dtype=float)
-
-    basis = np.array([
-        util.insert_concentric(np.nan_to_num(b, 0.0), basis_template)
-        for b in basis_cropped
-    ])
+    pup_mask_width = zwfs.grid.pupil_mask.shape[0]
+    template_grid = make_pupil_grid(pup_mask_width, pup_mask_width / zwfs.grid.N)
+    basis = make_zernike_basis(num_modes=nterms, D=1, grid=template_grid).transformation_matrix  # type: ignore
+    assert type(basis) is np.ndarray
 
     return basis
 
@@ -840,8 +850,7 @@ def generate_atmosphere_and_source_for_beam(zwfs, amp_input_0, dynamic_state):
                 Nmodes_removed=dynamic_state["n_modes_removed"],
                 basis=dynamic_state["ao_basis"],
                 phase_scaling_factor=(
-                    phase_scaling
-                    * float(dynamic_state["ao_phase_scaling_factor"])
+                    phase_scaling * float(dynamic_state["ao_phase_scaling_factor"])
                 ),
                 return_reconstructor=False,
             )
@@ -860,7 +869,9 @@ def generate_atmosphere_and_source_for_beam(zwfs, amp_input_0, dynamic_state):
             wavelength_m=wvl0,
             rows_per_frame=dynamic_state["scint_rows_per_frame"],
             propagation_distance_m=dynamic_state["scint_propagation_distance_m"],
-            renormalize_mean_intensity=dynamic_state["scint_renormalize_mean_intensity"],
+            renormalize_mean_intensity=dynamic_state[
+                "scint_renormalize_mean_intensity"
+            ],
             clip_negative_intensity=dynamic_state["scint_clip_negative_intensity"],
         )
         amp_input = amp_input_0 * amp_scint
@@ -868,8 +879,6 @@ def generate_atmosphere_and_source_for_beam(zwfs, amp_input_0, dynamic_state):
         amp_input = amp_input_0
 
     return opd_input, amp_input
-
-
 
 
 def center_crop_or_pad_to_shape(arr, target_shape, fill_value=0.0):
@@ -901,6 +910,7 @@ def center_crop_or_pad_to_shape(arr, target_shape, fill_value=0.0):
 # ============================================================
 # Runtime simulator-control ZMQ helpers
 # ============================================================
+
 
 def make_initial_sim_control():
     """
@@ -1011,11 +1021,11 @@ def apply_fresnel_control_to_all_beams(zwfs_ns, original_fresnel_state, sim_cont
         )
 
         if hasattr(fr, "z_focus_to_detector_nominal"):
-            fr.z_focus_to_detector = (
-                float(fr.z_focus_to_detector_nominal)
-                + float(fr.pupil_misconjugation)
+            fr.z_focus_to_detector = float(fr.z_focus_to_detector_nominal) + float(
+                fr.pupil_misconjugation
             )
-            
+
+
 def runtime_dynamic_state_from_control(dynamic_state, sim_control):
     """
     Return a shallow runtime view of a dynamic-atmosphere state dictionary.
@@ -1030,18 +1040,24 @@ def runtime_dynamic_state_from_control(dynamic_state, sim_control):
         state["scint_enabled"] = False
         return state
 
-    state["phase_enabled"] = bool(dynamic_state.get("phase_enabled", False) and sim_control["phase_enabled"])
+    state["phase_enabled"] = bool(
+        dynamic_state.get("phase_enabled", False) and sim_control["phase_enabled"]
+    )
     state["ao_enabled"] = bool(
         dynamic_state.get("ao_enabled", False)
         and sim_control["ao_enabled"]
         and state["phase_enabled"]
     )
-    state["scint_enabled"] = bool(dynamic_state.get("scint_enabled", False) and sim_control["scint_enabled"])
+    state["scint_enabled"] = bool(
+        dynamic_state.get("scint_enabled", False) and sim_control["scint_enabled"]
+    )
 
     return state
 
 
-def handle_control_command(command, sim_control, runtime_status=None, ncpa_profiles=None):
+def handle_control_command(
+    command, sim_control, runtime_status=None, ncpa_profiles=None
+):
     """
     Supported commands:
       status
@@ -1090,20 +1106,33 @@ def handle_control_command(command, sim_control, runtime_status=None, ncpa_profi
 
         if cmd == "mode":
             if len(tokens) != 2 or tokens[1].lower() not in ["onsky", "internal"]:
-                return make_control_reply(False, "Usage: mode onsky|internal", sim_control, runtime_status)
+                return make_control_reply(
+                    False, "Usage: mode onsky|internal", sim_control, runtime_status
+                )
             sim_control["mode"] = tokens[1].lower()
-            return make_control_reply(True, f"mode set to {sim_control['mode']}", sim_control, runtime_status)
+            return make_control_reply(
+                True, f"mode set to {sim_control['mode']}", sim_control, runtime_status
+            )
 
         if cmd in ["phase", "ao", "scint"]:
             if len(tokens) != 2:
-                return make_control_reply(False, f"Usage: {cmd} on|off", sim_control, runtime_status)
+                return make_control_reply(
+                    False, f"Usage: {cmd} on|off", sim_control, runtime_status
+                )
             key = f"{cmd}_enabled"
             sim_control[key] = bool_from_token(tokens[1])
-            return make_control_reply(True, f"{key} set to {sim_control[key]}", sim_control, runtime_status)
+            return make_control_reply(
+                True, f"{key} set to {sim_control[key]}", sim_control, runtime_status
+            )
 
         if cmd == "preset":
             if len(tokens) != 2:
-                return make_control_reply(False, "Usage: preset onsky|internal|phase_only|scint_only", sim_control, runtime_status)
+                return make_control_reply(
+                    False,
+                    "Usage: preset onsky|internal|phase_only|scint_only",
+                    sim_control,
+                    runtime_status,
+                )
             preset = tokens[1].lower()
             if preset == "onsky":
                 sim_control["mode"] = "onsky"
@@ -1123,8 +1152,12 @@ def handle_control_command(command, sim_control, runtime_status=None, ncpa_profi
                 sim_control["ao_enabled"] = False
                 sim_control["scint_enabled"] = True
             else:
-                return make_control_reply(False, f"Unknown preset: {preset}", sim_control, runtime_status)
-            return make_control_reply(True, f"preset set to {preset}", sim_control, runtime_status)
+                return make_control_reply(
+                    False, f"Unknown preset: {preset}", sim_control, runtime_status
+                )
+            return make_control_reply(
+                True, f"preset set to {preset}", sim_control, runtime_status
+            )
 
         if cmd == "reset_offsets":
             sim_control["edge_offset_m"] = None
@@ -1146,7 +1179,9 @@ def handle_control_command(command, sim_control, runtime_status=None, ncpa_profi
 
         if cmd == "set":
             if len(tokens) < 3:
-                return make_control_reply(False, "Usage: set <parameter> <value>", sim_control, runtime_status)
+                return make_control_reply(
+                    False, "Usage: set <parameter> <value>", sim_control, runtime_status
+                )
 
             key = tokens[1].lower()
 
@@ -1164,7 +1199,12 @@ def handle_control_command(command, sim_control, runtime_status=None, ncpa_profi
                 sim_control["coldstop_y_offset_m"] = float(tokens[2])
             elif key == "coldstop_offset_um":
                 if len(tokens) != 4:
-                    return make_control_reply(False, "Usage: set coldstop_offset_um <x_um> <y_um>", sim_control, runtime_status)
+                    return make_control_reply(
+                        False,
+                        "Usage: set coldstop_offset_um <x_um> <y_um>",
+                        sim_control,
+                        runtime_status,
+                    )
                 sim_control["coldstop_x_offset_m"] = float(tokens[2]) * 1e-6
                 sim_control["coldstop_y_offset_m"] = float(tokens[3]) * 1e-6
 
@@ -1178,29 +1218,45 @@ def handle_control_command(command, sim_control, runtime_status=None, ncpa_profi
             elif key == "sleep_time_s":
                 sim_control["sleep_time_s"] = float(tokens[2])
             else:
-                return make_control_reply(False, f"Unknown set parameter: {key}", sim_control, runtime_status)
+                return make_control_reply(
+                    False, f"Unknown set parameter: {key}", sim_control, runtime_status
+                )
 
             return make_control_reply(True, f"set {key}", sim_control, runtime_status)
 
-        return make_control_reply(False, f"Unknown command: {command}", sim_control, runtime_status)
+        return make_control_reply(
+            False, f"Unknown command: {command}", sim_control, runtime_status
+        )
 
     except Exception as exc:
-        return make_control_reply(False, f"Error handling command {command!r}: {exc}", sim_control, runtime_status)
+        return make_control_reply(
+            False,
+            f"Error handling command {command!r}: {exc}",
+            sim_control,
+            runtime_status,
+        )
 
 
-def poll_control_socket(control_socket, sim_control, runtime_status=None, ncpa_profiles=None):
+def poll_control_socket(
+    control_socket, sim_control, runtime_status=None, ncpa_profiles=None
+):
     """Drain all pending simulator-control commands without blocking."""
-    
+
     while True:
         try:
             command = control_socket.recv_string(flags=zmq.NOBLOCK)
         except zmq.Again:
             break
 
-        reply = handle_control_command(command, sim_control, runtime_status, ncpa_profiles)
+        reply = handle_control_command(
+            command, sim_control, runtime_status, ncpa_profiles
+        )
         control_socket.send_string(reply)
-        logged_reply = "NCPA preview returned" if command.startswith("ncpa get ") else reply
+        logged_reply = (
+            "NCPA preview returned" if command.startswith("ncpa get ") else reply
+        )
         print(f"[SIM_CONTROL] {command} -> {logged_reply}", flush=True)
+
 
 # ============================================================
 # Configuration / initialisation
@@ -1254,7 +1310,8 @@ for beam in beams_shown:
             source_name, {"mask": zwfs.grid.pupil_mask}
         )["mask"]
         ncpa_profiles[beam][source_name] = NcpaProfile(
-            profile_zwfs.grid.pupil_mask, zwfs.grid.N,
+            profile_zwfs.grid.pupil_mask,
+            zwfs.grid.N,
             get_internal_opd_from_config(profile_zwfs),
         )
 
@@ -1270,9 +1327,15 @@ for beam in beams_shown:
     if hasattr(zwfs, "fresnel_relay"):
         original_fresnel_state[beam] = {
             "edge_offset": float(getattr(zwfs.fresnel_relay, "edge_offset", 0.0)),
-            "coldstop_x_offset": float(getattr(zwfs.fresnel_relay, "coldstop_x_offset", 0.0)),
-            "coldstop_y_offset": float(getattr(zwfs.fresnel_relay, "coldstop_y_offset", 0.0)),
-            "pupil_misconjugation": float(getattr(zwfs.fresnel_relay, "pupil_misconjugation", 0.0)),
+            "coldstop_x_offset": float(
+                getattr(zwfs.fresnel_relay, "coldstop_x_offset", 0.0)
+            ),
+            "coldstop_y_offset": float(
+                getattr(zwfs.fresnel_relay, "coldstop_y_offset", 0.0)
+            ),
+            "pupil_misconjugation": float(
+                getattr(zwfs.fresnel_relay, "pupil_misconjugation", 0.0)
+            ),
         }
         # original_fresnel_state[beam] = {
         #     "edge_offset": float(getattr(zwfs.fresnel_relay, "edge_offset", 0.0)),
@@ -1296,20 +1359,26 @@ for beam in beams_shown:
 
 
 default_tel = 1
-use_pyZelda = False
 
 print("\n=== Baldr simulator optical configuration ===")
 print("config_path:", config_path)
 print("grid N:", zwfs_ns[default_tel].grid.N)
 print("grid dim:", zwfs_ns[default_tel].grid.dim)
 print("detector binning:", zwfs_ns[default_tel].detector.binning)
-print("stellar.bandwidth [nm]:", getattr(zwfs_ns[default_tel].stellar, "bandwidth", None))
+print(
+    "stellar.bandwidth [nm]:", getattr(zwfs_ns[default_tel].stellar, "bandwidth", None)
+)
 print("spectrum wavelengths [um]:", zwfs_ns[default_tel].spectrum.wavelengths * 1e6)
 print("sum spectrum weights_nm:", np.sum(zwfs_ns[default_tel].spectrum.weights_nm))
 print("fresnel enabled:", getattr(zwfs_ns[default_tel].fresnel_relay, "enabled", None))
-print("atmosphere phase enabled:", dynamic_atmosphere_state[default_tel]["phase_enabled"])
+print(
+    "atmosphere phase enabled:", dynamic_atmosphere_state[default_tel]["phase_enabled"]
+)
 print("first-stage AO enabled:", dynamic_atmosphere_state[default_tel]["ao_enabled"])
-print("first-stage AO modes removed:", dynamic_atmosphere_state[default_tel]["n_modes_removed"])
+print(
+    "first-stage AO modes removed:",
+    dynamic_atmosphere_state[default_tel]["n_modes_removed"],
+)
 print("scintillation enabled:", dynamic_atmosphere_state[default_tel]["scint_enabled"])
 
 
@@ -1497,12 +1566,8 @@ for beam in beams_shown:
     print(mds_socket.recv_string())
 
 
-
-
-
-
 # ============================================================
-# Phasemask 
+# Phasemask
 # ============================================================
 phasemask_runtime_cfg = getattr(runtime_cfg, "phasemask", None)
 
@@ -1563,12 +1628,15 @@ if bool(get_cfg_value(runtime_cfg, "publish_opd", False)):
     try:
         import atexit
         from baldrapp.apps.paranal_simulator.sim_telemetry import TelemetryPublisher
+
         telemetry_publisher = TelemetryPublisher(
             {beam: zwfs_ns[beam].grid.pupil_mask.shape for beam in beams_shown},
             zwfs_ns[default_tel].config_json,
         )
         atexit.register(telemetry_publisher.close)
-        print(f"[TELEMETRY] Publishing OPD; run {telemetry_publisher.run_id}", flush=True)
+        print(
+            f"[TELEMETRY] Publishing OPD; run {telemetry_publisher.run_id}", flush=True
+        )
     except Exception as exc:
         print(f"[TELEMETRY] Disabled: {exc}", flush=True)
 runtime_status["telemetry_enabled"] = telemetry_publisher is not None
@@ -1592,7 +1660,9 @@ if source_profiles is not None:
             source_profiles,
         )
 
-        if apply_source_pupil(zwfs_ns[beam], desired_profile, source_pupil_profiles[beam]):
+        if apply_source_pupil(
+            zwfs_ns[beam], desired_profile, source_pupil_profiles[beam]
+        ):
             opd_internal[beam] = get_internal_opd_from_config(zwfs_ns[beam])
 
         amp_input[beam] = (
@@ -1658,7 +1728,9 @@ while True:
                     source_profiles,
                 )
 
-                if apply_source_pupil(zwfs_ns[beam], desired_profile, source_pupil_profiles[beam]):
+                if apply_source_pupil(
+                    zwfs_ns[beam], desired_profile, source_pupil_profiles[beam]
+                ):
                     opd_internal[beam] = get_internal_opd_from_config(zwfs_ns[beam])
 
                 new_wavelengths = np.asarray(
@@ -1687,7 +1759,9 @@ while True:
                     profile = source_profiles[desired_profile]
 
                     runtime_status["source_profile"] = desired_profile
-                    runtime_status["pupil_model"] = zwfs_ns[beam].grid.active_pupil_model
+                    runtime_status["pupil_model"] = zwfs_ns[
+                        beam
+                    ].grid.active_pupil_model
                     runtime_status["source_flux_density"] = (
                         get_photon_flux_density_from_config(zwfs_ns[beam])
                     )
@@ -1706,10 +1780,6 @@ while True:
                         f"pupil={runtime_status['pupil_model']}",
                         flush=True,
                     )
-
-
-
-
 
     # Select one complete NCPA profile before propagation/diagnostics/telemetry.
     ncpa_source = desired_source_profile_from_mode(sim_control)
@@ -1735,7 +1805,7 @@ while True:
             )
 
             last_mask_name[beam] = mask_name
-            
+
     # ------------------------------------------------------------
     # Camera shared-memory counters.
     # ------------------------------------------------------------
@@ -1745,7 +1815,7 @@ while True:
     # ------------------------------------------------------------
     # Per-beam propagation and subframe SHM update.
     # ------------------------------------------------------------
-    for ct, beam in enumerate(beams_shown ):
+    for ct, beam in enumerate(beams_shown):
 
         if telemetry_publisher is not None:
             telemetry_sample_ns = time.time_ns()
@@ -1770,10 +1840,12 @@ while True:
                 dynamic_atmosphere_state[beam],
                 sim_control,
             )
-            opd_input_runtime, amp_input_runtime = generate_atmosphere_and_source_for_beam(
-                zwfs=zwfs_ns[beam],
-                amp_input_0=amp_input[beam],
-                dynamic_state=runtime_dynamic_state,
+            opd_input_runtime, amp_input_runtime = (
+                generate_atmosphere_and_source_for_beam(
+                    zwfs=zwfs_ns[beam],
+                    amp_input_0=amp_input[beam],
+                    dynamic_state=runtime_dynamic_state,
+                )
             )
         else:
             opd_input_runtime = zero_opd[beam]
@@ -1786,7 +1858,6 @@ while True:
             zwfs_ns=zwfs_ns[beam],
             detector=zwfs_ns[beam].detector,
             include_shotnoise=include_shotnoise,
-            use_pyZelda=use_pyZelda,
         )
 
         telemetry_dm_opd = None
@@ -1795,8 +1866,12 @@ while True:
                 zwfs_ns[beam].dm.current_cmd * zwfs_ns[beam].dm.opd_per_cmd
             )
         runtime_status["opd_diagnostics"][str(beam)] = update_opd_diagnostics(
-            zwfs_ns[beam], opd_input_runtime, opd_internal[beam],
-            liveindex, sim_control["mode"], opd_dm=telemetry_dm_opd,
+            zwfs_ns[beam],
+            opd_input_runtime,
+            opd_internal[beam],
+            liveindex,
+            sim_control["mode"],
+            opd_dm=telemetry_dm_opd,
         )
 
         det_cfg_beam = getattr(zwfs_ns[beam], "detector_config", None)
@@ -1833,10 +1908,7 @@ while True:
 
         # Detector/background model in ADU-like units. The optical image is
         # inserted concentrically into the configured Baldr subframe.
-        subim_tmp = (
-            adu_offset
-            + noise_std * np.random.randn(*baldr_frame_sizes[ct])
-        )
+        subim_tmp = adu_offset + noise_std * np.random.randn(*baldr_frame_sizes[ct])
 
         subim_tmp += intensity
 
@@ -1859,25 +1931,34 @@ while True:
         if telemetry_publisher is not None:
             try:
                 telemetry_publisher.publish_frame(
-                    beam, opd_input_runtime, opd_internal[beam], telemetry_dm_opd,
+                    beam,
+                    opd_input_runtime,
+                    opd_internal[beam],
+                    telemetry_dm_opd,
                     zwfs_ns[beam].grid.pupil_mask,
                     {
-                        "frame": int(liveindex), "sample_ns": telemetry_sample_ns,
+                        "frame": int(liveindex),
+                        "sample_ns": telemetry_sample_ns,
                         "source_mode": sim_control["mode"],
                         "pupil_model": zwfs_ns[beam].grid.active_pupil_model,
                         "camera_counter": int(baldr_sub_shms[beam].get_counter()),
                         "dm_counter_before": telemetry_dm_before,
                         "dm_counter_after": telemetry_dm_after,
-                        "dm_shape": [12, 12], "camera_shape": list(subim_tmp.shape),
+                        "dm_shape": [12, 12],
+                        "camera_shape": list(subim_tmp.shape),
                         "diagnostics": runtime_status["opd_diagnostics"][str(beam)],
                         "control": dict(sim_control),
                         "phase_mask": last_mask_name[beam],
-                        "ncpa": dict(ncpa_profiles[beam][ncpa_source].metadata(),
-                                     source=ncpa_source),
+                        "ncpa": dict(
+                            ncpa_profiles[beam][ncpa_source].metadata(),
+                            source=ncpa_source,
+                        ),
                     },
                 )
             except Exception as exc:
-                print(f"[TELEMETRY] Disabled after publication error: {exc}", flush=True)
+                print(
+                    f"[TELEMETRY] Disabled after publication error: {exc}", flush=True
+                )
                 telemetry_publisher.close()
                 telemetry_publisher = None
                 runtime_status["telemetry_enabled"] = False
@@ -1888,16 +1969,13 @@ while True:
     global_frame_shm.mtdata["cnt0"] = cnt0
     global_frame_shm.mtdata["cnt1"] = cnt1
 
-    global_im_tmp = (
-        adu_offset
-        + noise_std * np.random.randn(*global_frame_size[:-1])
-    )
+    global_im_tmp = adu_offset + noise_std * np.random.randn(*global_frame_size[:-1])
 
-    for ct, beam in enumerate(beams_shown ):
+    for ct, beam in enumerate(beams_shown):
         x0, y0 = baldr_frame_corners[ct]
         ysz, xsz = baldr_frame_sizes[ct]
 
-        global_im_tmp[y0:y0 + ysz, x0:x0 + xsz] = (
+        global_im_tmp[y0 : y0 + ysz, x0 : x0 + xsz] = (
             baldr_sub_shms[beam].get_data().copy()
         )
 
@@ -1924,4 +2002,3 @@ while True:
     t_elapsed = time.time() - t1
     print(f"FPS: {1/t_elapsed}")
     t1 = time.time()
-

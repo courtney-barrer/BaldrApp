@@ -30,7 +30,7 @@ dependencies = [
     "streamlit>=1.58.0",
     "pyzmq>=25.0.0",
     "asgard_lab_DM_tools==0.0.10",
-
+    "hcipy>=0.7.1",
 ]
 classifiers = [
     "Programming Language :: Python :: 3",
@@ -45,6 +45,3 @@ baldr = "baldrapp.paranal_simulator.cli:run_heimbal"
 [tool.setuptools.packages.find]
 where = ["src"]
 include = ["baldrapp", "baldrapp.*"]
-
-[tool.uv.sources]
-pyzelda = { git = "https://github.com/courtney-barrer/pyZELDA#egg=b42aaea5c8a47026783a15391df5e058360ea15e" }

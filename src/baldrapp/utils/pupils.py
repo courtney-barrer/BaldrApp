@@ -541,3 +541,4 @@ def pick_pupil(pupil_geometry, dim, diameter ):
         pup = disc( dim = dim, size = diameter//2) 
 
     return(pup)
+
