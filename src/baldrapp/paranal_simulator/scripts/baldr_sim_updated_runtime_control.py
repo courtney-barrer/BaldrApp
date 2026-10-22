@@ -38,27 +38,6 @@ from hcipy.mode_basis import make_zernike_basis
 beams_shown = [1]  # [1, 2, 3, 4]
 
 
-############### ADDING IN TO TRY FIX PHASEMASK CHANGE ISSUES
-
-
-def load_phasemask_properties(path):
-    path = Path(path)
-
-    if not path.exists():
-        raise FileNotFoundError(f"Phasemask properties file not found: {path}")
-
-    with open(path, "r") as f:
-        cfg = json.load(f)
-
-    if "phasemask" in cfg:
-        cfg = cfg["phasemask"]
-
-    if "masks" not in cfg:
-        raise ValueError("phasemask_properties.json must contain phasemask.masks")
-
-    return cfg
-
-
 def restore_optics_state(optics, state):
     """
     Restore optics fields to a previous baseline state and remove runtime
@@ -171,9 +150,6 @@ def convert_12x12_to_140(arr):
     corner_indices = [0, 11, 132, 143]
     return np.delete(flat, corner_indices)
 
-
-# def get_cfg_value(ns, name, default=None):
-#     return getattr(ns, name, default) if ns is not None else default
 def get_cfg_value(ns, name, default=None):
     if ns is None:
         return default
@@ -503,21 +479,6 @@ def get_internal_opd_from_config(zwfs):
     return zwfs.grid.pupil_mask * opd_internal
 
 
-# def set_phase_mask_state(zwfs, mask_inserted, original_optics_state):
-#     """
-#     Apply phase-mask in/out state to the configured analytic propagation path.
-
-#     For mask out, force theta=0 and theta_mode='constant'. This is robust even
-#     when the configured mask normally uses theta_mode='physical_depth'.
-#     """
-#     if mask_inserted:
-#         zwfs.optics.theta = original_optics_state["theta"]
-#         zwfs.optics.theta_mode = original_optics_state["theta_mode"]
-#     else:
-#         zwfs.optics.theta = 0.0
-#         zwfs.optics.theta_mode = "constant"
-
-
 def set_phase_mask_state(
     zwfs,
     mask_name,
@@ -658,12 +619,6 @@ def make_first_stage_ao_basis(zwfs, n_modes_removed: int) -> NDArray:
     return basis
 
 
-def upsample_by_factor(arr, factor):
-    """Nearest-neighbour upsample of a square 2D array by an integer factor."""
-    arr = np.asarray(arr)
-    return np.repeat(np.repeat(arr, int(factor), axis=0), int(factor), axis=1)
-
-
 def upsample_to_size(arr, target_size):
     """Nearest-neighbour upsample/pad/crop a square 2D array to target_size."""
     arr = np.asarray(arr)
@@ -672,7 +627,7 @@ def upsample_to_size(arr, target_size):
         return arr
 
     factor = max(1, int(target_size) // int(arr.shape[0]))
-    out = upsample_by_factor(arr, factor)
+    out = util.upsample_by_factor(arr, factor)
 
     if out.shape[0] < target_size:
         pad = target_size - out.shape[0]
@@ -1595,18 +1550,6 @@ print(
     f"{phasemask_properties_path}",
     flush=True,
 )
-
-# phasemask_properties_path = Path(phasemask_properties_path)
-# if not phasemask_properties_path.is_absolute():
-#     phasemask_properties_path = root_path / phasemask_properties_path
-
-# phasemask_properties = load_phasemask_properties(phasemask_properties_path)
-
-# print(
-#     f"[PHASEMASK] Loaded {len(phasemask_properties['masks'])} mask definitions "
-#     f"from {phasemask_properties_path}",
-#     flush=True,
-# )
 
 
 # ============================================================

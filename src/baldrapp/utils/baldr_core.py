@@ -1700,7 +1700,7 @@ def first_stage_ao(
         phase_scaling_factor (float, optional): Scale the phase screen before fitting. Defaults to 1.
         return_reconstructor (bool): Also return the fitted phase for latency simulation.
     """
-    basis = np.asarray(basis)
+    basis = np.asarray(basis).T.reshape([-1, *atm_scrn.scrn.shape])
     pupil_disk = basis[0]
     pupil_pixels = pupil_disk > 0
     phase = phase_scaling_factor * atm_scrn.scrn

@@ -45,3 +45,8 @@ baldr = "baldrapp.paranal_simulator.cli:run_heimbal"
 [tool.setuptools.packages.find]
 where = ["src"]
 include = ["baldrapp", "baldrapp.*"]
+
+[dependency-groups]
+dev = [
+    "ipython>=9.17.1",
+]
