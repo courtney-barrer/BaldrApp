@@ -16,3 +16,6 @@ temp_build_env/
 build/
 *.egg-info/
 .vscode
+profile.out
+output.svg
+output.prof

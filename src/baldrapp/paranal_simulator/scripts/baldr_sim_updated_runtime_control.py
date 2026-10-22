@@ -20,6 +20,7 @@ from xaosim.shmlib import shm
 import subprocess
 from pathlib import Path
 from copy import copy
+import itertools
 
 # CHANGED: Removed 'apps' and added 'scripts'
 from baldrapp.paranal_simulator.scripts.sim_ncpa import NcpaProfile, handle_ncpa_command
@@ -149,6 +150,7 @@ def convert_12x12_to_140(arr):
     flat = arr.flatten()
     corner_indices = [0, 11, 132, 143]
     return np.delete(flat, corner_indices)
+
 
 def get_cfg_value(ns, name, default=None):
     if ns is None:
@@ -1222,17 +1224,16 @@ root_path = get_git_root()
 # New generic BaldrApp JSON config. This should include:
 #   grid, optics, dm, stellar.spectrum, fresnel_relay, detector, source, etc.
 config_path = (
-    root_path
-    / "src/baldrapp/paranal_simulator/fake_configs/baldr_config.json"
+    root_path / "src/baldrapp/paranal_simulator/fake_configs/baldr_config.json"
 )
 
-# set DM flat on channel zero to 0.5 for all beams 
+# set DM flat on channel zero to 0.5 for all beams
 
 dm_flat_chn = dict()
 for beam in beams_shown:
     dm_flat_chn[beam] = shm(f"/dev/shm/dm{beam}disp00.im.shm", nosem=False)
-    dm_flat_chn[beam].set_data(0.5*np.ones([12,12]))
-    #dm_flat_chn[beam].post_sems(1)
+    dm_flat_chn[beam].set_data(0.5 * np.ones([12, 12]))
+    # dm_flat_chn[beam].post_sems(1)
 # Initialise one independent ZWFS namespace per beam.
 # The configured frame dispatcher will automatically use:
 #   - polychromatic propagation if zwfs.spectrum.enabled and n_wvl > 1
@@ -1644,8 +1645,25 @@ if source_profiles is not None:
         flush=True,
     )
 
-t1 = time.time()
-while True:
+
+do_profile = bool(os.environ.get("PROFILE", False))
+
+iterator: range | itertools.count
+
+if do_profile:
+    import cProfile, pstats, io
+    from pstats import SortKey
+
+    pr = cProfile.Profile()
+    pr.enable()
+    # do 100 frames
+    iterator = range(100)
+    print("RUNNING IN PROFILING MODE, WILL STOP AFTER 100 FRAMES")
+else:
+    # loop forever
+    iterator = itertools.count()
+
+for _ in iterator:
     poll_control_socket(
         control_socket=control_socket,
         sim_control=sim_control,
@@ -1845,33 +1863,12 @@ while True:
 
         if beam == 1:
             runtime_status["last_beam1_intensity_sum"] = float(np.nansum(intensity))
-            # print(
-            #     "beam 1 intensity:",
-            #     "shape", intensity.shape,
-            #     "min", np.nanmin(intensity),
-            #     "max", np.nanmax(intensity),
-            #     "sum", np.nansum(intensity),
-            #     "mode", sim_control["mode"],
-            #     "dtype", intensity.dtype,
-            #     flush=True,
-            # )
 
         # Detector/background model in ADU-like units. The optical image is
         # inserted concentrically into the configured Baldr subframe.
         subim_tmp = adu_offset + noise_std * np.random.randn(*baldr_frame_sizes[ct])
 
         subim_tmp += intensity
-
-        # if beam == 1:
-        #     runtime_status["last_beam1_subim_sum"] = float(np.nansum(subim_tmp))
-        #     print(
-        #         "beam 1 subim:",
-        #         "shape", subim_tmp.shape,
-        #         "min", np.nanmin(subim_tmp),
-        #         "max", np.nanmax(subim_tmp),
-        #         "sum", np.nansum(subim_tmp),
-        #         flush=True,
-        #     )
 
         baldr_sub_shms[beam].set_data(subim_tmp.astype(dtype=np.int32))
         baldr_sub_shms[beam].mtdata["cnt0"] = cnt0
@@ -1949,6 +1946,14 @@ while True:
     global_frame_shm.post_sems(1)
 
     liveindex += 1
-    t_elapsed = time.time() - t1
-    print(f"FPS: {1/t_elapsed}")
-    t1 = time.time()
+
+if do_profile:
+    pr.disable()
+    s = io.StringIO()
+    sortby = SortKey.TIME
+    ps = pstats.Stats(pr, stream=s).sort_stats(sortby)
+    ps.print_stats()
+    with open("profile.out", "w") as f:
+        f.write(s.getvalue())
+    print("FINISHED PROFILING. RESULT WRITTEN TO `profile.out`. STOPPING.")
+

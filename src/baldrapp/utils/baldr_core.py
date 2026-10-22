@@ -21,10 +21,12 @@ from . import DM_registration
 
 from . import config_helper as cfghelp
 from . import spectrum as spec
-from . import fresnel
+from . import fresnel_old as fresnel
 from abc import ABC, abstractmethod
 from typing import Tuple, Optional, Dict, List
 from numpy.typing import NDArray
+
+from fresnel import InplacePropagator
 
 """
 1/11/25 - updated get_pupil_intensity to use fft and not mft for speed, added coldstop diam and coldstop_offset as input argunments removes and remove precomupted mask 
@@ -675,18 +677,6 @@ class PixelWiseStrehlModel:
             pickle.dump(self, file)
 
 
-def reset_telemetry(zwfs_ns):
-    zwfs_ns.telem = SimpleNamespace(**init_telem_dict())
-    return zwfs_ns
-
-
-def reset_ctrl(zwfs_ns):
-    zwfs_ns.ctrl.TT_ctrl.reset()
-    zwfs_ns.ctrl.HO_ctrl.reset()
-
-    zwfs_ns.telem = init_telem_dict()
-
-
 def init_telem_dict():
     # i_list is intensity measured on the detector
     # i_dm_list is intensity interpolated onto DM actuators - it is used only in zonal_interp control methods
@@ -715,88 +705,6 @@ def init_telem_dict():
     return telemetry_dict
 
 
-# def save_telemetry( zwfs_ns , savename = None, overwrite=True):
-
-#     tstamp = datetime.datetime.now().strftime("%d-%m-%YT%H.%M.%S")
-
-#     telem_dict = vars(zwfs_ns.telem )
-#     # Create a list of HDUs (Header Data Units)
-#     hdul = fits.HDUList()
-
-#     # Add each list to the HDU list as a new extension
-#     for list_name, data_list in telem_dict.items():
-#         # Convert list to numpy array for FITS compatibility
-#         data_array = np.array(data_list, dtype=float)  # Ensure it is a float array or any appropriate type
-
-#         # Create a new ImageHDU with the data
-#         hdu = fits.ImageHDU(data_array)
-
-#         # Set the EXTNAME header to the variable name
-#         hdu.header['EXTNAME'] = list_name
-
-#         # Append the HDU to the HDU list
-#         hdul.append(hdu)
-
-#     # Write the HDU list to a FITS file
-#     if savename is None:
-#         savename = f'~/Downloads/telemetry_simulation_{tstamp}.fits'
-#     hdul.writeto( savename, overwrite=True)
-
-#     return hdul
-
-
-def save_telemetry(telemetry_ns, savename=None, overwrite=True, return_fits=False):
-
-    tstamp = datetime.datetime.now().strftime("%d-%m-%YT%H.%M.%S")
-
-    # Create a Primary HDU (Header/Data Unit)
-    primary_hdu = fits.PrimaryHDU()
-
-    # Create a list to hold the individual HDUs
-    hdul = fits.HDUList([primary_hdu])
-
-    # Iterate through the telemetry dictionary and create HDUs for each key-value pair
-    for key, value in vars(telemetry_ns).items():
-        if value:  # Only add non-empty data arrays/lists
-            value_array = np.array(value)
-
-            if np.iscomplexobj(
-                value_array
-            ):  # Check if the array contains complex numbers
-                # Split into real and imaginary parts
-                real_part = np.real(value_array)
-                imag_part = np.imag(value_array)
-
-                # Create HDU for the real part
-                real_hdu = fits.ImageHDU(real_part, name=f"{key.upper()}_REAL")
-                real_hdu.header["EXTNAME"] = f"{key}_REAL"
-                real_hdu.header["COMMENT"] = "Real part of complex values"
-
-                # Create HDU for the imaginary part
-                imag_hdu = fits.ImageHDU(imag_part, name=f"{key.upper()}_IMAG")
-                imag_hdu.header["EXTNAME"] = f"{key}_IMAG"
-                imag_hdu.header["COMMENT"] = "Imaginary part of complex values"
-
-                # Append both HDUs to the HDU list
-                hdul.append(real_hdu)
-                hdul.append(imag_hdu)
-            else:
-                # Handle non-complex data as usual
-                hdu = fits.ImageHDU(value_array, name=key.upper())
-                hdu.header["EXTNAME"] = key.upper()
-                hdu.header["COMMENT"] = f"Data corresponding to {key.upper()}"
-                hdul.append(hdu)
-
-        if savename is None:
-            savename = f"~/Downloads/telemetry_simulation_{tstamp}.fits"
-
-        # Write the HDU list to a FITS file
-        hdul.writeto(savename, overwrite=overwrite)
-
-        if return_fits:
-            return hdul
-
-
 ### DM actuator influence options
 # @njit
 def gaussian_displacement(c_i, sigma_i, x, y, x0, y0):
@@ -805,50 +713,6 @@ def gaussian_displacement(c_i, sigma_i, x, y, x0, y0):
     # return c_i / (1 + ((x - x0)**2 + (y - y0)**2) / (0.7*sigma_i)**2) #lorentzian approximation to speed things up - good blanace accuracy and speed
     # return np.clip(c_i * (1 - ((x - x0)**2 + (y - y0)**2)/ (1.2 * sigma_i**2)), a_min=0, a_max=None) #quadratic
     # return c_i * ( (x - x0)**2 + (y - y0)**2 <= sigma_i**2 ) # box profile'
-
-
-def generate_dm_coordinates(Nx=12, Ny=12, spacing=1.0):
-    """
-    Generates the x, y coordinates of the actuators in a 12x12 grid DM with missing corners.
-
-    Args:
-        Nx, Ny: Number of actuators in the x and y directions (12x12 grid).
-        spacing: The spacing between actuators (default is 1 unit).
-
-    Returns:
-        - coords: A list of tuples (x, y) representing the coordinates of the actuators.
-        - flattened_indices: A dictionary that maps actuator indices (0 to 139) to (x, y) coordinates.
-        - coord_to_index: A dictionary mapping (x, y) coordinates to actuator indices.
-    """
-    coords = []
-    coord_to_index = {}
-    flattened_indices = {}
-
-    center_x = (Nx - 1) / 2  # Center of the grid in x
-    center_y = (Ny - 1) / 2  # Center of the grid in y
-
-    actuator_index = 0
-    for i in range(Ny):
-        for j in range(Nx):
-            # Skip the missing corners
-            if (
-                (i == 0 and j == 0)
-                or (i == 0 and j == Nx - 1)
-                or (i == Ny - 1 and j == 0)
-                or (i == Ny - 1 and j == Nx - 1)
-            ):
-                continue
-
-            # Calculate x and y coordinates relative to the center
-            x = (j - center_x) * spacing
-            y = (i - center_y) * spacing
-
-            coords.append((x, y))
-            coord_to_index[(x, y)] = actuator_index
-            flattened_indices[actuator_index] = (x, y)
-            actuator_index += 1
-
-    return coords, flattened_indices, coord_to_index
 
 
 def get_nearest_actuator(x, y, flattened_indices):
@@ -1436,8 +1300,10 @@ def update_dm_registration_wavespace(transform_matrix, zwfs_ns):
 
     """
 
-    dm_coords, dm_actuator_to_coord, dm_coord_to_actuator = generate_dm_coordinates(
-        Nx=zwfs_ns.dm.Nact_x, Ny=zwfs_ns.dm.Nact_y, spacing=zwfs_ns.dm.dm_pitch
+    dm_coords, dm_actuator_to_coord, dm_coord_to_actuator = (
+        DM_registration.generate_dm_coordinates(
+            Nx=zwfs_ns.dm.Nact_x, Ny=zwfs_ns.dm.Nact_y, spacing=zwfs_ns.dm.dm_pitch
+        )
     )
 
     # plt.figure(); plt.scatter([xx[0] for xx in dm_coords], [xx[1] for xx in dm_coords] ); plt.show();
@@ -1487,7 +1353,6 @@ def update_dm_registration_wavespace(transform_matrix, zwfs_ns):
     )
 
     return zwfs_ns
-
 
 
 def init_zwfs(grid_ns, optics_ns, dm_ns):
@@ -1677,6 +1542,8 @@ def init_zwfs(grid_ns, optics_ns, dm_ns):
         dm_act_2_wave_space_transform_matrix, zwfs_ns
     )
 
+    zwfs_ns.propagator = InplacePropagator(zwfs_ns.grid.wave_coord.X.shape)
+
     return zwfs_ns
 
 
@@ -1721,129 +1588,6 @@ def first_stage_ao(
         return ao_1
 
 
-def test_propagation(zwfs_ns):
-    """_summary_
-    just test propagating through the zwfs system with :
-        -small (10nm rms) random internal aberations ,
-        -no atmospheric aberations ,
-        -the current DM state in the zwfs_ns
-    Args:
-        zwfs_ns (_type_): _description_
-
-    Returns:
-        _type_: phi, phi_internal, N0, I0, I
-            phi is the wavefront phase (at defined central wvl) from current dm, atm, internal aberrations
-            phi_internal is the wavefront phase (at defined central wvl)  from defined flat dm, internal aberrations
-            N0 is intensity with flat dm, no phasemask
-            I0 is intensity with flat dm,  phasemask
-            I is intensity with input dm, phasemask
-    """
-    opd_atm = (
-        0 * zwfs_ns.grid.pupil_mask * np.random.randn(*zwfs_ns.grid.pupil_mask.shape)
-    )
-
-    opd_internal = (
-        10e-9
-        * zwfs_ns.grid.pupil_mask
-        * np.random.randn(*zwfs_ns.grid.pupil_mask.shape)
-    )
-
-    # get the OPD from the DM in the wave space.
-    # the only real dynamic thing needed is the current command of the DM
-    # zwfs_ns.dm.current_cmd
-    opd_flat_dm = zwfs_ns.compiled_dm.eval(zwfs_ns.dm.dm_flat * zwfs_ns.dm.opd_per_cmd)
-    opd_current_dm = zwfs_ns.compiled_dm.eval(
-        zwfs_ns.dm.current_cmd * zwfs_ns.dm.opd_per_cmd
-    )
-
-    phi_internal = (
-        2 * np.pi / zwfs_ns.optics.wvl0 * (opd_internal + opd_flat_dm)
-    )  # phi_atm , phi_dm are in opd
-
-    phi = (
-        2 * np.pi / zwfs_ns.optics.wvl0 * (opd_internal + opd_current_dm + opd_atm)
-    )  # phi_atm , phi_dm are in opd
-
-    amp = 1e2 * zwfs_ns.grid.pupil_mask
-
-    get_pupil_intensity(
-        phi=phi_internal,
-        amp=amp,
-        theta=zwfs_ns.optics.theta,
-        phasemask_diameter=zwfs_ns.optics.mask_diam,
-        phasemask_mask=zwfs_ns.grid.phasemask_mask,
-        pupil_diameter=zwfs_ns.grid.N,
-        fplane_pixels=zwfs_ns.focal_plane.fplane_pixels,
-        pixels_across_mask=zwfs_ns.focal_plane.pixels_across_mask,
-    )
-
-    N0 = get_pupil_intensity(
-        phi=phi_internal,
-        amp=amp,
-        theta=0,
-        phasemask_diameter=zwfs_ns.optics.mask_diam,
-        phasemask_mask=zwfs_ns.grid.phasemask_mask,
-        pupil_diameter=zwfs_ns.grid.N,
-        fplane_pixels=zwfs_ns.focal_plane.fplane_pixels,
-        pixels_across_mask=zwfs_ns.focal_plane.pixels_across_mask,
-    )
-
-    I0 = get_pupil_intensity(
-        phi=phi_internal,
-        amp=amp,
-        theta=zwfs_ns.optics.theta,
-        phasemask_diameter=zwfs_ns.optics.mask_diam,
-        phasemask_mask=zwfs_ns.grid.phasemask_mask,
-        pupil_diameter=zwfs_ns.grid.N,
-        fplane_pixels=zwfs_ns.focal_plane.fplane_pixels,
-        pixels_across_mask=zwfs_ns.focal_plane.pixels_across_mask,
-    )
-
-    Intensity = get_pupil_intensity(
-        phi=phi,
-        amp=amp,
-        theta=zwfs_ns.optics.theta,
-        phasemask_diameter=zwfs_ns.optics.mask_diam,
-        phasemask_mask=zwfs_ns.grid.phasemask_mask,
-        pupil_diameter=zwfs_ns.grid.N,
-        fplane_pixels=zwfs_ns.focal_plane.fplane_pixels,
-        pixels_across_mask=zwfs_ns.focal_plane.pixels_across_mask,
-    )
-
-    # get_pupil_intensity( phi = phi, theta = zwfs_ns.optics.theta, phasemask=zwfs_ns.grid.phasemask_mask, amp=amp )
-
-    return phi, phi_internal, N0, I0, Intensity
-
-
-def average_subarrays(array, block_size):
-    """
-    Averages non-overlapping sub-arrays of a given 2D NumPy array.
-
-    Parameters:
-    array (numpy.ndarray): Input 2D array of shape (N, M).
-    block_size (tuple): Size of the sub-array blocks (height, width).
-
-    Returns:
-    numpy.ndarray: 2D array containing the averaged values of the sub-arrays.
-    """
-    # Check if the array dimensions are divisible by the block size
-    if array.shape[0] % block_size[0] != 0 or array.shape[1] % block_size[1] != 0:
-        raise ValueError("Array dimensions must be divisible by the block size.")
-
-    # Reshape the array to isolate the sub-arrays
-    reshaped = array.reshape(
-        array.shape[0] // block_size[0],
-        block_size[0],
-        array.shape[1] // block_size[1],
-        block_size[1],
-    )
-
-    # Compute the mean of the sub-arrays
-    averaged_subarrays = reshaped.mean(axis=(1, 3))
-
-    return averaged_subarrays
-
-
 def sum_subarrays(array, block_size):
     """
     Averages non-overlapping sub-arrays of a given 2D NumPy array.
@@ -1871,13 +1615,6 @@ def sum_subarrays(array, block_size):
     summed_subarrays = reshaped.sum(axis=(1, 3))
 
     return summed_subarrays
-
-
-def calculate_detector_binning_factor(
-    grid_pixels_across_pupil, detector_pixels_across_pupil
-):
-    binning = grid_pixels_across_pupil / detector_pixels_across_pupil
-    return binning
 
 
 def detect(i, binning, qe, dit, ron=0, include_shotnoise=True, spectral_bandwidth=None):
@@ -2043,8 +1780,6 @@ def get_I0(
     include_shotnoise=True,
 ):
     """_summary_
-    ## LEGACY - should use get_I0_configured now which can handle fresnel propagaation and polychromatic spectrum consistently from config file
-
     propagates the input field with phase described by opd_input and internal aberrations described by opd_internal, field flux described by amp_input
     through a Zernike wavefront sensor system described by the zwfs_ns namespace.
 
@@ -2108,61 +1843,7 @@ def get_I0(
             include_shotnoise=include_shotnoise,
             spectral_bandwidth=zwfs_ns.stellar.bandwidth,
         )
-        # average_subarrays(array=Intensity, block_size = detector)
-
     return Intensity
-
-
-def get_I0_configured(
-    opd_input,
-    amp_input,
-    opd_internal,
-    zwfs_ns,
-    detector=None,
-    include_shotnoise=True,
-    spectral_bandwidth=_AUTO_SPECTRAL_BANDWIDTH,
-    force_fresnel=None,
-    force_polychromatic=None,
-    return_intermediates=False,
-):
-    """
-    Generate the Baldr reference intensity I0 using the configured propagation
-    path.
-
-    I0 is the phase-mask-in reference intensity. It is evaluated with the DM set
-    to its flat command, zwfs_ns.dm.dm_flat, then the previous DM command is
-    restored.
-
-    This wrapper uses get_frame_configured(...), so it supports the same routing:
-
-        non-Fresnel monochromatic
-        non-Fresnel polychromatic
-        Fresnel monochromatic
-        Fresnel polychromatic
-
-    This is preferred over legacy get_I0(...) for simulations using Fresnel
-    propagation or explicit spectral integration.
-    """
-    original_cmd = zwfs_ns.dm.current_cmd.copy()
-
-    try:
-        zwfs_ns.dm.current_cmd = zwfs_ns.dm.dm_flat.copy()
-
-        return get_frame_configured(
-            opd_input=opd_input,
-            amp_input=amp_input,
-            opd_internal=opd_internal,
-            zwfs_ns=zwfs_ns,
-            detector=detector,
-            include_shotnoise=include_shotnoise,
-            spectral_bandwidth=spectral_bandwidth,
-            force_fresnel=force_fresnel,
-            force_polychromatic=force_polychromatic,
-            return_intermediates=return_intermediates,
-        )
-
-    finally:
-        zwfs_ns.dm.current_cmd = original_cmd
 
 
 def get_N0(
@@ -2237,8 +1918,6 @@ def get_N0(
             include_shotnoise=include_shotnoise,
             spectral_bandwidth=zwfs_ns.stellar.bandwidth,
         )
-        # average_subarrays(array=Intensity, block_size = detector)
-
     return Intensity
 
 
@@ -4973,7 +4652,7 @@ def get_frame_fresnel(
         return_terms=True,
     )
 
-    psi_C = zwfs_terms["psi_C"]
+    psi_C = np.ascontiguousarray(zwfs_terms["psi_C"])
 
     dx_phys = fr.D_phys / zwfs_ns.grid.N
 
@@ -4983,13 +4662,13 @@ def get_frame_fresnel(
     )
 
     # 1. Propagate from post-collimator ZWFS pupil plane to D/knife-edge mirror.
-    psi_mirror = fresnel.propagate(
+    zwfs_ns.propagator.ang_spec(
         psi_C,
-        wavelength=wavelength,
-        dx=dx_phys,
-        z=fr.z_to_mirror,
-        method="angular_spectrum",
+        fr.z_to_mirror,
+        wavelength,
+        (dx_phys * zwfs_ns.grid.dim, dx_phys * zwfs_ns.grid.dim),
     )
+    psi_mirror = psi_C
 
     mirror_mask_full = fresnel.circular_aperture(
         psi_mirror.shape,
@@ -5004,13 +4683,13 @@ def get_frame_fresnel(
     psi_after_mirror = psi_mirror * mirror_mask_D
 
     # 2. Propagate mirror to re-imaging lens.
-    field_at_lens = fresnel.propagate(
+    zwfs_ns.propagator.ang_spec(
         psi_after_mirror,
-        wavelength=wavelength,
-        dx=dx_phys,
-        z=fr.z_mirror_to_lens,
-        method="angular_spectrum",
+        fr.z_mirror_to_lens,
+        wavelength,
+        (dx_phys * zwfs_ns.grid.dim, dx_phys * zwfs_ns.grid.dim),
     )
+    field_at_lens = psi_after_mirror
 
     # 3. Apply re-imaging lens.
     field_after_lens = fresnel.apply_thin_lens(

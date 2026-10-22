@@ -7,7 +7,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "BaldrApp"
-version = "0.1.7"
+version = "0.1.8rc1"
 description = "Simulating Baldr - the Zernike Wavefront Sensor for Asgard"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -31,6 +31,7 @@ dependencies = [
     "pyzmq>=25.0.0",
     "asgard_lab_DM_tools==0.0.10",
     "hcipy>=0.7.1",
+    "fresnel-prop==0.1.3",
 ]
 classifiers = [
     "Programming Language :: Python :: 3",
@@ -48,5 +49,6 @@ include = ["baldrapp", "baldrapp.*"]
 
 [dependency-groups]
 dev = [
+    "flameprof>=0.4",
     "ipython>=9.17.1",
 ]
