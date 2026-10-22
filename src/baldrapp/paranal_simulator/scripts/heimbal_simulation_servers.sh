@@ -77,9 +77,9 @@ START_ORDER=(
   shm_creator_sim
   sim_mdm_server
   fake_zmq_server
-  baldr_sim
   lab_mdm_gui
   shmview_gui
+  baldr_sim
   baldr_sim_gui
 )
 

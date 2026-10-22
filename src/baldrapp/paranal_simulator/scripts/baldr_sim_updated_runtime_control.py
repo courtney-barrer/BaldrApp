@@ -1226,6 +1226,13 @@ config_path = (
     / "src/baldrapp/paranal_simulator/fake_configs/baldr_config.json"
 )
 
+# set DM flat on channel zero to 0.5 for all beams 
+
+dm_flat_chn = dict()
+for beam in beams_shown:
+    dm_flat_chn[beam] = shm(f"/dev/shm/dm{beam}disp00.im.shm", nosem=False)
+    dm_flat_chn[beam].set_data(0.5*np.ones([12,12]))
+    #dm_flat_chn[beam].post_sems(1)
 # Initialise one independent ZWFS namespace per beam.
 # The configured frame dispatcher will automatically use:
 #   - polychromatic propagation if zwfs.spectrum.enabled and n_wvl > 1
