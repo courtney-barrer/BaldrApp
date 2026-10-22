@@ -14,6 +14,5 @@ __pycache__/
 dist/
 temp_build_env/
 build/
-*.egg-info
-BaldrApp.egg-info/
+*.egg-info/
 .vscode
