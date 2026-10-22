@@ -29,7 +29,7 @@ dependencies = [
     "scipy-stubs>=1.17.1.5",
     "shmview>=0.0.10",
     "streamlit>=1.58.0",
-    "zmq>=0.0.0",
+    "pyzmq>=25.0.0",
     "asgard_lab_DM_tools==0.0.10",
 
 ]
@@ -40,12 +40,11 @@ classifiers = [
 
 
 [project.scripts]
-closed-loop-pyqtgraph = "baldrapp.apps.baldr_closed_loop_app:closed_loop_pyqtgraph.main"
-baldr-fresnel-app = "baldrapp.apps.baldr_alignment_app:Baldr_Fresnel_App.main"
+baldr = "baldrapp.paranal_simulator.cli:run_heimbal"
 
 
 [tool.setuptools.packages.find]
-where = ["./"]
+where = ["src"]
 include = ["baldrapp", "baldrapp.*"]
 
 [tool.uv.sources]

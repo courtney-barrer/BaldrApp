@@ -21,6 +21,16 @@ git clone https://github.com/courtney-barrer/BaldrApp
 ```
 The pip installation was tested on only on python 3.12.7. 
 
+To run the paranal simulator after installation simply write 
+```bash
+baldr start
+```
+this should start all the camera, DM and MDS (multi-device server - which controls motors) as well as a gui to control the system state and a gui for the DM control and simulated camera frames of Baldr. For troubleshooting logs will be written to BaldrApp/.logs. The PIDs of all these processes are tracked and will continue running in the background even if you close the guis - so to close things properly run 
+```bash
+baldr stop
+```
+which will look at the PID log file and close safety all the processes running with the simulator. 
+
 ## Installation with Nix `flake`s
 If you are using Nix for package management, you can initialise a `devShell` with all the required dependencies, and installing the python package and GUIs using:
 ```bash
