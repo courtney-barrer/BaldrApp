@@ -23,15 +23,14 @@ dependencies = [
     "poppy>=1.1.2",
     "pyqt5>=5.15.11",
     "pyqtgraph>=0.14.0",
-    "pyzelda",
     "scikit-image>=0.26.0",
     "scipy>=1.17.1",
     "scipy-stubs>=1.17.1.5",
     "shmview>=0.0.10",
     "streamlit>=1.58.0",
-    "zmq>=0.0.0",
+    "pyzmq>=25.0.0",
     "asgard_lab_DM_tools==0.0.10",
-
+    "hcipy>=0.7.1",
 ]
 classifiers = [
     "Programming Language :: Python :: 3",
@@ -40,13 +39,14 @@ classifiers = [
 
 
 [project.scripts]
-closed-loop-pyqtgraph = "baldrapp.apps.baldr_closed_loop_app:closed_loop_pyqtgraph.main"
-baldr-fresnel-app = "baldrapp.apps.baldr_alignment_app:Baldr_Fresnel_App.main"
+baldr = "baldrapp.paranal_simulator.cli:run_heimbal"
 
 
 [tool.setuptools.packages.find]
-where = ["./"]
+where = ["src"]
 include = ["baldrapp", "baldrapp.*"]
 
-[tool.uv.sources]
-pyzelda = { git = "https://github.com/courtney-barrer/pyZELDA#egg=b42aaea5c8a47026783a15391df5e058360ea15e" }
+[dependency-groups]
+dev = [
+    "ipython>=9.17.1",
+]

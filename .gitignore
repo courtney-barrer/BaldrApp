@@ -16,3 +16,5 @@ temp_build_env/
 build/
 BaldrApp.egg-info/
 .venv/
+*.egg-info/
+.vscode
