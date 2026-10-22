@@ -1,0 +1,77 @@
+{
+  "results": [
+    {
+      "camera": "camera_1",
+      "serial": "503524",
+      "mode": "ultra_quiet",
+      "exposure_s": 0.0002806323529411765,
+      "dark_frames": 100,
+      "reference_noise_e_rms": 0.7,
+      "reference_gain_e_per_adu": 0.23,
+      "dark_noise_rms_adu": 3.064611945586385,
+      "dark_noise_median_adu": 2.484619353811229,
+      "noise_e_using_reference_gain": 0.7048607474848686,
+      "noise_difference_percent_using_reference_gain": 0.6943924978383809,
+      "measured_gain_e_per_adu": 0.21793805282781478,
+      "gain_fit_se_e_per_adu": 0.00203925533163829,
+      "gain_difference_percent": -5.244324857471838,
+      "noise_e_using_measured_gain": 0.6678955600939578,
+      "noise_difference_percent_using_measured_gain": -4.586348558006026,
+      "comparison_status": "Reference comparison only; no acceptance tolerances supplied",
+      "ptc_rms_residual_adu2": 750.9040984984825
+    },
+    {
+      "camera": "camera_1",
+      "serial": "503524",
+      "mode": "standard",
+      "exposure_s": 6.576470588235294e-05,
+      "dark_frames": 100,
+      "reference_noise_e_rms": 0.95,
+      "reference_gain_e_per_adu": 0.25,
+      "dark_noise_rms_adu": 3.812102487312968,
+      "dark_noise_median_adu": 3.3281171308058903,
+      "noise_e_using_reference_gain": 0.953025621828242,
+      "noise_difference_percent_using_reference_gain": 0.31848650823600444,
+      "measured_gain_e_per_adu": 0.2184889381175717,
+      "gain_fit_se_e_per_adu": 0.0013254334866452063,
+      "gain_difference_percent": -12.604424752971322,
+      "noise_e_using_measured_gain": 0.8329022244483643,
+      "noise_difference_percent_using_measured_gain": -12.326081637014285,
+      "comparison_status": "Reference comparison only; no acceptance tolerances supplied",
+      "ptc_rms_residual_adu2": 585.2844142318528
+    },
+    {
+      "camera": "camera_1",
+      "serial": "503524",
+      "mode": "fast",
+      "exposure_s": 1.763235294117647e-05,
+      "dark_frames": 100,
+      "reference_noise_e_rms": 1.48,
+      "reference_gain_e_per_adu": 0.24,
+      "dark_noise_rms_adu": 6.301135406286466,
+      "dark_noise_median_adu": 5.911809786308673,
+      "noise_e_using_reference_gain": 1.5122724975087518,
+      "noise_difference_percent_using_reference_gain": 2.1805741559967506,
+      "measured_gain_e_per_adu": 0.2168609244039533,
+      "gain_fit_se_e_per_adu": 0.0019371579358959904,
+      "gain_difference_percent": -9.641281498352793,
+      "noise_e_using_measured_gain": 1.366470049001763,
+      "noise_difference_percent_using_measured_gain": -7.67094263501602,
+      "comparison_status": "Reference comparison only; no acceptance tolerances supplied",
+      "ptc_rms_residual_adu2": 836.0049249583997
+    }
+  ],
+  "fit_range_adu": [
+    500,
+    35000
+  ],
+  "caveats": [
+    "No formal acceptance limits supplied.",
+    "Short-dark temporal noise includes dark shot noise and drift. RMS across pixels is compared, with no pixel rejection.",
+    "Measured PTC gain is an effective gain for this ROI/mode. Fit SE excludes systematic errors and shared-dark covariance.",
+    "Inspect PTC curvature, source stability, uniformity and clipping. A successful fit does not establish linearity.",
+    "Fixed exposure, manually varied illumination; this does not itself measure response linearity versus calibrated flux.",
+    "Exposure readback may be quantized. Centre position and 16-bit output are test choices.",
+    "No EMVA certification is claimed."
+  ]
+}

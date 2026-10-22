@@ -1,0 +1,119 @@
+======== 2026-10-22T16:04:56+11:00 START baldr_sim ========
+Traceback (most recent call last):
+  File "/home/bbarrer/Documents/baldr/BaldrApp/src/baldrapp/paranal_simulator/scripts/baldr_sim_updated_runtime_control.py", line 12, in <module>
+    from hcipy import make_pupil_grid
+ModuleNotFoundError: No module named 'hcipy'
+======== 2026-10-22T16:05:51+11:00 START baldr_sim ========
+Config: using stellar.bandwidth = 300 nm as scalar effective bandwidth.
+Config: stellar.bandwidth is consistent with spectrum wavelength range (300 nm).
+
+=== Baldr simulator optical configuration ===
+config_path: /home/bbarrer/Documents/baldr/BaldrApp/src/baldrapp/paranal_simulator/fake_configs/baldr_config.json
+grid N: 64
+grid dim: 256
+detector binning: 4
+stellar.bandwidth [nm]: 300.0
+spectrum wavelengths [um]: [1.5  1.65 1.8 ]
+sum spectrum weights_nm: 300.0
+fresnel enabled: True
+atmosphere phase enabled: True
+first-stage AO enabled: True
+first-stage AO modes removed: 14
+scintillation enabled: True
+[SOURCE] Available source profiles: ['internal', 'onsky']
+Warning: writing wrong data-type to shared memory
+Simulator control ZMQ: tcp://127.0.0.1:6670
+Camera reply: "1.00\r\n"
+MDS reply (on): NOK
+MDS reply (off): NOK
+ACK moved beam 1 to mask H3 at (3630.00, 3898.99)
+[PHASEMASK] Loaded 10 masks from /home/bbarrer/Documents/baldr/BaldrApp/src/baldrapp/paranal_simulator/fake_configs/phasemask_properties.json
+[TELEMETRY] Disabled: No module named 'baldrapp.apps'
+[SOURCE] Initial source profile 'onsky': flux_density=1500 phot/s/pix/nm, T=4500.0 K, pupil=AT
+[PHASEMASK] active=H3 theta_wvl0=1.5137 mask_diam_wvl0=1.03103 theta_model=physical_depth diameter_model=physical
+Traceback (most recent call last):
+  File "/home/bbarrer/Documents/baldr/BaldrApp/src/baldrapp/paranal_simulator/scripts/baldr_sim_updated_runtime_control.py", line 1852, in <module>
+    generate_atmosphere_and_source_for_beam(
+  File "/home/bbarrer/Documents/baldr/BaldrApp/src/baldrapp/paranal_simulator/scripts/baldr_sim_updated_runtime_control.py", line 848, in generate_atmosphere_and_source_for_beam
+    phase_after_ao = bldr.first_stage_ao(
+                     ^^^^^^^^^^^^^^^^^^^^
+  File "/home/bbarrer/Documents/baldr/BaldrApp/src/baldrapp/utils/baldr_core.py", line 1712, in first_stage_ao
+    modes[:, pupil_pixels].T, phase[pupil_pixels], rcond=None
+                              ~~~~~^^^^^^^^^^^^^^
+IndexError: boolean index did not match indexed array along axis 0; size of axis is 256 but size of corresponding boolean axis is 50
+======== 2026-10-22T16:07:01+11:00 START baldr_sim ========
+Config: using stellar.bandwidth = 300 nm as scalar effective bandwidth.
+Config: stellar.bandwidth is consistent with spectrum wavelength range (300 nm).
+
+=== Baldr simulator optical configuration ===
+config_path: /home/bbarrer/Documents/baldr/BaldrApp/src/baldrapp/paranal_simulator/fake_configs/baldr_config.json
+grid N: 64
+grid dim: 256
+detector binning: 4
+stellar.bandwidth [nm]: 300.0
+spectrum wavelengths [um]: [1.5  1.65 1.8 ]
+sum spectrum weights_nm: 300.0
+fresnel enabled: True
+atmosphere phase enabled: True
+first-stage AO enabled: True
+first-stage AO modes removed: 14
+scintillation enabled: True
+[SOURCE] Available source profiles: ['internal', 'onsky']
+Warning: writing wrong data-type to shared memory
+Simulator control ZMQ: tcp://127.0.0.1:6670
+Camera reply: "1.00\r\n"
+MDS reply (on): NOK
+MDS reply (off): NOK
+ACK moved beam 1 to mask H3 at (3630.00, 3898.99)
+[PHASEMASK] Loaded 10 masks from /home/bbarrer/Documents/baldr/BaldrApp/src/baldrapp/paranal_simulator/fake_configs/phasemask_properties.json
+[TELEMETRY] Disabled: No module named 'baldrapp.apps'
+[SOURCE] Initial source profile 'onsky': flux_density=1500 phot/s/pix/nm, T=4500.0 K, pupil=AT
+[PHASEMASK] active=H3 theta_wvl0=1.5137 mask_diam_wvl0=1.03103 theta_model=physical_depth diameter_model=physical
+Traceback (most recent call last):
+  File "/home/bbarrer/Documents/baldr/BaldrApp/src/baldrapp/paranal_simulator/scripts/baldr_sim_updated_runtime_control.py", line 1852, in <module>
+    generate_atmosphere_and_source_for_beam(
+  File "/home/bbarrer/Documents/baldr/BaldrApp/src/baldrapp/paranal_simulator/scripts/baldr_sim_updated_runtime_control.py", line 848, in generate_atmosphere_and_source_for_beam
+    phase_after_ao = bldr.first_stage_ao(
+                     ^^^^^^^^^^^^^^^^^^^^
+  File "/home/bbarrer/Documents/baldr/BaldrApp/src/baldrapp/utils/baldr_core.py", line 1712, in first_stage_ao
+    modes[:, pupil_pixels].T, phase[pupil_pixels], rcond=None
+                              ~~~~~^^^^^^^^^^^^^^
+IndexError: boolean index did not match indexed array along axis 0; size of axis is 256 but size of corresponding boolean axis is 50
+======== 2026-10-22T16:09:55+11:00 START baldr_sim ========
+Config: using stellar.bandwidth = 300 nm as scalar effective bandwidth.
+Config: stellar.bandwidth is consistent with spectrum wavelength range (300 nm).
+
+=== Baldr simulator optical configuration ===
+config_path: /home/bbarrer/Documents/baldr/BaldrApp/src/baldrapp/paranal_simulator/fake_configs/baldr_config.json
+grid N: 64
+grid dim: 256
+detector binning: 4
+stellar.bandwidth [nm]: 300.0
+spectrum wavelengths [um]: [1.5  1.65 1.8 ]
+sum spectrum weights_nm: 300.0
+fresnel enabled: True
+atmosphere phase enabled: True
+first-stage AO enabled: True
+first-stage AO modes removed: 14
+scintillation enabled: True
+[SOURCE] Available source profiles: ['internal', 'onsky']
+Warning: writing wrong data-type to shared memory
+Simulator control ZMQ: tcp://127.0.0.1:6670
+Camera reply: "1.00\r\n"
+MDS reply (on): NOK
+MDS reply (off): NOK
+ACK moved beam 1 to mask H3 at (3630.00, 3898.99)
+[PHASEMASK] Loaded 10 masks from /home/bbarrer/Documents/baldr/BaldrApp/src/baldrapp/paranal_simulator/fake_configs/phasemask_properties.json
+[TELEMETRY] Disabled: No module named 'baldrapp.apps'
+[SOURCE] Initial source profile 'onsky': flux_density=1500 phot/s/pix/nm, T=4500.0 K, pupil=AT
+[PHASEMASK] active=H3 theta_wvl0=1.5137 mask_diam_wvl0=1.03103 theta_model=physical_depth diameter_model=physical
+Traceback (most recent call last):
+  File "/home/bbarrer/Documents/baldr/BaldrApp/src/baldrapp/paranal_simulator/scripts/baldr_sim_updated_runtime_control.py", line 1852, in <module>
+    generate_atmosphere_and_source_for_beam(
+  File "/home/bbarrer/Documents/baldr/BaldrApp/src/baldrapp/paranal_simulator/scripts/baldr_sim_updated_runtime_control.py", line 848, in generate_atmosphere_and_source_for_beam
+    phase_after_ao = bldr.first_stage_ao(
+                     ^^^^^^^^^^^^^^^^^^^^
+  File "/home/bbarrer/Documents/baldr/BaldrApp/src/baldrapp/utils/baldr_core.py", line 1712, in first_stage_ao
+    modes[:, pupil_pixels].T, phase[pupil_pixels], rcond=None
+                              ~~~~~^^^^^^^^^^^^^^
+IndexError: boolean index did not match indexed array along axis 0; size of axis is 256 but size of corresponding boolean axis is 50
