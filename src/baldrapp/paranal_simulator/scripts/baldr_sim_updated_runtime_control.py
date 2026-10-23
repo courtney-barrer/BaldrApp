@@ -716,11 +716,6 @@ def init_dynamic_atmosphere_for_beam(zwfs):
         ao_cfg = getattr(zwfs, "first_stage_ao", None)
         ao_enabled = enabled and bool(get_cfg_value(ao_cfg, "enabled", False))
         n_modes = int(get_cfg_value(ao_cfg, "Nmodes_removed", 0))
-        if enabled and bool(get_cfg_value(get_cfg_value(atm_cfg, "scintillation"), "enabled", False)):
-            raise NotImplementedError(
-                "schema v2 multilayer scintillation is reserved for Stage 4. "
-                "Set atmosphere.scintillation.enabled=false for phase-only turbulence."
-            )
         model = (atmosphere_v2.MultilayerAtmosphere.from_resolved_config(
             zwfs.resolved_config,
             grid_dim=int(zwfs.grid.dim),
@@ -732,7 +727,8 @@ def init_dynamic_atmosphere_for_beam(zwfs):
             "v2_atmosphere": model,
             "phase_enabled": enabled,
             "ao_enabled": ao_enabled,
-            "scint_enabled": False,
+            "scint_enabled": enabled and bool(get_cfg_value(
+                get_cfg_value(atm_cfg, "scintillation"), "enabled", False)),
             "ao_basis": basis,
             "n_modes_removed": n_modes,
             "ao_phase_scaling_factor": float(get_cfg_value(ao_cfg, "phase_scaling_factor", 1.0)),
@@ -823,6 +819,76 @@ def init_dynamic_atmosphere_for_beam(zwfs):
     }
 
 
+
+def generate_scintillation_fields_for_beam(zwfs, amp_input_0, dynamic_state):
+    """Return a v2 on-sky complex field at every configured wavelength.
+
+    The original independent infinite-screen layers are advanced once per
+    physical frame, then propagated top-down. Modal AO applies a common
+    wavelength-independent OPD correction to the complex pupil fields.
+    The source pupil is applied only AFTER atmospheric propagation.
+
+    Returns
+    -------
+    incident_fields : complex ndarray, shape (n_wavelength, ny, nx)
+        Entrance-pupil amplitude carrying band-integrated photons/s/pixel;
+        do not multiply by photon fractions here (frame wrapper does that).
+    diagnostic_opd : 2D ndarray (m)
+        The reference-wavelength wavefront residual for telemetry only.
+        This must NOT be supplied as opd_input to the frame dispatcher,
+        since its phase already exists in incident_fields.
+    """
+    if not dynamic_state.get('scint_enabled', False):
+        raise ValueError('scintillation is disabled in runtime state')
+    model = dynamic_state['v2_atmosphere']
+    if model is None:
+        raise ValueError('v2 atmosphere is disabled')
+    wavelengths = np.asarray(zwfs.spectrum.wavelengths, dtype=float)
+    atmospheric_fields = model.next_fields(wavelengths)
+    pupil = np.asarray(zwfs.grid.pupil_mask, dtype=float)
+    amplitude = np.asarray(amp_input_0, dtype=float)
+    if amplitude.shape != pupil.shape or np.any(amplitude < 0):
+        raise ValueError('source amplitude does not match pupil')
+
+    # Estimate the sensed pupil OPD at the nearest sampled reference
+    # wavelength; unwrap on the unmasked wave-optics grid, then correct only
+    # over the telescope pupil. AO correction is applied to every wavelength
+    # as OPD, i.e. exp(-2pi*i*OPD/λ), never as wavelength-independent phase.
+    k_ref = int(np.argmin(np.abs(wavelengths - float(zwfs.optics.wvl0))))
+    phase = np.angle(atmospheric_fields[k_ref])
+    phase_unwrapped = np.unwrap(np.unwrap(phase, axis=0), axis=1)
+    physical_opd = phase_unwrapped * (wavelengths[k_ref] / (2*np.pi))
+    correction_opd = np.zeros_like(pupil)
+    diagnostic_opd = np.zeros_like(pupil)
+    if dynamic_state['phase_enabled']:
+        diagnostic_opd = np.where(pupil > 0, physical_opd, 0.0)
+        if dynamic_state['ao_enabled'] and dynamic_state['ao_basis'] is not None:
+            # Same modal AO correction engine as Stage 3. We reconstruct an
+            # actual OPD correction and apply it to the propagated field.
+            sensed = diagnostic_opd * dynamic_state['ao_phase_scaling_factor']
+            diagnostic_opd = atmosphere_v2.modal_ao_residual_opd(
+                sensed, dynamic_state['ao_basis'], pupil,
+                dynamic_state['n_modes_removed'],
+                correction_gain=dynamic_state['ao_correction_gain'],
+                remove_piston=dynamic_state['ao_remove_piston'],
+                lag_frames=dynamic_state['ao_lag_frames'],
+                history=dynamic_state['v2_ao_history'],
+            )
+            correction_opd = np.where(pupil > 0, sensed - diagnostic_opd, 0.0)
+        else:
+            dynamic_state['v2_ao_history'].clear()
+    else:
+        dynamic_state['v2_ao_history'].clear()
+        # The runtime phase toggle may be disabled independently of
+        # scintillation. Retain atmospheric amplitude in that case.
+        atmospheric_fields = np.abs(atmospheric_fields).astype(complex)
+
+    correction_phase = np.exp(-2j*np.pi*correction_opd[None] /
+                              wavelengths[:, None, None])
+    incident_fields = atmospheric_fields * correction_phase * amplitude[None]
+    return incident_fields, diagnostic_opd
+
+
 def generate_atmosphere_and_source_for_beam(zwfs, amp_input_0, dynamic_state):
     """
     Evolve configured atmosphere/scintillation and return:
@@ -860,7 +926,7 @@ def generate_atmosphere_and_source_for_beam(zwfs, amp_input_0, dynamic_state):
                 # Clear stale delayed corrections after AO is disabled.
                 dynamic_state["v2_ao_history"].clear()
                 opd_input = np.where(pupil > 0, opd_input, 0.0)
-        # Phase-only in Stage 3; amplitude/scintillation comes in Stage 4.
+        # Phase-only path, retained when v2 scintillation is disabled.
         return opd_input, amp_input_0
 
     if dynamic_state["phase_enabled"]:
@@ -1856,6 +1922,8 @@ while True:
         # OPD through opd_input. This avoids double-counting the DM.
         zwfs_ns[beam].dm.current_cmd = dmcmd.copy()
 
+        incident_fields_runtime = None
+        opd_diagnostic_runtime = None
         # If this script has dynamic atmosphere functions/state defined, use them
         # in on-sky mode. Otherwise fall back to the current internal/static path.
         if (
@@ -1867,13 +1935,24 @@ while True:
                 dynamic_atmosphere_state[beam],
                 sim_control,
             )
-            opd_input_runtime, amp_input_runtime = (
-                generate_atmosphere_and_source_for_beam(
-                    zwfs=zwfs_ns[beam],
-                    amp_input_0=amp_input[beam],
-                    dynamic_state=runtime_dynamic_state,
+            if (getattr(zwfs_ns[beam], 'config_schema_version', None) == 2
+                    and runtime_dynamic_state['scint_enabled']):
+                incident_fields_runtime, opd_diagnostic_runtime = (
+                    generate_scintillation_fields_for_beam(
+                        zwfs_ns[beam], amp_input[beam], runtime_dynamic_state,
+                    )
                 )
-            )
+                # Atmospheric phase already resides in the complex fields.
+                opd_input_runtime = np.zeros_like(zero_opd[beam])
+                amp_input_runtime = amp_input[beam]
+            else:
+                opd_input_runtime, amp_input_runtime = (
+                    generate_atmosphere_and_source_for_beam(
+                        zwfs=zwfs_ns[beam],
+                        amp_input_0=amp_input[beam],
+                        dynamic_state=runtime_dynamic_state,
+                    )
+                )
         else:
             opd_input_runtime = zero_opd[beam]
             amp_input_runtime = amp_input[beam]
@@ -1885,6 +1964,7 @@ while True:
             zwfs_ns=zwfs_ns[beam],
             detector=zwfs_ns[beam].detector,
             include_shotnoise=include_shotnoise,
+            incident_fields=incident_fields_runtime,
         )
 
         telemetry_dm_opd = None
@@ -1894,7 +1974,7 @@ while True:
             )
         runtime_status["opd_diagnostics"][str(beam)] = update_opd_diagnostics(
             zwfs_ns[beam],
-            opd_input_runtime,
+            opd_input_runtime if opd_diagnostic_runtime is None else opd_diagnostic_runtime,
             opd_internal[beam],
             liveindex,
             sim_control["mode"],

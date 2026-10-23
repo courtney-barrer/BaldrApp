@@ -8,7 +8,7 @@ The v2 `atmosphere` block describes one integrated von Kármán turbulence profi
 - `L0_m`: common von Kármán outer scale (metres) for every layer.
 - `layers`: one or more layers, each with geometric `altitude_m`, `cn2_fraction`, `wind_speed_m_per_s`, and `wind_direction_deg`.
 - `random_seed`: the single seed used to derive **independent** layer seeds.
-- `scintillation.enabled: false`: required for Stage 3; `true` fails explicitly pending the Stage-4 complex-field implementation.
+- `scintillation.enabled: false`: preserves the Stage 3 phase-only path; `true` now enables Stage 4 full-field Fresnel propagation through those same layers.
 - `simulator_runtime.time_step_s`: physical simulated time increment for each on-sky camera frame. **Not** `sleep_time_s`, which only throttles wall-clock execution.
 
 Cn² fractions must sum to unity. For each layer, the code derives
@@ -64,9 +64,10 @@ This OPD is passed to the existing ZWFS propagation and acquires wavelength-
 dependent phase through `2*pi*OPD/wavelength`; it must **not** be treated as a
 phase array in radians at the ZWFS central wavelength.
 
-For the phase-only mode, layer altitudes are **metadata**, not propagation
+For phase-only operation, layer altitudes are **metadata**, not propagation
 distances: an on-axis source sees the summed OPD at the entrance pupil.
-They will become Fresnel propagation separations in Stage 4.
+With Stage 4 scintillation enabled, they are Fresnel propagation separations.
+See `docs/multilayer_scintillation_v2.md`.
 
 First-stage AO acts on the **summed physical OPD** using the existing
 Zernike basis: least-squares modal reconstruction, a configured correction
@@ -83,9 +84,8 @@ the next sum of physical layer OPDs; disabling phase from the runtime control
 returns zero atmospheric OPD but continues to advance simulated time.
 Switching to `internal` bypasses atmospheric generation entirely; the
 internal-source spectrum and amplitude are retained. Disabling AO returns
-uncorrected turbulence and clears delayed corrections. Enabling scintillation
-under v2 fails explicitly rather than invoking the independent legacy
-high-altitude screen.
+uncorrected turbulence and clears delayed corrections. Enabling scintillation under v2 now uses Fresnel propagation through the
+same atmospheric layers, not the independent v1 high-altitude screen.
 
 ## Limitations requiring explicit acknowledgement
 

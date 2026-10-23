@@ -4768,6 +4768,7 @@ def get_frame_polychromatic(
     detector=None,
     include_shotnoise=True,
     return_intermediates=False,
+    incident_fields=None,
 ):
     """
     Generate a polychromatic Baldr ZWFS frame using the existing non-Fresnel
@@ -4853,11 +4854,23 @@ def get_frame_polychromatic(
     original_theta = zwfs_ns.optics.theta
     original_mask_diam = zwfs_ns.optics.mask_diam
 
+    # Incident fields are pre-weight, band-integrated amplitude samples at
+    # each wavelength; integrate intensities using v2 photon fractions once.
+    if incident_fields is not None:
+        if getattr(zwfs_ns, 'config_schema_version', None) != 2:
+            raise ValueError('incident_fields is supported only for schema v2')
+        incident_fields = np.asarray(incident_fields)
+        expected = (len(wavelengths), *np.asarray(amp_input).shape)
+        if (incident_fields.shape != expected or
+                not np.iscomplexobj(incident_fields) or
+                not np.all(np.isfinite(incident_fields))):
+            raise ValueError(f'incident_fields must be finite complex with shape {expected}')
+
     I_rate = None
     per_wavelength_outputs = []
 
     try:
-        for wavelength, weight_nm in zip(wavelengths, weights_nm):
+        for sample_index, (wavelength, weight_nm) in enumerate(zip(wavelengths, weights_nm)):
 
             theta = spec.theta_at_wavelength(
                 zwfs_ns.optics,
@@ -4876,9 +4889,17 @@ def get_frame_polychromatic(
             zwfs_ns.optics.theta = float(theta)
             zwfs_ns.optics.mask_diam = float(phasemask_diameter)
 
+            if incident_fields is None:
+                wavelength_opd = opd_input
+                wavelength_amp = amp_input
+            else:
+                field = incident_fields[sample_index]
+                wavelength_amp = np.abs(field)
+                wavelength_opd = opd_input + (float(wavelength)/(2*np.pi))*np.angle(field)
+
             I_density = get_frame(
-                opd_input=opd_input,
-                amp_input=amp_input,
+                opd_input=wavelength_opd,
+                amp_input=wavelength_amp,
                 opd_internal=opd_internal,
                 zwfs_ns=zwfs_ns,
                 detector=None,
@@ -5178,6 +5199,7 @@ def get_frame_fresnel_polychromatic(
     detector=None,
     include_shotnoise=True,
     return_intermediates=False,
+    incident_fields=None,
 ):
     """
     Generate a polychromatic detector-plane Baldr frame using the analytic ZWFS
@@ -5293,10 +5315,22 @@ def get_frame_fresnel_polychromatic(
     if np.sum(weights_nm) <= 0:
         raise ValueError("Spectrum weights_nm must have positive sum.")
 
+    # Incident fields are pre-weight, band-integrated amplitude samples at
+    # each wavelength; integrate intensities using v2 photon fractions once.
+    if incident_fields is not None:
+        if getattr(zwfs_ns, 'config_schema_version', None) != 2:
+            raise ValueError('incident_fields is supported only for schema v2')
+        incident_fields = np.asarray(incident_fields)
+        expected = (len(wavelengths), *np.asarray(amp_input).shape)
+        if (incident_fields.shape != expected or
+                not np.iscomplexobj(incident_fields) or
+                not np.all(np.isfinite(incident_fields))):
+            raise ValueError(f'incident_fields must be finite complex with shape {expected}')
+
     I_rate = None
     per_wavelength_outputs = []
 
-    for wavelength, weight_nm in zip(wavelengths, weights_nm):
+    for sample_index, (wavelength, weight_nm) in enumerate(zip(wavelengths, weights_nm)):
 
         theta = spec.theta_at_wavelength(
             zwfs_ns.optics,
@@ -5309,9 +5343,17 @@ def get_frame_fresnel_polychromatic(
             default_wvl0=zwfs_ns.optics.wvl0,
         )
 
+        if incident_fields is None:
+            wavelength_opd = opd_input
+            wavelength_amp = amp_input
+        else:
+            field = incident_fields[sample_index]
+            wavelength_amp = np.abs(field)
+            wavelength_opd = opd_input + (float(wavelength)/(2*np.pi))*np.angle(field)
+
         out = get_frame_fresnel(
-            opd_input=opd_input,
-            amp_input=amp_input,
+            opd_input=wavelength_opd,
+            amp_input=wavelength_amp,
             opd_internal=opd_internal,
             zwfs_ns=zwfs_ns,
             detector=None,
@@ -5387,6 +5429,7 @@ def get_frame_configured(
     force_fresnel=None,
     force_polychromatic=None,
     return_intermediates=False,
+    incident_fields=None,
 ):
     """
     Generate a Baldr frame using the propagation mode configured in zwfs_ns.
@@ -5508,6 +5551,10 @@ def get_frame_configured(
         # band integrated and must not be multiplied by an arbitrary bandwidth.
         spectral_bandwidth = None
 
+    if incident_fields is not None:
+        if getattr(zwfs_ns, 'config_schema_version', None) != 2 or not use_polychromatic:
+            raise ValueError('incident_fields requires the schema v2 spectral integration path')
+
     # ------------------------------------------------------------
     # Fresnel + polychromatic
     # ------------------------------------------------------------
@@ -5520,6 +5567,7 @@ def get_frame_configured(
             detector=detector,
             include_shotnoise=include_shotnoise,
             return_intermediates=return_intermediates,
+            incident_fields=incident_fields,
         )
 
     # ------------------------------------------------------------
@@ -5550,6 +5598,7 @@ def get_frame_configured(
             detector=detector,
             include_shotnoise=include_shotnoise,
             return_intermediates=return_intermediates,
+            incident_fields=incident_fields,
         )
 
     # ------------------------------------------------------------

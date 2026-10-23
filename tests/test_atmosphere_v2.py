@@ -276,13 +276,20 @@ class MultilayerV2Tests(unittest.TestCase):
         ns['generate_atmosphere_and_source_for_beam'](zwfs, amp, state)
         self.assertEqual(len(state['v2_ao_history']), 0)
 
-    def test_scintillation_explicitly_rejected_until_stage4(self):
+    def test_scintillation_uses_the_same_original_infinite_screen_backend(self):
+        from baldrapp.utils.phasescreens import PhaseScreenKolmogorov
         cfg = deepcopy(self.config)
         cfg['atmosphere']['scintillation']['enabled'] = True
         report = self.fast_report(cfg)
-        with self.assertRaisesRegex(NotImplementedError,'Stage 4'):
-            MultilayerAtmosphere.from_resolved_config(report, grid_dim=16,
+        atm = MultilayerAtmosphere.from_resolved_config(report, grid_dim=16,
                           pupil_pixel_scale_m=1.8/8)
+        self.assertTrue(all(isinstance(l.phase_screen, PhaseScreenKolmogorov)
+                            for l in atm.layers))
+        self.assertTrue(all(l.full_grid and l.phase_screen.scrn.shape[0] > l.size
+                            for l in atm.layers))
+        result = atm.next_fields([1.5e-6, 1.8e-6])
+        self.assertEqual(result.shape, (2, 16, 16))
+        self.assertTrue(np.all(np.isfinite(result)))
 
     def test_disabled_atmosphere_keeps_amplitude_and_zero_opd(self):
         ns=real_runtime_functions()

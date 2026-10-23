@@ -1,4 +1,4 @@
-"""Multilayer phase-only atmosphere using BaldrApp's original infinite screens.
+"""Multilayer phase and optional scintillation from original infinite screens.
 
 Every nonzero-Cn2 layer uses the existing ``phasescreens.PhaseScreenKolmogorov``
 (Fried-style infinite phase screen), the same class used by the original
@@ -6,9 +6,9 @@ Paranal simulator. Wind speed determines how frequently its original
 ``add_row()`` method is called. A rotation of sampling coordinates aligns
 that one extension direction with each layer's configured wind vector.
 
-Outputs are optical-path difference in metres, using the 500 nm reference
-wavelength at which the layer-specific r0 values are defined. No periodized
-FFT tile, alternate screen generator, or new user-facing setting is used.
+Outputs are OPD in metres for phase-only mode, or wavelength-dependent
+complex fields with propagated scintillation. Layer r0 is specified at 500 nm.
+No alternative phase-screen generator or new user-facing setting is used.
 """
 
 from __future__ import annotations
@@ -20,7 +20,7 @@ from dataclasses import dataclass, field
 import numpy as np
 from scipy.ndimage import map_coordinates
 
-from baldrapp.utils import phasescreens
+from baldrapp.utils import fresnel, phasescreens
 
 LAMBDA_REF_M = 500e-9
 
@@ -48,6 +48,7 @@ class FrozenFlowLayer:
     pupil_diameter_pixels: int
     phase_screen: object | None
     _rows_added: int = field(default=0, init=False, repr=False)
+    full_grid: bool = False
 
     def sample_opd(self, time_s: float, *, commit: bool = False) -> np.ndarray:
         if not np.isfinite(time_s) or time_s < 0:
@@ -83,7 +84,8 @@ class FrozenFlowLayer:
             coord = np.arange(self.size, dtype=float) - (self.size - 1) / 2
             y, x = np.meshgrid(coord, coord, indexing='ij')
             radius = self.pupil_diameter_pixels / 2
-            support = x*x + y*y <= radius*radius
+            support = (np.ones_like(x, dtype=bool) if self.full_grid
+                       else x*x + y*y <= radius*radius)
             if not np.any(support):
                 return np.zeros((self.size, self.size), dtype=float)
 
@@ -95,13 +97,13 @@ class FrozenFlowLayer:
                 cos_a, sin_a = 0.0, 1.0
             native_x = sin_a*x - cos_a*y
             native_y = cos_a*x + sin_a*y - fractional_row
-            center = (self.size - 1) / 2
+            center = (screen.scrn.shape[0] - 1) / 2
             src_x = center + native_x[support]
             src_y = center + native_y[support]
             # A telescope pupil with a normal zero-padded FFT grid fits within
             # the native screen at all wind angles. Fail clearly if it does not.
-            if (np.any(src_x < 0) or np.any(src_x > self.size-1) or
-                    np.any(src_y < 0) or np.any(src_y > self.size-1)):
+            if (np.any(src_x < 0) or np.any(src_x > screen.scrn.shape[1]-1) or
+                    np.any(src_y < 0) or np.any(src_y > screen.scrn.shape[0]-1)):
                 raise ValueError('grid.dim leaves insufficient margin around the pupil for wind rotation')
             phase = np.zeros((self.size, self.size), dtype=float)
             phase[support] = map_coordinates(
@@ -142,12 +144,17 @@ class MultilayerAtmosphere:
         derived = resolved['derived']['atmosphere']
         if not cfg['enabled']:
             raise ValueError('atmosphere is disabled')
-        if cfg['scintillation']['enabled']:
-            raise NotImplementedError('v2 multilayer scintillation requires Stage 4 Fresnel propagation')
 
         pupil_diameter = int(resolved['configuration']['grid']['N'])
         if pupil_diameter > grid_dim - 3:
             raise ValueError('grid.dim needs at least three pixels of padding around grid.N for rotated wind sampling')
+        scintillation = bool(cfg['scintillation']['enabled'])
+        # A full atmospheric plane (not a pupil-clipped phase screen) is
+        # required to propagate scintillation. Extend the *same original*
+        # infinite-screen generator's transverse size so a rotated square
+        # can be sampled without wrap or synthetic zero-OPD boundaries.
+        native_dim = (int(np.ceil(np.sqrt(2) * grid_dim)) + 6
+                      if scintillation else grid_dim)
         seeds = np.random.SeedSequence(derived['random_seed']).spawn(len(derived['layers']))
         layers = []
         for entry, rng in zip(derived['layers'], seeds):
@@ -158,7 +165,7 @@ class MultilayerAtmosphere:
                 # This is *exactly* the phase-screen class used in the original
                 # Paranal simulator: neither ft_phase_screen nor a second method.
                 screen = phasescreens.PhaseScreenKolmogorov(
-                    nx_size=int(grid_dim),
+                    nx_size=int(native_dim),
                     pixel_scale=float(pupil_pixel_scale_m),
                     r0=r0, L0=float(cfg['L0_m']), random_seed=seed,
                 )
@@ -171,6 +178,7 @@ class MultilayerAtmosphere:
                 wind_y_m_per_s=float(entry['wind_y_m_per_s']),
                 pixel_scale_m=float(pupil_pixel_scale_m), size=int(grid_dim),
                 pupil_diameter_pixels=pupil_diameter, phase_screen=screen,
+                full_grid=scintillation,
             ))
         return cls(layers, resolved['derived']['simulator_runtime']['time_step_s'])
 
@@ -181,13 +189,80 @@ class MultilayerAtmosphere:
             summed += layer.sample_opd(time_s)
         return summed
 
-    def next_opd(self) -> np.ndarray:
-        """Advance each infinite screen as needed at the next simulated frame."""
-        summed = np.zeros(self.output_shape, dtype=float)
-        for layer in self.layers:
-            summed += layer.sample_opd(self.time_s, commit=True)
+    def next_layer_opds(self) -> list[np.ndarray]:
+        """Advance all original infinite screens once at this simulated time."""
+        layer_opds = [layer.sample_opd(self.time_s, commit=True)
+                      for layer in self.layers]
         self.time_s += self.time_step_s
-        return summed
+        return layer_opds
+
+    def next_opd(self) -> np.ndarray:
+        """Phase-only atmosphere, preserving the Stage 3 behaviour."""
+        return sum(self.next_layer_opds(), np.zeros(self.output_shape))
+
+    def next_fields(self, wavelengths_m) -> np.ndarray:
+        """Wavelength-dependent complex fields before the telescope aperture.
+
+        Each field is illuminated by a uniform unit-amplitude plane wave.
+        No source photon normalization or telescope pupil is applied here.
+        These are applied at the entrance pupil AFTER atmospheric propagation.
+        """
+        if not all(layer.full_grid for layer in self.layers):
+            raise ValueError('next_fields requires scintillation-enabled atmosphere')
+        opds = self.next_layer_opds()
+        return propagate_atmospheric_layers(
+            opds, [layer.altitude_m for layer in self.layers],
+            wavelengths_m, self.layers[0].pixel_scale_m,
+        )
+
+
+def propagate_atmospheric_layers(layer_opds_m, altitudes_m, wavelengths_m,
+                                 pixel_scale_m):
+    """Propagate on-axis plane waves top-down through atmospheric phase layers.
+
+    OPDs are metres; altitudes and pixel scale are metres; wavelengths in metres.
+    The output has shape (n_wavelengths, ny, nx). The angular-spectrum
+    propagator uses the unchanged physical pixel scale. No telescope aperture
+    is applied until after propagation; applying it aloft would generate
+    spurious aperture diffraction/scintillation.
+    """
+    wavelengths = np.asarray(wavelengths_m, dtype=float)
+    altitudes = np.asarray(altitudes_m, dtype=float)
+    screens = [np.asarray(opd, dtype=float) for opd in layer_opds_m]
+    if (wavelengths.ndim != 1 or wavelengths.size == 0 or
+            np.any(~np.isfinite(wavelengths)) or np.any(wavelengths <= 0)):
+        raise ValueError('wavelengths_m must be a nonempty array of positive finite values')
+    if (not screens or len(screens) != len(altitudes) or
+            any(s.shape != screens[0].shape or s.ndim != 2 or not np.all(np.isfinite(s))
+                for s in screens)):
+        raise ValueError('layer OPDs must be matching finite 2D arrays')
+    if (np.any(~np.isfinite(altitudes)) or np.any(altitudes < 0) or
+            not np.isfinite(pixel_scale_m) or pixel_scale_m <= 0):
+        raise ValueError('layer altitudes and pixel scale must be physical')
+    # Stable ordering allows coincident layers, including the ground layer.
+    order = sorted(range(len(screens)), key=lambda i: -altitudes[i])
+    output = np.empty((len(wavelengths), *screens[0].shape), dtype=complex)
+    for k, wavelength in enumerate(wavelengths):
+        field = np.ones(screens[0].shape, dtype=complex)
+        previous_height = float(altitudes[order[0]])
+        for i in order:
+            height = float(altitudes[i])
+            dz = previous_height - height
+            if dz > 0:
+                field = fresnel.propagate(
+                    field, wavelength=float(wavelength), dx=float(pixel_scale_m),
+                    z=dz, method='angular_spectrum', include_global_phase=False,
+                )
+            field *= np.exp(2j * np.pi * screens[i] / wavelength)
+            previous_height = height
+        if previous_height > 0:
+            field = fresnel.propagate(
+                field, wavelength=float(wavelength), dx=float(pixel_scale_m),
+                z=previous_height, method='angular_spectrum',
+                include_global_phase=False,
+            )
+        output[k] = field
+    return output
 
 
 def modal_ao_residual_opd(opd_m: np.ndarray, basis: np.ndarray,

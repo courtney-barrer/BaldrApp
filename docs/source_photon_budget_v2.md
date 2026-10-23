@@ -36,19 +36,14 @@ BALDR_CONFIG_PATH=src/baldrapp/paranal_simulator/fake_configs/baldr_config_v2.js
     python -m baldrapp.paranal_simulator.scripts.baldr_sim_updated_runtime_control
 ```
 
-**IMPORTANT: Stage 3 is not implemented yet.** The bundled v2 example has
-`atmosphere.enabled=true` and intentionally raises `NotImplementedError` from
-the v2 runtime atmosphere initialisation. To exercise *only Stage 2* in the
-hardware-dependent simulator, make a separate copy of the example config and
-set `atmosphere.enabled=false`. This permits internal/on-sky source switching
-without atmospheric turbulence. Do not modify the canonical example purely
-to bypass this guard. V1 atmosphere simulation remains available using the
-original v1 configuration.
-
-The runtime keeps the existing fixed-grid pupil-profile switching mechanism,
-and rebuilds static/internal OPD when the active pupil changes. AO turbulence,
-correlated beam footprints, and wavelength-dependent scintillation belong to
-later stages; Stage 2 does not claim to simulate these effects.
+Stage 3 adds physically evolved infinite turbulence screens with independent
+Cn2 fractions and wind vectors. Stage 4 adds an optional Fresnel-propagated
+complex atmospheric field at each wavelength. Set
+`atmosphere.scintillation.enabled=true` to enable the latter, using the
+same layers and the original infinite-screen generator. See
+`docs/multilayer_scintillation_v2.md` for photon normalization,
+AO and numerical sampling details. The legacy v1 atmosphere and source path
+remains unchanged.
 
 ## Tests
 

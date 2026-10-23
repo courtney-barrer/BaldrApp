@@ -1,9 +1,10 @@
 # BaldrApp configuration v2 — Stage 1
 
-**Status:** The v2 schema and validator are implemented. The original optical
-simulator still uses **v1**. Do not run the v2 example with the old simulator:
-`init_zwfs_from_json()` deliberately rejects schema v2 to avoid silently
-applying the wrong spectral/photon convention.
+**Status (Stage 4):** Schema v2 is supported by the current initializer and
+simulator runtime. The v1 configuration and optical simulation path remain
+separate. To simulate atmospheric scintillation, set
+`atmosphere.scintillation.enabled=true` and use the existing layered profile.
+See `docs/multilayer_scintillation_v2.md`.
 
 ## Example and validation
 
@@ -42,8 +43,7 @@ configuration*, not an instrument simulator product.
   bandpass at the telescope-conjugate illuminated pupil before downstream
   optical throughput, QE and detector exposure**. It is not photons per
   wave-space pixel, nanometre, or detector pixel. Zero photon rate is valid.
-  This convention is an agreed target; the existing simulator is not yet
-  consuming it.
+  This convention is implemented in the v2 source path.
 - Normalized photon fractions are computed from the blackbody photon spectral
   density, proportional to `lambda**(-4) / (exp(hc/(lambda*k*T))-1)`, using
   trapezoidal integration on the shared wavelength grid. Fractions sum to
@@ -70,15 +70,12 @@ configuration*, not an instrument simulator product.
   `r0_i = r0_total * cn2_fraction_i**(-3/5)`, and
   `v_eff = [sum(cn2_fraction_i * wind_speed_i**(5/3))]**(3/5)`;
   `tau0_500nm = 0.314 * r0_total / v_eff`. When all winds are zero, `tau0`
-  is reported as JSON `null` to represent infinity. These values have not
-  been wired into screen evolution yet.
-- `simulator_runtime.time_step_s` will advance **physical simulation time**.
+  is reported as JSON `null` to represent infinity. These resolved values are used to set independent layer strengths and wind evolution.
+- `simulator_runtime.time_step_s` advances **physical simulation time**.
   `sleep_time_s` only throttles the simulator's wall-clock execution speed.
 - The `scintillation.enabled` flag has no separate r0, high-layer distance,
-  or phase screen configuration. When implemented, `false` will sum layer
-  OPDs at the pupil; `true` will Fresnel-propagate the wavelength-specific
-  complex field from the uppermost layer down to the pupil. Neither behavior
-  is integrated into the simulator in Stage 1.
+  or phase screen configuration. `false` sums layer OPDs at the pupil; `true`
+  Fresnel-propagates wavelength-specific complex fields through the layers.
 
 ## Migration / intentionally deferred code changes
 
