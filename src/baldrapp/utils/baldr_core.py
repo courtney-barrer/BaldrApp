@@ -2646,6 +2646,7 @@ def get_frame(
     detector=None,
     include_shotnoise=True,
     spectral_bandwidth=_AUTO_SPECTRAL_BANDWIDTH,
+    dm_opd=None,
 ):
     """_summary_
     propagates the input field with phase described by opd_input and internal aberrations described by opd_internal, field flux described by amp_input
@@ -2667,10 +2668,13 @@ def get_frame(
         _type_: field intensity
     """
 
-    # I could do this outside to save time but for now just do it here
-    opd_current_dm = zwfs_ns.compiled_dm.eval(
-        zwfs_ns.dm.current_cmd * zwfs_ns.dm.opd_per_cmd
-    )
+    # An external runtime may supply the DM OPD sampled from this frame's
+    # command. Standalone callers continue to evaluate the current command.
+    opd_current_dm = dm_opd
+    if opd_current_dm is None:
+        opd_current_dm = zwfs_ns.compiled_dm.eval(
+            zwfs_ns.dm.current_cmd * zwfs_ns.dm.opd_per_cmd
+        )
 
     opd_map = opd_input + opd_internal + opd_current_dm
 
@@ -4762,6 +4766,7 @@ def get_frame_polychromatic(
     include_shotnoise=True,
     return_intermediates=False,
     incident_fields=None,
+    dm_opd=None,
 ):
     """
     Generate a polychromatic Baldr ZWFS frame using the existing non-Fresnel
@@ -4897,6 +4902,7 @@ def get_frame_polychromatic(
                 zwfs_ns=zwfs_ns,
                 detector=None,
                 include_shotnoise=False,
+                **({"dm_opd": dm_opd} if dm_opd is not None else {}),
             )
 
             if I_rate is None:
@@ -5181,6 +5187,7 @@ def get_frame_fresnel_polychromatic(
     include_shotnoise=True,
     return_intermediates=False,
     incident_fields=None,
+    dm_opd=None,
 ):
     """
     Generate a polychromatic detector-plane Baldr frame using the analytic ZWFS
@@ -5316,10 +5323,15 @@ def get_frame_fresnel_polychromatic(
     dm_kwargs = {}
     # Production instruments have a compiled DM.  Keep the older, simpler
     # monochromatic function signature usable by pure spectral/mock callers.
-    if hasattr(zwfs_ns, "compiled_dm"):
+    if dm_opd is not None:
+        opd_current_dm = dm_opd
+    elif hasattr(zwfs_ns, "compiled_dm"):
         opd_current_dm = zwfs_ns.compiled_dm.eval(
             zwfs_ns.dm.current_cmd * zwfs_ns.dm.opd_per_cmd
         )
+    else:
+        opd_current_dm = None
+    if opd_current_dm is not None:
         dm_kwargs["_opd_current_dm"] = opd_current_dm
         # Phase-only inputs share an identical pupil OPD across wavelengths.
         # With chromatic incident_fields the input phase differs by wavelength.
@@ -5429,6 +5441,7 @@ def get_frame_configured(
     force_polychromatic=None,
     return_intermediates=False,
     incident_fields=None,
+    dm_opd=None,
 ):
     """
     Generate a Baldr frame using the propagation mode configured in zwfs_ns.
@@ -5512,6 +5525,11 @@ def get_frame_configured(
         Only supported by the Fresnel and polychromatic wrapper paths. For the
         plain get_frame(...) path, this must be False.
 
+    dm_opd : ndarray or None
+        Optional physical DM OPD (metres, wave-space pupil grid) evaluated from
+        the freshly sampled DM command for this frame. When omitted, direct
+        callers retain the original internal DM evaluation behaviour.
+
     Returns
     -------
     frame : ndarray or dict
@@ -5554,6 +5572,12 @@ def get_frame_configured(
         if getattr(zwfs_ns, 'config_schema_version', None) != 2 or not use_polychromatic:
             raise ValueError('incident_fields requires the schema v2 spectral integration path')
 
+    # Optional per-frame DM OPD supplied by the runtime.  In particular this
+    # must NOT be cached on zwfs_ns: SHM commands can change every frame.
+    if dm_opd is not None and np.shape(dm_opd) != np.shape(zwfs_ns.grid.pupil_mask):
+        raise ValueError("dm_opd must match the wave-space pupil grid shape")
+    dm_kwargs = {"dm_opd": dm_opd} if dm_opd is not None else {}
+
     # ------------------------------------------------------------
     # Fresnel + polychromatic
     # ------------------------------------------------------------
@@ -5567,6 +5591,7 @@ def get_frame_configured(
             include_shotnoise=include_shotnoise,
             return_intermediates=return_intermediates,
             incident_fields=incident_fields,
+            **dm_kwargs,
         )
 
     # ------------------------------------------------------------
@@ -5583,6 +5608,7 @@ def get_frame_configured(
             spectral_bandwidth=spectral_bandwidth,
             wavelength=zwfs_ns.optics.wvl0,
             return_intermediates=return_intermediates,
+            **({"_opd_current_dm": dm_opd} if dm_opd is not None else {}),
         )
 
     # ------------------------------------------------------------
@@ -5598,6 +5624,7 @@ def get_frame_configured(
             include_shotnoise=include_shotnoise,
             return_intermediates=return_intermediates,
             incident_fields=incident_fields,
+            **dm_kwargs,
         )
 
     # ------------------------------------------------------------
@@ -5617,6 +5644,7 @@ def get_frame_configured(
         detector=detector,
         include_shotnoise=include_shotnoise,
         spectral_bandwidth=spectral_bandwidth,
+        **dm_kwargs,
     )
 
 

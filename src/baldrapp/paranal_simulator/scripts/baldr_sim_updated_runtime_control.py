@@ -287,8 +287,9 @@ def update_opd_diagnostics(
 ):
     """Measure the entrance wavefront using this frame's current DM command.
 
-    The DM contribution is added once here for diagnostics only. Propagation
-    continues to receive the original OPD inputs and adds the DM itself.
+    The DM contribution is added once to the diagnostic OPD. Propagation
+    receives the same optional DM OPD separately and adds it once optically;
+    it is never included in opd_input or opd_internal by the runtime.
     """
     if opd_dm is None:
         opd_dm = zwfs.compiled_dm.eval(zwfs.dm.current_cmd * zwfs.dm.opd_per_cmd)
@@ -1957,6 +1958,13 @@ while True:
             opd_input_runtime = zero_opd[beam]
             amp_input_runtime = amp_input[beam]
 
+        # Evaluate the freshly read SHM command ONCE for this beam/frame.
+        # Reuse the same physical OPD in propagation, diagnostics and telemetry.
+        # Do not retain across frames: the DM command may change each cycle.
+        frame_dm_opd = zwfs_ns[beam].compiled_dm.eval(
+            zwfs_ns[beam].dm.current_cmd * zwfs_ns[beam].dm.opd_per_cmd
+        )
+
         intensity = bldr.get_frame_configured(
             opd_input=opd_input_runtime,
             amp_input=amp_input_runtime,
@@ -1965,20 +1973,16 @@ while True:
             detector=zwfs_ns[beam].detector,
             include_shotnoise=include_shotnoise,
             incident_fields=incident_fields_runtime,
+            dm_opd=frame_dm_opd,
         )
 
-        telemetry_dm_opd = None
-        if telemetry_publisher is not None:
-            telemetry_dm_opd = zwfs_ns[beam].compiled_dm.eval(
-                zwfs_ns[beam].dm.current_cmd * zwfs_ns[beam].dm.opd_per_cmd
-            )
         runtime_status["opd_diagnostics"][str(beam)] = update_opd_diagnostics(
             zwfs_ns[beam],
             opd_input_runtime if opd_diagnostic_runtime is None else opd_diagnostic_runtime,
             opd_internal[beam],
             liveindex,
             sim_control["mode"],
-            opd_dm=telemetry_dm_opd,
+            opd_dm=frame_dm_opd,
         )
 
         det_cfg_beam = getattr(zwfs_ns[beam], "detector_config", None)
@@ -2041,7 +2045,7 @@ while True:
                     beam,
                     opd_input_runtime,
                     opd_internal[beam],
-                    telemetry_dm_opd,
+                    frame_dm_opd,
                     zwfs_ns[beam].grid.pupil_mask,
                     {
                         "frame": int(liveindex),
