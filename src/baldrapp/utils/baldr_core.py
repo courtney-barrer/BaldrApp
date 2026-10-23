@@ -4513,6 +4513,17 @@ def init_zwfs_from_json(
     json_config = Path(json_config)
     cfg = cfghelp.load_json_config(json_config)
 
+    # Stage 1: schema v2 can be validated/resolved, but the existing optical
+    # pipeline still expects the v1 stellar/source photon-density convention.
+    # Explicitly fail rather than silently simulating v2 inputs incorrectly.
+    if cfg.get("schema_version") == 2:
+        raise ValueError(
+            "BaldrApp schema v2 is not yet supported by init_zwfs_from_json. "
+            "Validate with `python -m baldrapp.utils.configuration <config.json>` "
+            "and continue using the v1 baldr_config.json for simulation "
+            "until the Stage 2 spectral/runtime integration is complete."
+        )
+
     for section in ["grid", "optics", "dm"]:
         if section not in cfg:
             raise ValueError(f"JSON config must contain a '{section}' section.")
