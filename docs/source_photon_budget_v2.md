@@ -59,6 +59,10 @@ python -m unittest discover -s tests -p 'test_source_v2.py' -v
 
 `test_source_v2.py` tests the real source normalization and the actual optical
 wrapper/dispatcher bodies against deterministic **mock optical propagators**.
-It does not validate the full physical Fresnel model. Full numerical optical
-regression and SHM/on-sky integration testing still need the installed BaldrApp
-dependencies and a running simulator setup.
+The additional Stage 2.5 `test_real_optics_v2.py` tests the **real** Fourier,
+Fresnel, detector and wavelength-integration implementations on a synthetic
+optical instrument with a zero-stroke DM (without SHM/hardware dependencies).
+Run `python -m unittest discover -s tests -p 'test_*.py' -v`. See
+`docs/real_optics_validation_v2.md` for results and diagnostic figures.
+Full installed-instrument, SHM and on-sky integration testing remains to be
+done in the BaldrApp hardware environment.
