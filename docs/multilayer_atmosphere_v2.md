@@ -30,18 +30,35 @@ FROM directions, nor automatically sky position angles.
 
 ## Numerical implementation
 
-`baldrapp.utils.atmosphere_v2.MultilayerAtmosphere` creates a seeded,
-independent von Kármán phase tile per layer using the existing
-`phasescreens.ft_phase_screen()` spectral generator. A tile is four times
-`grid.dim` in each axis. The telescope footprint samples this tile at
-continuous positions displaced by `wind * simulated_time`, using periodic
-bilinear interpolation. The total **physical OPD** is the sum of layer
-OPDs, with each layer's phase generated at the 500-nm reference wavelength:
+`baldrapp.utils.atmosphere_v2.MultilayerAtmosphere` instantiates **the same
+`phasescreens.PhaseScreenKolmogorov` class** used by the original Paranal
+simulator, once for every nonzero-Cn2 layer. This is BaldrApp's Fried-style
+infinite-screen method, extended using its unmodified `add_row()` method
+(Assemat--Wilson/Fried covariance technique). Its implementation accepts
+`L0_m` despite the Kolmogorov class name. There is **no periodized FFT tile**
+and no configurable choice of phase-screen algorithms.
+
+The number of new rows follows the physical distance traveled along each
+layer's wind vector divided by `grid.D/grid.N` (pixel size). The fractional
+row displacement is sampled by linear interpolation. Wind direction rotates
+the **sampling coordinates**, not the phase-screen generator: this maps the
+native +row direction into the configured 2-D pupil motion. As in the old
+simulator, extension is one-sided and the turbulent field has bounded
+transverse width. Therefore the telescope pupil must fit within the center
+of the `grid.dim` screen for all angles; the resolver now requires at least
+three pixels of padding around `grid.N`.
+
+Every layer is generated with its `r0_i` **at 500 nm**; all phase screens are
+converted to physical OPD and summed:
 
 \[
- \mathrm{OPD}(x,y,t) = \frac{500\,\mathrm{nm}}{2\pi}
-   \sum_i \phi_i(x-v_{x,i}t, y-v_{y,i}t).
+ \mathrm{OPD}(x,y,t) = \frac{500\,\mathrm{nm}}{2\pi} \sum_i \phi_i(x,y,t).
 \]
+
+Here each `phi_i` is the wind-advected sample of its own original infinite
+screen, not a periodically wrapped FFT array. The `opd_at(t)` diagnostic
+method can inspect future frames without advancing generator state, but a
+committed screen cannot be queried at an earlier time after advancing.
 
 This OPD is passed to the existing ZWFS propagation and acquires wavelength-
 dependent phase through `2*pi*OPD/wavelength`; it must **not** be treated as a
@@ -72,19 +89,14 @@ high-altitude screen.
 
 ## Limitations requiring explicit acknowledgement
 
-**Finite periodic frozen-flow screens**: FFT tiles repeat after a displacement
-of `4 * grid.dim * grid.D / grid.N` along either axis. At 20 m/s, for the
-example `grid.D=1.8`, `grid.N=64`, `grid.dim=256`, the period along that axis
-is approximately **1.44 seconds**. The model is suitable for short
-phase-only sequences and code validation, but *not* multi-second or minute-
-scale temporal-statistics studies without upgrading the frozen-flow screen
-extension. Bilinear interpolation slightly attenuates high spatial
-frequencies at fractional-pixel translations; high-accuracy temporal-PSD
-studies should replace it with a better long-duration screen generator.
-
-The FFT tile also omits explicit subharmonic augmentation; low-frequency power
-is consequently limited by the tile size. Testing full on-sky AO performance
-will require careful attention to low-frequency statistics and modal power.
+**Infinite-screen limitations:** extending rows avoids periodic wrapping
+along the wind direction and retains the original generator's long-time
+statistics. However, fractional-pixel/rotated bilinear sampling mildly
+attenuates high spatial frequencies. The available transverse screen width
+is finite; this version evaluates the entrance-pupil footprint rather than
+asserting that the full FFT array always lies in the rotated screen. For
+long-duration simulations, runtime and numerical accuracy should still be
+benchmarked against the original single-screen implementation.
 
 The current `first_stage_ao` model is intentionally an idealized modal
 projection, not a closed-loop predictive AO controller. Integer frame lag is
