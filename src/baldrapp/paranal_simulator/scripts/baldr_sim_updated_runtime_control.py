@@ -1364,7 +1364,7 @@ root_path = get_git_root()
 # Override without editing this script: BALDR_CONFIG_PATH=/path/to/v2.json
 config_path = Path(os.environ.get(
     "BALDR_CONFIG_PATH",
-    str(root_path / "src/baldrapp/paranal_simulator/fake_configs/baldr_config.json"),
+    str(root_path / "src/baldrapp/paranal_simulator/fake_configs/baldr_config_v2.json"),
 )).expanduser()
 if not config_path.is_absolute():
     config_path = root_path / config_path

@@ -22,7 +22,7 @@
   "bandpass": {
     "wavelength_min_m": 1.5e-06,
     "wavelength_max_m": 1.8e-06,
-    "n_wavelengths": 7
+    "n_wavelengths": 3
   },
   "source_profiles": {
     "internal": {
