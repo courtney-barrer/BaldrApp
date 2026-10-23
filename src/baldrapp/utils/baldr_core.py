@@ -1107,7 +1107,7 @@ def get_zwfs_output_field(
 
     # Focal-plane field before phase mask.
     psi_B = np.fft.fftshift(
-        np.fft.fft2(
+        fresnel.fft2(
             np.fft.ifftshift(psi_A_pad),
             norm="ortho",
         )
@@ -1148,9 +1148,7 @@ def get_zwfs_output_field(
             phase_disc = (phase_disc > 0.5).astype(float)
 
         # Infer pixels per lambda/D from the supplied mask.
-        yy, xx = np.indices((Nf, Nf))
-        c = (Nf - 1) / 2.0
-        rr = np.hypot(yy - c, xx - c)
+        rr = fresnel.centered_pixel_radius((Nf, Nf))
 
         if np.any(phase_disc > 0):
             r_pix = rr[phase_disc > 0].max()
@@ -1159,29 +1157,24 @@ def get_zwfs_output_field(
             pix_per_wvld = float(pixels_across_mask)
 
     else:
-        # Infer pixels per lambda/D from the padded pupil support.
-        amp_pad = np.zeros((Nf, Nf), dtype=float)
-        amp_pad[pad : pad + N, pad : pad + N] = np.abs(amp_work)
-
-        support = amp_pad > 0
-
-        yy, xx = np.indices((Nf, Nf))
-        c = (Nf - 1) / 2.0
-        rr = np.hypot(yy - c, xx - c)
+        # Infer scale from the actual illuminated pupil; do not cache support
+        # because scintillation/source switching can change its geometry.
+        support = np.abs(amp_work) > 0
+        rr = fresnel.centered_pixel_radius((Nf, Nf))
 
         if np.any(support):
-            r_pupil_pix = rr[support].max()
+            r_pupil_pix = rr[pad : pad + N, pad : pad + N][support].max()
             d_pupil_pix = 2.0 * r_pupil_pix
             pix_per_wvld = float(Nf) / max(d_pupil_pix, 1e-12)
         else:
             pix_per_wvld = float(pixels_across_mask)
 
         r_mask_pix = 0.5 * float(phasemask_diameter) * pix_per_wvld
-        phase_disc = (rr <= r_mask_pix).astype(float)
+        phase_disc = fresnel.circular_focal_mask(Nf, r_mask_pix)
 
     # Reference wave b = IFFT{M FFT{psi_A}}.
     b_pad = np.fft.fftshift(
-        np.fft.ifft2(
+        fresnel.ifft2(
             np.fft.ifftshift(phase_disc * psi_B),
             norm="ortho",
         )
@@ -4978,6 +4971,8 @@ def get_frame_fresnel(
     theta=None,
     phasemask_diameter=None,
     return_intermediates=False,
+    _opd_current_dm=None,
+    _opd_total=None,
 ):
     """
     Generate a monochromatic detector-plane Baldr frame using the analytic ZWFS
@@ -5012,11 +5007,16 @@ def get_frame_fresnel(
 
     pupil = zwfs_ns.grid.pupil_mask
 
-    opd_current_dm = zwfs_ns.compiled_dm.eval(
-        zwfs_ns.dm.current_cmd * zwfs_ns.dm.opd_per_cmd
-    )
-
-    opd_total = pupil * (opd_input + opd_internal + opd_current_dm)
+    # The polychromatic caller can reuse a single DM evaluation (and, when
+    # incident wavefronts are achromatic, the combined OPD) across wavelengths.
+    if _opd_total is None:
+        if _opd_current_dm is None:
+            _opd_current_dm = zwfs_ns.compiled_dm.eval(
+                zwfs_ns.dm.current_cmd * zwfs_ns.dm.opd_per_cmd
+            )
+        opd_total = pupil * (opd_input + opd_internal + _opd_current_dm)
+    else:
+        opd_total = _opd_total
 
     if theta is None:
         theta = spec.theta_at_wavelength(zwfs_ns.optics, wavelength)
@@ -5043,11 +5043,6 @@ def get_frame_fresnel(
 
     dx_phys = fr.D_phys / zwfs_ns.grid.N
 
-    X_phys, Y_phys = fresnel.make_coordinate_grid(
-        psi_C.shape,
-        dx_phys,
-    )
-
     # 1. Propagate from post-collimator ZWFS pupil plane to D/knife-edge mirror.
     psi_mirror = fresnel.propagate(
         psi_C,
@@ -5057,15 +5052,9 @@ def get_frame_fresnel(
         method="angular_spectrum",
     )
 
-    mirror_mask_full = fresnel.circular_aperture(
-        psi_mirror.shape,
-        dx=dx_phys,
-        radius=fr.D_mirror / 2.0,
-    ).astype(float)
-
-    Xr = X_phys * np.cos(fr.edge_angle) + Y_phys * np.sin(fr.edge_angle)
-
-    mirror_mask_D = (Xr >= fr.edge_offset).astype(float) * mirror_mask_full
+    mirror_mask_D = fresnel.cached_d_mirror_mask(
+        psi_mirror.shape, dx_phys, fr.D_mirror, fr.edge_offset, fr.edge_angle,
+    )
 
     psi_after_mirror = psi_mirror * mirror_mask_D
 
@@ -5095,18 +5084,10 @@ def get_frame_fresnel(
         include_global_phase=False,
     )
 
-    X_cold, Y_cold = fresnel.make_coordinate_grid(
-        field_coldstop_plane.shape,
-        dx=dx_cold,
-        dy=dy_cold,
+    coldstop_mask_phys = fresnel.cached_coldstop_mask(
+        field_coldstop_plane.shape, dx_cold, dy_cold,
+        fr.D_coldstop, fr.coldstop_x_offset, fr.coldstop_y_offset,
     )
-
-    R_cold = np.hypot(
-        X_cold - fr.coldstop_x_offset,
-        Y_cold - fr.coldstop_y_offset,
-    )
-
-    coldstop_mask_phys = (R_cold <= fr.D_coldstop / 2.0).astype(float)
 
     field_after_coldstop = field_coldstop_plane * coldstop_mask_phys
 
@@ -5330,6 +5311,23 @@ def get_frame_fresnel_polychromatic(
     I_rate = None
     per_wavelength_outputs = []
 
+    # The DM is a physical OPD map, independent of wavelength. Take one
+    # snapshot per frame rather than reevaluating it for every sample.
+    dm_kwargs = {}
+    # Production instruments have a compiled DM.  Keep the older, simpler
+    # monochromatic function signature usable by pure spectral/mock callers.
+    if hasattr(zwfs_ns, "compiled_dm"):
+        opd_current_dm = zwfs_ns.compiled_dm.eval(
+            zwfs_ns.dm.current_cmd * zwfs_ns.dm.opd_per_cmd
+        )
+        dm_kwargs["_opd_current_dm"] = opd_current_dm
+        # Phase-only inputs share an identical pupil OPD across wavelengths.
+        # With chromatic incident_fields the input phase differs by wavelength.
+        if incident_fields is None:
+            dm_kwargs["_opd_total"] = zwfs_ns.grid.pupil_mask * (
+                opd_input + opd_internal + opd_current_dm
+            )
+
     for sample_index, (wavelength, weight_nm) in enumerate(zip(wavelengths, weights_nm)):
 
         theta = spec.theta_at_wavelength(
@@ -5363,6 +5361,7 @@ def get_frame_fresnel_polychromatic(
             theta=theta,
             phasemask_diameter=phasemask_diameter,
             return_intermediates=return_intermediates,
+            **dm_kwargs,
         )
 
         if return_intermediates:
