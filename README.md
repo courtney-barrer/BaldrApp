@@ -10,20 +10,20 @@ Because the simulator consumes DM shared memory to update the optical model and 
 *Note: Shared memory functionality relies on Linux `/dev/shm` (tested on Ubuntu 20.04 and 24.04).*
 
 ![Baldr Simulation Architecture](BaldrApp_schematic.jpeg)
-```
-python
-import baldrapp
-```
+
 ## Installation with `pip`
 ```    
-Alternatvely the project can be cloned or forked from the Github:
+the project can be cloned from the Github:
 ```bash
 git clone https://github.com/courtney-barrer/BaldrApp
 cd /path/to/BaldrApp
 pip install . -e
 ```
-The pip installation was tested on only on python 3.12.7. 
-
+The pip installation was tested on only on python 3.12.7. To import modules in python for general use:
+```
+python
+import baldrapp
+```
 To run the paranal simulator after installation simply write in the command line.
 ```bash
 baldr start
