@@ -229,6 +229,31 @@ def validate_config(cfg: dict) -> None:
                     required={"enabled"})
     _boolean(scint["enabled"], "$.atmosphere.scintillation.enabled")
 
+    # Stage 3 consumes these fields for the v2 modal AO. Validate now so
+    # malformed lag/gain settings cannot be silently rounded or ignored.
+    if "first_stage_ao" in cfg:
+        ao = cfg["first_stage_ao"]
+        if "enabled" in ao:
+            _boolean(ao["enabled"], "$.first_stage_ao.enabled")
+        if "model" in ao:
+            _enum(ao["model"], "$.first_stage_ao.model", {"modal_removal"})
+        if "basis" in ao:
+            _enum(ao["basis"], "$.first_stage_ao.basis", {"zernike"})
+        if "apply_to" in ao:
+            _enum(ao["apply_to"], "$.first_stage_ao.apply_to", {"phase"})
+        if "Nmodes_removed" in ao:
+            _integer(ao["Nmodes_removed"], "$.first_stage_ao.Nmodes_removed", minimum=0)
+        if "lag_frames" in ao:
+            _integer(ao["lag_frames"], "$.first_stage_ao.lag_frames", minimum=0)
+        if "correction_gain" in ao:
+            gain = _number(ao["correction_gain"], "$.first_stage_ao.correction_gain", nonnegative=True)
+            if gain > 1:
+                _fail("$.first_stage_ao.correction_gain", "must be <= 1")
+        if "remove_piston" in ao:
+            _boolean(ao["remove_piston"], "$.first_stage_ao.remove_piston")
+        if "phase_scaling_factor" in ao:
+            _number(ao["phase_scaling_factor"], "$.first_stage_ao.phase_scaling_factor", nonnegative=True)
+
     runtime = cfg["simulator_runtime"]
     _number(runtime.get("time_step_s"), "$.simulator_runtime.time_step_s", positive=True)
     _number(runtime.get("sleep_time_s"), "$.simulator_runtime.sleep_time_s",

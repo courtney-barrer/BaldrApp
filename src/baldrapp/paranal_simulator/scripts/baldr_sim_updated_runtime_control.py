@@ -20,6 +20,7 @@ from xaosim.shmlib import shm
 import subprocess
 from pathlib import Path
 from copy import copy
+from collections import deque
 
 # CHANGED: Removed 'apps' and added 'scripts'
 from baldrapp.paranal_simulator.scripts.sim_ncpa import NcpaProfile, handle_ncpa_command
@@ -28,6 +29,7 @@ from baldrapp.paranal_simulator.scripts.sim_ncpa import NcpaProfile, handle_ncpa
 from baldrapp.utils import baldr_core as bldr
 from baldrapp.utils import utilities as util
 from baldrapp.utils import phasescreens as ps
+from baldrapp.utils import atmosphere_v2
 from baldrapp.utils import spectrum as spec
 from baldrapp.utils import pupils as aperture
 
@@ -707,15 +709,38 @@ def init_dynamic_atmosphere_for_beam(zwfs):
 
     atm_cfg = getattr(zwfs, "atmosphere", None)
     if getattr(zwfs, "config_schema_version", None) == 2:
-        # Stage 3 owns v2 multilayer turbulence. Explicitly prevent the legacy
-        # independent scintillation screen / rows_per_frame implementation.
-        # The same stage-2 source switching works with atmosphere disabled.
-        if bool(get_cfg_value(atm_cfg, "enabled", False)):
+        # V2: the atmosphere is a shared Cn2 profile with independently frozen
+        # physical layers. V1's rows-per-frame and separate scintillation
+        # screen remain unchanged below.
+        enabled = bool(get_cfg_value(atm_cfg, "enabled", False))
+        ao_cfg = getattr(zwfs, "first_stage_ao", None)
+        ao_enabled = enabled and bool(get_cfg_value(ao_cfg, "enabled", False))
+        n_modes = int(get_cfg_value(ao_cfg, "Nmodes_removed", 0))
+        if enabled and bool(get_cfg_value(get_cfg_value(atm_cfg, "scintillation"), "enabled", False)):
             raise NotImplementedError(
-                "schema v2 multilayer atmosphere is not implemented yet (Stage 3). "
-                "Set atmosphere.enabled=false to exercise Stage 2 source switching "
-                "without atmosphere, or continue using schema-v1 for atmosphere."
+                "schema v2 multilayer scintillation is reserved for Stage 4. "
+                "Set atmosphere.scintillation.enabled=false for phase-only turbulence."
             )
+        model = (atmosphere_v2.MultilayerAtmosphere.from_resolved_config(
+            zwfs.resolved_config,
+            grid_dim=int(zwfs.grid.dim),
+            pupil_pixel_scale_m=dx,
+        ) if enabled else None)
+        basis = (make_first_stage_ao_basis(zwfs, n_modes)
+                 if ao_enabled and n_modes > 0 else None)
+        return {
+            "v2_atmosphere": model,
+            "phase_enabled": enabled,
+            "ao_enabled": ao_enabled,
+            "scint_enabled": False,
+            "ao_basis": basis,
+            "n_modes_removed": n_modes,
+            "ao_phase_scaling_factor": float(get_cfg_value(ao_cfg, "phase_scaling_factor", 1.0)),
+            "ao_correction_gain": float(get_cfg_value(ao_cfg, "correction_gain", 1.0)),
+            "ao_lag_frames": int(get_cfg_value(ao_cfg, "lag_frames", 0)),
+            "ao_remove_piston": bool(get_cfg_value(ao_cfg, "remove_piston", True)),
+            "v2_ao_history": deque(),
+        }
     phase_cfg = getattr(atm_cfg, "phase", None)
     scint_cfg = getattr(atm_cfg, "scintillation", None)
     ao_cfg = getattr(zwfs, "first_stage_ao", None)
@@ -809,6 +834,34 @@ def generate_atmosphere_and_source_for_beam(zwfs, amp_input_0, dynamic_state):
     """
     pupil = zwfs.grid.pupil_mask
     wvl0 = float(zwfs.optics.wvl0)
+
+    if "v2_atmosphere" in dynamic_state:
+        model = dynamic_state["v2_atmosphere"]
+        # The on-sky simulation clock advances by time_step_s, not sleep_time_s.
+        # Advance even while the phase control is temporarily disabled.
+        physical_opd = model.next_opd() if model is not None else np.zeros_like(pupil)
+        if not dynamic_state["phase_enabled"]:
+            # Avoid applying stale AO reconstructions when phase is re-enabled.
+            dynamic_state["v2_ao_history"].clear()
+            opd_input = np.zeros_like(pupil, dtype=float)
+        else:
+            opd_input = physical_opd
+            if dynamic_state["ao_enabled"] and dynamic_state["ao_basis"] is not None:
+                opd_input = atmosphere_v2.modal_ao_residual_opd(
+                    opd_input * dynamic_state["ao_phase_scaling_factor"],
+                    dynamic_state["ao_basis"], pupil,
+                    dynamic_state["n_modes_removed"],
+                    correction_gain=dynamic_state["ao_correction_gain"],
+                    remove_piston=dynamic_state["ao_remove_piston"],
+                    lag_frames=dynamic_state["ao_lag_frames"],
+                    history=dynamic_state["v2_ao_history"],
+                )
+            else:
+                # Clear stale delayed corrections after AO is disabled.
+                dynamic_state["v2_ao_history"].clear()
+                opd_input = np.where(pupil > 0, opd_input, 0.0)
+        # Phase-only in Stage 3; amplitude/scintillation comes in Stage 4.
+        return opd_input, amp_input_0
 
     if dynamic_state["phase_enabled"]:
         scrn = dynamic_state["phase_screen"]
