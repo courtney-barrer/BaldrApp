@@ -88,11 +88,12 @@ preserve a different photon-normalisation convention. The v2 validator
 rejects those keys clearly. The v1 example is left in place; compare its
 reference outputs before implementing v2 source integration.
 
-This stage does **not** rewrite `config_helper.py`, `spectrum.py`,
-`phasescreens.py`, the detector, Fresnel propagation or the runtime loop.
-Stages 2–4 will connect the resolved configuration to those modules and
-add their own physical regression tests. The existing hardware-dependent
-simulator was **not exercised** by the Stage 1 tests.
+Stage 2 now connects the v2 source spectra and integrated photon rates to
+`baldr_core.py` and the runtime source-selection logic, without changing the
+physics of the Fresnel/ZWFS kernels. See `docs/source_photon_budget_v2.md`
+for the v2 amplitude/weight convention and the explicit remaining Stage 3
+(multilayer atmosphere) limitation. No hardware-dependent simulator run has
+been performed in this development environment.
 
 The validator strictly checks all newly introduced source/bandpass/atmosphere
 fields and their values. Unchanged existing instrument sections are

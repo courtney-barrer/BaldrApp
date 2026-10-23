@@ -304,6 +304,13 @@ def update_opd_diagnostics(
     return metrics
 
 
+def get_source_amplitude_from_config(zwfs):
+    """V1 photon density or v2 band-integrated photon-rate amplitude."""
+    if getattr(zwfs, "config_schema_version", None) == 2:
+        return bldr.source_amplitude_v2(zwfs)
+    return np.sqrt(get_photon_flux_density_from_config(zwfs)) * zwfs.grid.pupil_mask
+
+
 def get_photon_flux_density_from_config(zwfs):
     """
     Return photons / second / wave-space-pixel / nm for the simulator source.
@@ -344,6 +351,11 @@ def apply_source_profile_fixed_grid(zwfs, profile_name, source_profiles):
 
     Therefore it does NOT invalidate the active_phasemask wavelength cache.
     """
+    if getattr(zwfs, "config_schema_version", None) == 2:
+        # V2 source selection changes only the spectrum and source metadata.
+        # The runtime updates the pupil and pupil-dependent NCPA separately.
+        return bldr.select_source_profile_v2(zwfs, profile_name)
+
     if source_profiles is None:
         raise ValueError("source_profiles is None")
 
@@ -694,6 +706,16 @@ def init_dynamic_atmosphere_for_beam(zwfs):
     dx = float(zwfs.grid.D) / float(zwfs.grid.N)
 
     atm_cfg = getattr(zwfs, "atmosphere", None)
+    if getattr(zwfs, "config_schema_version", None) == 2:
+        # Stage 3 owns v2 multilayer turbulence. Explicitly prevent the legacy
+        # independent scintillation screen / rows_per_frame implementation.
+        # The same stage-2 source switching works with atmosphere disabled.
+        if bool(get_cfg_value(atm_cfg, "enabled", False)):
+            raise NotImplementedError(
+                "schema v2 multilayer atmosphere is not implemented yet (Stage 3). "
+                "Set atmosphere.enabled=false to exercise Stage 2 source switching "
+                "without atmosphere, or continue using schema-v1 for atmosphere."
+            )
     phase_cfg = getattr(atm_cfg, "phase", None)
     scint_cfg = getattr(atm_cfg, "scintillation", None)
     ao_cfg = getattr(zwfs, "first_stage_ao", None)
@@ -1219,12 +1241,14 @@ def poll_control_socket(
 
 root_path = get_git_root()
 
-# New generic BaldrApp JSON config. This should include:
-#   grid, optics, dm, stellar.spectrum, fresnel_relay, detector, source, etc.
-config_path = (
-    root_path
-    / "src/baldrapp/paranal_simulator/fake_configs/baldr_config.json"
-)
+# Simulator config: defaults to v1; BALDR_CONFIG_PATH may select v2.
+# Override without editing this script: BALDR_CONFIG_PATH=/path/to/v2.json
+config_path = Path(os.environ.get(
+    "BALDR_CONFIG_PATH",
+    str(root_path / "src/baldrapp/paranal_simulator/fake_configs/baldr_config.json"),
+)).expanduser()
+if not config_path.is_absolute():
+    config_path = root_path / config_path
 
 # set DM flat on channel zero to 0.5 for all beams 
 
@@ -1250,18 +1274,16 @@ for beam in beams_shown:
     zwfs = bldr.init_zwfs_from_json(config_path)
     source_pupil_profiles[beam] = make_source_pupil_profiles(zwfs)
 
-    # Optional per-simulator override retained from the old script.
-    zwfs.dm.actuator_coupling_factor = 0.7
+    # Retain the historical runtime coupling override only for v1. Schema v2
+    # honours the explicitly configured actuator_coupling_factor instead.
+    if getattr(zwfs, "config_schema_version", None) != 2:
+        zwfs.dm.actuator_coupling_factor = 0.7
+        zwfs = bldr.update_dm_registration_wavespace(
+            zwfs.dm2wavespace_registration.dm_to_wavesp_transform_matrix,
+            zwfs,
+        )
 
-    # Recompute DM registration after changing actuator coupling factor.
-    # This keeps act_sigma_wavesp consistent with the updated coupling.
-    zwfs = bldr.update_dm_registration_wavespace(
-        zwfs.dm2wavespace_registration.dm_to_wavesp_transform_matrix,
-        zwfs,
-    )
-
-    flux_density = get_photon_flux_density_from_config(zwfs)
-    amp_input[beam] = np.sqrt(flux_density) * zwfs.grid.pupil_mask
+    amp_input[beam] = get_source_amplitude_from_config(zwfs)
 
     opd_internal[beam] = get_internal_opd_from_config(zwfs)
     ncpa_profiles[beam] = {}
@@ -1327,11 +1349,12 @@ print("config_path:", config_path)
 print("grid N:", zwfs_ns[default_tel].grid.N)
 print("grid dim:", zwfs_ns[default_tel].grid.dim)
 print("detector binning:", zwfs_ns[default_tel].detector.binning)
-print(
-    "stellar.bandwidth [nm]:", getattr(zwfs_ns[default_tel].stellar, "bandwidth", None)
-)
 print("spectrum wavelengths [um]:", zwfs_ns[default_tel].spectrum.wavelengths * 1e6)
-print("sum spectrum weights_nm:", np.sum(zwfs_ns[default_tel].spectrum.weights_nm))
+if getattr(zwfs_ns[default_tel], "config_schema_version", None) == 2:
+    print("sum photon fractions:", np.sum(zwfs_ns[default_tel].spectrum.photon_fractions))
+else:
+    print("stellar.bandwidth [nm]:", getattr(zwfs_ns[default_tel].stellar, "bandwidth", None))
+    print("sum spectrum weights_nm:", np.sum(zwfs_ns[default_tel].spectrum.weights_nm))
 print("fresnel enabled:", getattr(zwfs_ns[default_tel].fresnel_relay, "enabled", None))
 print(
     "atmosphere phase enabled:", dynamic_atmosphere_state[default_tel]["phase_enabled"]
@@ -1373,14 +1396,6 @@ split_filename = get_cfg_value(
     "split_json",
     str(root_path / "src/baldrapp/paranal_simulator/fake_configs/cred1_split.json"),
 )
-# New generic BaldrApp JSON config. This should include:
-#   grid, optics, dm, stellar.spectrum, fresnel_relay, detector, source, etc.
-config_path = (
-    root_path
-    # CHANGED: Added 'src/' and removed 'apps/'
-    / "src/baldrapp/paranal_simulator/fake_configs/baldr_config.json"
-)
-
 split_filename = Path(split_filename)
 if not split_filename.is_absolute():
     split_filename = root_path / split_filename
@@ -1615,10 +1630,7 @@ if source_profiles is not None:
         ):
             opd_internal[beam] = get_internal_opd_from_config(zwfs_ns[beam])
 
-        amp_input[beam] = (
-            np.sqrt(get_photon_flux_density_from_config(zwfs_ns[beam]))
-            * zwfs_ns[beam].grid.pupil_mask
-        )
+        amp_input[beam] = get_source_amplitude_from_config(zwfs_ns[beam])
 
         last_source_profile[beam] = desired_profile
 
@@ -1626,22 +1638,29 @@ if source_profiles is not None:
 
     runtime_status["source_profile"] = desired_profile
     runtime_status["pupil_model"] = zwfs_ns[default_tel].grid.active_pupil_model
-    runtime_status["source_flux_density"] = get_photon_flux_density_from_config(
-        zwfs_ns[default_tel]
+    runtime_status["source_flux_density"] = (
+        get_photon_flux_density_from_config(zwfs_ns[default_tel])
+        if getattr(zwfs_ns[default_tel], "config_schema_version", None) != 2 else None
+    )
+    runtime_status["source_photons_per_second"] = (
+        zwfs_ns[default_tel].source.photons_per_second
+        if getattr(zwfs_ns[default_tel], "config_schema_version", None) == 2 else None
     )
     runtime_status["source_temperature_K"] = get_cfg_value(
         profile,
         "temperature_K",
-        None,
+        get_cfg_value(get_cfg_value(profile, "spectrum", None), "temperature_K", None),
     )
 
+    source_flux_label = (
+        f"{runtime_status['source_photons_per_second']:.6g} phot/s at pupil"
+        if runtime_status["source_photons_per_second"] is not None else
+        f"{runtime_status['source_flux_density']:.6g} phot/s/pix/nm"
+    )
     print(
         f"[SOURCE] Initial source profile {desired_profile!r}: "
-        f"flux_density={runtime_status['source_flux_density']:.6g} "
-        f"phot/s/pix/nm, "
-        f"T={runtime_status['source_temperature_K']} K, "
-        f"pupil={runtime_status['pupil_model']}",
-        flush=True,
+        f"{source_flux_label}, T={runtime_status['source_temperature_K']} K, "
+        f"pupil={runtime_status['pupil_model']}", flush=True,
     )
 
 t1 = time.time()
@@ -1698,10 +1717,7 @@ while True:
                         flush=True,
                     )
 
-                amp_input[beam] = (
-                    np.sqrt(get_photon_flux_density_from_config(zwfs_ns[beam]))
-                    * zwfs_ns[beam].grid.pupil_mask
-                )
+                amp_input[beam] = get_source_amplitude_from_config(zwfs_ns[beam])
 
                 last_source_profile[beam] = desired_profile
 
@@ -1714,21 +1730,29 @@ while True:
                     ].grid.active_pupil_model
                     runtime_status["source_flux_density"] = (
                         get_photon_flux_density_from_config(zwfs_ns[beam])
+                        if getattr(zwfs_ns[beam], "config_schema_version", None) != 2
+                        else None
+                    )
+                    runtime_status["source_photons_per_second"] = (
+                        zwfs_ns[beam].source.photons_per_second
+                        if getattr(zwfs_ns[beam], "config_schema_version", None) == 2
+                        else None
                     )
                     runtime_status["source_temperature_K"] = get_cfg_value(
                         profile,
                         "temperature_K",
-                        None,
+                        get_cfg_value(get_cfg_value(profile, "spectrum", None), "temperature_K", None),
                     )
 
+                    source_flux_label = (
+                        f"{runtime_status['source_photons_per_second']:.6g} phot/s at pupil"
+                        if runtime_status["source_photons_per_second"] is not None else
+                        f"{runtime_status['source_flux_density']:.6g} phot/s/pix/nm"
+                    )
                     print(
                         f"[SOURCE] switched to {desired_profile!r}: "
-                        f"flux_density="
-                        f"{runtime_status['source_flux_density']:.6g} "
-                        f"phot/s/pix/nm, "
-                        f"T={runtime_status['source_temperature_K']} K, "
-                        f"pupil={runtime_status['pupil_model']}",
-                        flush=True,
+                        f"{source_flux_label}, T={runtime_status['source_temperature_K']} K, "
+                        f"pupil={runtime_status['pupil_model']}", flush=True,
                     )
 
     # Select one complete NCPA profile before propagation/diagnostics/telemetry.
