@@ -4,7 +4,7 @@ Not a live SHM/camera-server test and not a test of HCIPy DM initialization.
 """
 import unittest
 import numpy as np
-from integrated_v2_support import (start_scenario, advance_scenario,
+from integrated_support import (start_scenario, advance_scenario,
                                    run_scenarios, production_helpers)
 
 

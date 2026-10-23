@@ -29,7 +29,7 @@ from baldrapp.paranal_simulator.scripts.sim_ncpa import NcpaProfile, handle_ncpa
 from baldrapp.utils import baldr_core as bldr
 from baldrapp.utils import utilities as util
 from baldrapp.utils import phasescreens as ps
-from baldrapp.utils import atmosphere_v2
+from baldrapp.utils import atmosphere
 from baldrapp.utils import spectrum as spec
 from baldrapp.utils import pupils as aperture
 
@@ -717,7 +717,7 @@ def init_dynamic_atmosphere_for_beam(zwfs):
         ao_cfg = getattr(zwfs, "first_stage_ao", None)
         ao_enabled = enabled and bool(get_cfg_value(ao_cfg, "enabled", False))
         n_modes = int(get_cfg_value(ao_cfg, "Nmodes_removed", 0))
-        model = (atmosphere_v2.MultilayerAtmosphere.from_resolved_config(
+        model = (atmosphere.MultilayerAtmosphere.from_resolved_config(
             zwfs.resolved_config,
             grid_dim=int(zwfs.grid.dim),
             pupil_pixel_scale_m=dx,
@@ -867,7 +867,7 @@ def generate_scintillation_fields_for_beam(zwfs, amp_input_0, dynamic_state):
             # Same modal AO correction engine as Stage 3. We reconstruct an
             # actual OPD correction and apply it to the propagated field.
             sensed = diagnostic_opd * dynamic_state['ao_phase_scaling_factor']
-            diagnostic_opd = atmosphere_v2.modal_ao_residual_opd(
+            diagnostic_opd = atmosphere.modal_ao_residual_opd(
                 sensed, dynamic_state['ao_basis'], pupil,
                 dynamic_state['n_modes_removed'],
                 correction_gain=dynamic_state['ao_correction_gain'],
@@ -914,7 +914,7 @@ def generate_atmosphere_and_source_for_beam(zwfs, amp_input_0, dynamic_state):
         else:
             opd_input = physical_opd
             if dynamic_state["ao_enabled"] and dynamic_state["ao_basis"] is not None:
-                opd_input = atmosphere_v2.modal_ao_residual_opd(
+                opd_input = atmosphere.modal_ao_residual_opd(
                     opd_input * dynamic_state["ao_phase_scaling_factor"],
                     dynamic_state["ao_basis"], pupil,
                     dynamic_state["n_modes_removed"],

@@ -12,10 +12,10 @@ import unittest
 
 import numpy as np
 
-from test_real_optics_v2 import EXAMPLE, load_real_optics, make_instrument
+from test_real_optics import EXAMPLE, load_real_optics, make_instrument
 
 ROOT = Path(__file__).resolve().parents[1]
-RUNTIME = ROOT / "src/baldrapp/paranal_simulator/scripts/baldr_sim_updated_runtime_control.py"
+RUNTIME = ROOT / "src/baldrapp/paranal_simulator/scripts/baldr_simulator.py"
 
 
 class CountingDM:

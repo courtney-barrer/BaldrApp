@@ -8,7 +8,7 @@ atmosphere, source, ZWFS/Fresnel and detector physics.
 
 From the repository root:
 
-    python src/baldrapp/paranal_simulator/scripts/diagnose_integrated_v2.py \
+    python src/baldrapp/paranal_simulator/scripts/diagnose_integrated.py \
         --output-dir stage5_validation
 
 This does not validate the full initialized HCIPy DM, hardware SHM formats,
@@ -25,7 +25,7 @@ import numpy as np
 
 REPO = Path(__file__).resolve().parents[4]
 sys.path.insert(0, str(REPO / 'tests'))
-from integrated_v2_support import run_scenarios  # noqa: E402
+from integrated_support import run_scenarios  # noqa: E402
 
 
 def write_plots(report, snapshots, directory):

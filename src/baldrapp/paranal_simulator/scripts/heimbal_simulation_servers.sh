@@ -20,7 +20,7 @@ set -euo pipefail
 #   ./heimbal_simulation_servers.sh tail
 #
 # Optional override:
-#   SIM_SCRIPT=baldr_sim_updated_runtime_control.py ./heimbal_simulation_servers.sh start
+#   SIM_SCRIPT=baldr_simulator.py ./heimbal_simulation_servers.sh start
 # ============================================================
 
 
@@ -54,7 +54,7 @@ mkdir -p "$RUNDIR" "$LOGDIR"
 
 
 # 5. Update paths to point to the new subdirectories
-SIM_SCRIPT="scripts/baldr_sim_updated_runtime_control.py"
+SIM_SCRIPT="scripts/baldr_simulator.py"
 GUI_SCRIPT="guis/baldr_sim_control_gui.py"
 
 # Common Python launch prefix.

@@ -1,6 +1,6 @@
 """Stage 2.5: genuine Fourier/Fresnel propagation and detector photon budget.
 
-Unlike test_source_v2, NO optical or detector functions are mocked. We compile
+Unlike test_source, NO optical or detector functions are mocked. We compile
 specific function definitions directly from baldr_core.py and spectrum.py so
 this numerical suite also runs on hosts without unrelated GUI/SHM/astropy
 packages. The extracted bodies are unmodified production implementations.
@@ -19,7 +19,7 @@ import unittest
 
 import numpy as np
 
-from baldrapp.utils import configuration, config_helper, fresnel, source_v2
+from baldrapp.utils import configuration, config_helper, fresnel, source
 
 ROOT = Path(__file__).resolve().parents[1]
 CORE = ROOT / 'src/baldrapp/utils/baldr_core.py'
@@ -49,7 +49,7 @@ def _load_definitions(path, names, namespace):
 def load_real_optics():
     spec_dict = _load_definitions(SPECTRUM, SPEC_FUNCTIONS, {'np': np})
     spec = SimpleNamespace(**{n: spec_dict[n] for n in SPEC_FUNCTIONS})
-    optics = {'np': np, 'spec': spec, 'source_v2': source_v2, 'fresnel': fresnel,
+    optics = {'np': np, 'spec': spec, 'source': source, 'fresnel': fresnel,
               'plt': None, '_AUTO_SPECTRAL_BANDWIDTH': 'auto'}
     return _load_definitions(CORE, CORE_FUNCTIONS, optics)
 
@@ -84,13 +84,13 @@ def make_instrument(cfg, n_wavelengths, *, profile='internal', size=64,
         grid=SimpleNamespace(N=pupil_diameter, pupil_mask=pupil),
         focal_plane=SimpleNamespace(fplane_pixels=129, pixels_across_mask=10),
         optics=optics,
-        spectrum=source_v2.spectrum_for_profile(resolved, profile),
+        spectrum=source.spectrum_for_profile(resolved, profile),
         fresnel_relay=fr,
         dm=SimpleNamespace(current_cmd=np.zeros(1), opd_per_cmd=1.0),
         compiled_dm=ZeroDM(pupil.shape),
     )
     rate = float(cfg['source_profiles'][profile]['flux']['photons_per_second'])
-    amp = source_v2.source_input_amplitude(pupil, rate)
+    amp = source.source_input_amplitude(pupil, rate)
     return inst, amp
 
 

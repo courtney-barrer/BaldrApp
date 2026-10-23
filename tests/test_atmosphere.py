@@ -13,15 +13,15 @@ import unittest
 
 import numpy as np
 
-from baldrapp.utils.atmosphere_v2 import (
+from baldrapp.utils.atmosphere import (
     MultilayerAtmosphere, LAMBDA_REF_M, modal_ao_residual_opd,
 )
 from baldrapp.utils.configuration import resolve_config
-from baldrapp.utils import atmosphere_v2
+from baldrapp.utils import atmosphere
 
 ROOT = Path(__file__).resolve().parents[1]
-EXAMPLE = ROOT / 'src/baldrapp/paranal_simulator/fake_configs/baldr_config_v2.json'
-RUNTIME = ROOT / 'src/baldrapp/paranal_simulator/scripts/baldr_sim_updated_runtime_control.py'
+REFERENCE = ROOT / 'tests/fixtures/baldr_config_reference.json'
+RUNTIME = ROOT / 'src/baldrapp/paranal_simulator/scripts/baldr_simulator.py'
 
 
 def real_runtime_functions():
@@ -31,7 +31,7 @@ def real_runtime_functions():
              if isinstance(node, ast.FunctionDef) and node.name in funcs]
     assert len(nodes) == 2
     namespace = {
-        'np': np, 'deque': deque, 'atmosphere_v2': atmosphere_v2,
+        'np': np, 'deque': deque, 'atmosphere': atmosphere,
         'get_cfg_value': lambda obj, key, default=None: (obj.get(key, default)
                                 if isinstance(obj, dict) else getattr(obj, key, default)),
     }
@@ -42,7 +42,7 @@ def real_runtime_functions():
 class MultilayerV2Tests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.config = json.loads(EXAMPLE.read_text(encoding='utf-8'))
+        cls.config = json.loads(REFERENCE.read_text(encoding='utf-8'))
 
     @staticmethod
     def fast_report(config):

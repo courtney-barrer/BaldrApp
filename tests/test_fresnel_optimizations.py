@@ -4,7 +4,7 @@ import unittest
 
 import numpy as np
 from baldrapp.utils import fresnel
-from test_real_optics_v2 import EXAMPLE, load_real_optics, make_instrument
+from test_real_optics import EXAMPLE, load_real_optics, make_instrument
 
 
 class CountingDM:

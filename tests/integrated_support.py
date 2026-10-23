@@ -16,12 +16,12 @@ from types import SimpleNamespace
 
 import numpy as np
 
-from baldrapp.utils import atmosphere_v2, pupils, source_v2
+from baldrapp.utils import atmosphere, pupils, source
 from baldrapp.utils.configuration import resolve_config
-from test_real_optics_v2 import EXAMPLE, CORE, make_instrument, load_real_optics
+from test_real_optics import EXAMPLE, CORE, make_instrument, load_real_optics
 
 ROOT = Path(__file__).resolve().parents[1]
-RUNTIME = ROOT / 'src/baldrapp/paranal_simulator/scripts/baldr_sim_updated_runtime_control.py'
+RUNTIME = ROOT / 'src/baldrapp/paranal_simulator/scripts/baldr_simulator.py'
 
 
 def three_mode_basis(zwfs, n_modes_removed):
@@ -49,13 +49,13 @@ def _extract(path, names, namespace):
 def production_helpers():
     """Load runtime functions without executing its unguarded SHM main loop."""
     core = _extract(CORE, ['select_source_profile_v2', 'source_amplitude_v2'],
-                    {'np': np, 'SimpleNamespace': SimpleNamespace, 'source_v2': source_v2})
+                    {'np': np, 'SimpleNamespace': SimpleNamespace, 'source': source})
     bldr = SimpleNamespace(**core)
     names = ['get_cfg_value', 'make_source_pupil_profiles', 'apply_source_pupil',
              'apply_source_profile_fixed_grid', 'get_source_amplitude_from_config',
              'init_dynamic_atmosphere_for_beam', 'generate_atmosphere_and_source_for_beam',
              'generate_scintillation_fields_for_beam', 'runtime_dynamic_state_from_control']
-    ns = {'np': np, 'deque': deque, 'atmosphere_v2': atmosphere_v2,
+    ns = {'np': np, 'deque': deque, 'atmosphere': atmosphere,
           'SimpleNamespace': SimpleNamespace, 'aperture': pupils,
           'bldr': bldr, 'make_first_stage_ao_basis': three_mode_basis}
     return _extract(RUNTIME, names, ns), load_real_optics()

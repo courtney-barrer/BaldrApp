@@ -21,7 +21,7 @@ from . import DM_registration
 
 from . import config_helper as cfghelp
 from . import spectrum as spec
-from . import source_v2
+from . import source
 from . import fresnel
 from abc import ABC, abstractmethod
 from typing import Tuple, Optional, Dict, List
@@ -4436,7 +4436,7 @@ def select_source_profile_v2(zwfs_ns, name):
         raise ValueError(f"Unknown schema-v2 source profile {name!r}")
     raw = report["configuration"]["source_profiles"][name]
     derived = report["derived"]["source_profiles"][name]
-    zwfs_ns.spectrum = source_v2.spectrum_for_profile(report, name)
+    zwfs_ns.spectrum = source.spectrum_for_profile(report, name)
     zwfs_ns.source = SimpleNamespace(
         active_profile=name,
         pupil_model=derived["pupil_model"],
@@ -4451,7 +4451,7 @@ def source_amplitude_v2(zwfs_ns):
     """Band-integrated sqrt(photon/s/pixel) amplitude of the selected pupil."""
     if getattr(zwfs_ns, "config_schema_version", None) != 2:
         raise ValueError("source_amplitude_v2 requires schema v2")
-    return source_v2.source_input_amplitude(
+    return source.source_input_amplitude(
         zwfs_ns.grid.pupil_mask, zwfs_ns.source.photons_per_second
     )
 
@@ -4822,7 +4822,7 @@ def get_frame_polychromatic(
         weight_unit = "nm"
     else:
         wavelengths = np.asarray(zwfs_ns.spectrum.wavelengths, dtype=float)
-        weights_nm, weight_unit = source_v2.integration_weights(zwfs_ns.spectrum)
+        weights_nm, weight_unit = source.integration_weights(zwfs_ns.spectrum)
 
     if wavelengths.ndim != 1:
         raise ValueError("zwfs_ns.spectrum.wavelengths must be one-dimensional.")
@@ -5278,7 +5278,7 @@ def get_frame_fresnel_polychromatic(
         weight_unit = "nm"
     else:
         wavelengths = np.asarray(zwfs_ns.spectrum.wavelengths, dtype=float)
-        weights_nm, weight_unit = source_v2.integration_weights(zwfs_ns.spectrum)
+        weights_nm, weight_unit = source.integration_weights(zwfs_ns.spectrum)
 
     if wavelengths.ndim != 1:
         raise ValueError("zwfs_ns.spectrum.wavelengths must be one-dimensional.")

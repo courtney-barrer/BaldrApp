@@ -17,7 +17,7 @@ from unittest.mock import Mock
 import numpy as np
 
 from baldrapp.utils.configuration import resolve_config
-from baldrapp.utils import source_v2
+from baldrapp.utils import source
 
 CORE = Path(__file__).resolve().parents[1] / 'src/baldrapp/utils/baldr_core.py'
 EXAMPLE = Path(__file__).resolve().parents[1] / 'src/baldrapp/paranal_simulator/fake_configs/baldr_config_v2.json'
@@ -45,26 +45,26 @@ class V2SourceTests(unittest.TestCase):
             pupil = np.ones((n, n))
             pupil[:n//3, :n//2] = 0
             pupil[2*n//3:, :n//4] = 0.37  # apodization
-            amplitude = source_v2.source_input_amplitude(pupil, rate)
+            amplitude = source.source_input_amplitude(pupil, rate)
             self.assertAlmostEqual(float(np.sum(amplitude**2)) / rate, 1, places=13)
             self.assertTrue(np.all(amplitude[pupil == 0] == 0))
 
     def test_zero_flux_and_invalid_pupil(self):
-        self.assertEqual(np.sum(source_v2.source_input_amplitude(np.ones((4, 4)), 0)), 0)
+        self.assertEqual(np.sum(source.source_input_amplitude(np.ones((4, 4)), 0)), 0)
         for pupil in (np.zeros((4, 4)), np.full((2, 2), np.nan), np.ones((2, 2))*-1):
             with self.assertRaises(ValueError):
-                source_v2.source_input_amplitude(pupil, 100)
+                source.source_input_amplitude(pupil, 100)
         with self.assertRaises(ValueError):
-            source_v2.source_input_amplitude(np.ones((4, 4)), -1)
+            source.source_input_amplitude(np.ones((4, 4)), -1)
 
     def test_shared_wavelengths_independent_weights(self):
-        internal = source_v2.spectrum_for_profile(self.resolved, 'internal')
-        onsky = source_v2.spectrum_for_profile(self.resolved, 'onsky')
+        internal = source.spectrum_for_profile(self.resolved, 'internal')
+        onsky = source.spectrum_for_profile(self.resolved, 'onsky')
         np.testing.assert_array_equal(internal.wavelengths, onsky.wavelengths)
         self.assertFalse(np.allclose(internal.photon_fractions, onsky.photon_fractions))
         self.assertAlmostEqual(internal.photon_fractions.sum(), 1)
         self.assertAlmostEqual(onsky.photon_fractions.sum(), 1)
-        self.assertEqual(source_v2.integration_weights(internal)[1], 'photon_fraction')
+        self.assertEqual(source.integration_weights(internal)[1], 'photon_fraction')
 
     def test_sample_count_changes_no_band_integrated_flux(self):
         for n in (1, 2, 3, 7, 17, 101):
@@ -77,7 +77,7 @@ class V2SourceTests(unittest.TestCase):
 
     def test_legacy_weights_are_unchanged(self):
         legacy = SimpleNamespace(wavelengths=np.array([1., 2.]), weights_nm=np.array([3., 4.]))
-        weights, unit = source_v2.integration_weights(legacy)
+        weights, unit = source.integration_weights(legacy)
         np.testing.assert_array_equal(weights, [3, 4])
         self.assertEqual(unit, 'nm')
 
@@ -112,17 +112,17 @@ class V2SourceTests(unittest.TestCase):
 
         ns = load_core_functions(
             {'get_frame_polychromatic', 'get_frame_fresnel_polychromatic', 'get_frame_configured'},
-            {'np': np, 'source_v2': source_v2, 'spec': FakeSpec,
+            {'np': np, 'source': source, 'spec': FakeSpec,
              'get_frame': fake_get_frame, 'get_frame_fresnel': fake_fresnel,
              'detect': fake_detect, '_AUTO_SPECTRAL_BANDWIDTH': 'auto'},
         )
         detector = SimpleNamespace(binning=1, qe=0.7, dit=0.002, ron=0.0)
-        amplitude = source_v2.source_input_amplitude(np.ones((5, 5)), 2e6)
+        amplitude = source.source_input_amplitude(np.ones((5, 5)), 2e6)
         for n in (1, 7):
             cfg = deepcopy(self.config)
             cfg['bandpass']['n_wavelengths'] = n
             report = resolve_config(cfg)
-            spectrum = source_v2.spectrum_for_profile(report, 'internal')
+            spectrum = source.spectrum_for_profile(report, 'internal')
             expected = float(np.dot(spectrum.photon_fractions, spectrum.wavelengths / 1.65e-6))
             for use_fresnel in (False, True):
                 instrument = SimpleNamespace(
@@ -146,7 +146,7 @@ class V2SourceTests(unittest.TestCase):
         def fake_pupil():
             return np.ones((4, 4))
         ns = load_core_functions({'select_source_profile_v2', 'source_amplitude_v2'},
-                                 {'SimpleNamespace': SimpleNamespace, 'source_v2': source_v2})
+                                 {'SimpleNamespace': SimpleNamespace, 'source': source})
         inst = SimpleNamespace(config_schema_version=2, resolved_config=self.resolved,
                                grid=SimpleNamespace(pupil_mask=fake_pupil()))
         inst = ns['select_source_profile_v2'](inst, 'internal')

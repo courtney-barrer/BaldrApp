@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """Reproducible numerical Stage 2.5 diagnostics (no SHM/camera required).
 
-Uses the real optical function bodies through the test_real_optics_v2 support
+Uses the real optical function bodies through the test_real_optics support
 harness. Writes a JSON numerical report and two PNG figures; does not change
 any source configuration or instrument state on disk.
 
 From repository root:
-  python src/baldrapp/paranal_simulator/scripts/diagnose_real_optics_v2.py \
+  python src/baldrapp/paranal_simulator/scripts/diagnose_real_optics.py \
       --output-dir /tmp/baldr_stage25
 """
 from __future__ import annotations
@@ -20,7 +20,7 @@ import numpy as np
 
 REPO = Path(__file__).resolve().parents[4]
 sys.path.insert(0, str(REPO / 'tests'))
-from test_real_optics_v2 import (  # noqa: E402
+from test_real_optics import (  # noqa: E402
     RealOpticsV2Tests, make_instrument,
 )
 

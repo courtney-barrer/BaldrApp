@@ -15,11 +15,12 @@ from baldrapp.utils.configuration import (
 EXAMPLE = (Path(__file__).resolve().parents[1] / "src" / "baldrapp" /
            "paranal_simulator" / "fake_configs" / "baldr_config_v2.json")
 LEGACY = EXAMPLE.with_name("baldr_config.json")
+REFERENCE = Path(__file__).resolve().parent / "fixtures" / "baldr_config_reference.json"
 
 
 class V2ConfigurationTests(unittest.TestCase):
     def setUp(self):
-        self.cfg = json.loads(EXAMPLE.read_text(encoding="utf-8"))
+        self.cfg = json.loads(REFERENCE.read_text(encoding="utf-8"))
 
     def assert_invalid(self, path, configure):
         cfg = copy.deepcopy(self.cfg)
@@ -28,10 +29,17 @@ class V2ConfigurationTests(unittest.TestCase):
             validate_config(cfg)
 
     def test_example_is_valid(self):
-        validate_config(self.cfg)
+        # The live example is user-editable (e.g. 3 or 7 spectral samples),
+        # whereas the reference fixture below stays fixed for contract tests.
+        live_cfg = load_config(EXAMPLE)
+        validate_config(live_cfg)
         report = load_and_resolve_config(EXAMPLE)
         self.assertEqual(report["configuration"]["schema_version"], 2)
-        self.assertEqual(len(report["derived"]["bandpass"]["wavelengths_m"]), 7)
+        self.assertEqual(
+            len(report["derived"]["bandpass"]["wavelengths_m"]),
+            live_cfg["bandpass"]["n_wavelengths"],
+        )
+        validate_config(self.cfg)
 
     def test_original_config_remains_available_for_v1(self):
         legacy = json.loads(LEGACY.read_text(encoding="utf-8"))

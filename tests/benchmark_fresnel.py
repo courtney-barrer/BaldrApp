@@ -1,7 +1,7 @@
 """Small reproducible full-Fresnel benchmark; run from repository root.
 
-    BALDR_FFT_WORKERS=1 python tests/benchmark_fresnel_v2.py
-    BALDR_FFT_WORKERS=4 python tests/benchmark_fresnel_v2.py
+    BALDR_FFT_WORKERS=1 python tests/benchmark_fresnel.py
+    BALDR_FFT_WORKERS=4 python tests/benchmark_fresnel.py
 
 The environment variable must be set before importing BaldrApp modules.
 This uses a synthetic instrument, not the live SHM loop.
@@ -10,7 +10,7 @@ import argparse
 import json
 from time import perf_counter
 import numpy as np
-from test_real_optics_v2 import EXAMPLE, load_real_optics, make_instrument
+from test_real_optics import EXAMPLE, load_real_optics, make_instrument
 
 
 def main():

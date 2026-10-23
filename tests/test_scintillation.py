@@ -14,12 +14,13 @@ import unittest
 
 import numpy as np
 
-from baldrapp.utils import atmosphere_v2, source_v2
+from baldrapp.utils import atmosphere, source
 from baldrapp.utils.configuration import resolve_config
-from test_real_optics_v2 import load_real_optics, make_instrument, EXAMPLE
+from test_real_optics import load_real_optics, make_instrument
 
 ROOT = Path(__file__).resolve().parents[1]
-RUNTIME = ROOT / 'src/baldrapp/paranal_simulator/scripts/baldr_sim_updated_runtime_control.py'
+RUNTIME = ROOT / 'src/baldrapp/paranal_simulator/scripts/baldr_simulator.py'
+REFERENCE = ROOT / 'tests/fixtures/baldr_config_reference.json'
 
 
 def load_runtime_scintillation():
@@ -28,7 +29,7 @@ def load_runtime_scintillation():
     tree = ast.parse(RUNTIME.read_text(encoding='utf-8'))
     defs = [n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name in names]
     assert {n.name for n in defs} == names
-    ns = {'np': np, 'deque': deque, 'atmosphere_v2': atmosphere_v2,
+    ns = {'np': np, 'deque': deque, 'atmosphere': atmosphere,
           'get_cfg_value': lambda obj, key, default=None: (
               obj.get(key, default) if isinstance(obj, dict)
               else getattr(obj, key, default))}
@@ -39,11 +40,11 @@ def load_runtime_scintillation():
 class ScintillationV2Tests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.cfg = json.loads(EXAMPLE.read_text(encoding='utf-8'))
+        cls.cfg = json.loads(REFERENCE.read_text(encoding='utf-8'))
         cls.core = load_real_optics()
 
     def test_zero_turbulence_and_energy_conservation(self):
-        p = atmosphere_v2.propagate_atmospheric_layers
+        p = atmosphere.propagate_atmospheric_layers
         z = np.zeros((32, 32))
         for heights in ([10000.0], [10000., 5000., 0]):
             fields = p([z for _ in heights], heights, [1.5e-6, 1.8e-6], .02)
@@ -51,7 +52,7 @@ class ScintillationV2Tests(unittest.TestCase):
             self.assertAlmostEqual(np.sum(np.abs(fields[0])**2), 32**2)
 
     def test_zero_height_exactly_reproduces_phase_sum(self):
-        p = atmosphere_v2.propagate_atmospheric_layers
+        p = atmosphere.propagate_atmospheric_layers
         x = np.arange(32)[None, :]
         z0 = np.broadcast_to(50e-9*np.sin(x/6), (32, 32))
         z1 = np.broadcast_to(40e-9*np.cos(x/8), (32, 32))
@@ -60,7 +61,7 @@ class ScintillationV2Tests(unittest.TestCase):
             np.testing.assert_allclose(observed, np.exp(2j*np.pi*(z0+z1)/wavelength), atol=1e-13)
 
     def test_high_altitude_scintillation_is_chromatic_and_correlated(self):
-        p = atmosphere_v2.propagate_atmospheric_layers
+        p = atmosphere.propagate_atmospheric_layers
         n = 64
         x = np.arange(n)[None, :]
         z = np.broadcast_to(150e-9*np.cos(2*np.pi*x/8), (n, n))
@@ -81,7 +82,7 @@ class ScintillationV2Tests(unittest.TestCase):
         cfg['grid']['N'] = 10
         cfg['atmosphere']['scintillation']['enabled'] = True
         cfg['atmosphere']['layers'][0]['wind_direction_deg'] = 45.0
-        model = atmosphere_v2.MultilayerAtmosphere.from_resolved_config(
+        model = atmosphere.MultilayerAtmosphere.from_resolved_config(
             resolve_config(cfg), grid_dim=24, pupil_pixel_scale_m=.225)
         for layer in model.layers:
             self.assertIsInstance(layer.phase_screen, PhaseScreenKolmogorov)
@@ -125,7 +126,7 @@ class ScintillationV2Tests(unittest.TestCase):
                 np.testing.assert_array_equal(requested, wavelengths)
                 return atmospheric_fields.copy()
         pupil = np.ones((n,n))
-        amp = source_v2.source_input_amplitude(pupil, 1e5)
+        amp = source.source_input_amplitude(pupil, 1e5)
         basis = np.column_stack([np.ones(n*n), xx.ravel()])
         cfg = dict(scint_enabled=True, v2_atmosphere=StaticAtmosphere(),
                    phase_enabled=True, ao_enabled=True, ao_basis=basis,
@@ -152,13 +153,13 @@ class ScintillationV2Tests(unittest.TestCase):
         resolved = resolve_config(cfg)
         pupil = np.zeros((16,16))
         pupil[4:12, 4:12] = 1.0
-        amp = source_v2.source_input_amplitude(pupil, 2e6)
+        amp = source.source_input_amplitude(pupil, 2e6)
         ns = load_runtime_scintillation()
         zwfs = SimpleNamespace(
             config_schema_version=2, resolved_config=resolved,
             grid=SimpleNamespace(D=1.8, N=8, dim=16, pupil_mask=pupil),
             optics=SimpleNamespace(wvl0=1.65e-6),
-            spectrum=source_v2.spectrum_for_profile(resolved, 'onsky'),
+            spectrum=source.spectrum_for_profile(resolved, 'onsky'),
             first_stage_ao=SimpleNamespace(**cfg['first_stage_ao']),
             atmosphere=SimpleNamespace(**cfg['atmosphere']),
         )
