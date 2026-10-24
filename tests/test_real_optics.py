@@ -1,4 +1,4 @@
-"""Stage 2.5: genuine Fourier/Fresnel propagation and detector photon budget.
+"""Source.5: genuine Fourier/Fresnel propagation and detector photon budget.
 
 Unlike test_source, NO optical or detector functions are mocked. We compile
 specific function definitions directly from baldr_core.py and spectrum.py so
@@ -24,7 +24,7 @@ from baldrapp.utils import configuration, config_helper, fresnel, source
 ROOT = Path(__file__).resolve().parents[1]
 CORE = ROOT / 'src/baldrapp/utils/baldr_core.py'
 SPECTRUM = ROOT / 'src/baldrapp/utils/spectrum.py'
-EXAMPLE = ROOT / 'src/baldrapp/paranal_simulator/fake_configs/baldr_config_v2.json'
+EXAMPLE = ROOT / 'src/baldrapp/paranal_simulator/fake_configs/baldr_config.json'
 
 CORE_FUNCTIONS = {
     '_resolve_detector_spectral_bandwidth', 'sum_subarrays', 'detect',
@@ -72,7 +72,7 @@ def make_instrument(cfg, n_wavelengths, *, profile='internal', size=64,
     rr = np.hypot(xx - size//2, yy - size//2)
     pupil = (rr <= pupil_diameter / 2).astype(float)
     # Use the same geometric pupil for both profiles to isolate the
-    # effect of spectral weighting; Stage 2 tests geometrical switching.
+    # effect of spectral weighting; Source tests geometrical switching.
     optics = SimpleNamespace(**cfg['optics'])
     optics.theta = float(theta)
     optics.coldstop_diam = coldstop_diam
@@ -80,8 +80,7 @@ def make_instrument(cfg, n_wavelengths, *, profile='internal', size=64,
         config_helper.dict_to_namespace_recursive(cfg['fresnel_relay']))
     fr.enabled = bool(fresnel_enabled)
     inst = SimpleNamespace(
-        config_schema_version=2,
-        grid=SimpleNamespace(N=pupil_diameter, pupil_mask=pupil),
+                grid=SimpleNamespace(N=pupil_diameter, pupil_mask=pupil),
         focal_plane=SimpleNamespace(fplane_pixels=129, pixels_across_mask=10),
         optics=optics,
         spectrum=source.spectrum_for_profile(resolved, profile),
@@ -94,7 +93,7 @@ def make_instrument(cfg, n_wavelengths, *, profile='internal', size=64,
     return inst, amp
 
 
-class RealOpticsV2Tests(unittest.TestCase):
+class RealOpticsTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.cfg = json.loads(EXAMPLE.read_text(encoding='utf-8'))
@@ -135,7 +134,7 @@ class RealOpticsV2Tests(unittest.TestCase):
             frame = self.simulate(inst, amp*np.sqrt(rate_scale), detector=det)
             self.assertEqual(frame.shape, (16, 16))
             self.assertAlmostEqual(frame.sum() / base.sum(), qe*dit*rate_scale, places=12)
-        # The v2 photon fractions must not introduce a 300 nm multiplier.
+        # The photon fractions must not introduce a 300 nm multiplier.
 
     def test_real_chromatic_shape_and_convergence_nofresnel(self):
         inst_ref, amp = make_instrument(self.cfg, 51)

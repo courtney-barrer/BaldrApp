@@ -1,4 +1,4 @@
-"""Stage-2 photon budget / routing tests without hardware-only dependencies.
+"""Source photon budget / routing tests without hardware-only dependencies.
 
 The optical core currently imports astropy and other instrument packages not
 available in every CI environment. For integration tests we extract the actual
@@ -20,7 +20,7 @@ from baldrapp.utils.configuration import resolve_config
 from baldrapp.utils import source
 
 CORE = Path(__file__).resolve().parents[1] / 'src/baldrapp/utils/baldr_core.py'
-EXAMPLE = Path(__file__).resolve().parents[1] / 'src/baldrapp/paranal_simulator/fake_configs/baldr_config_v2.json'
+EXAMPLE = Path(__file__).resolve().parents[1] / 'src/baldrapp/paranal_simulator/fake_configs/baldr_config.json'
 
 
 def load_core_functions(names, namespace):
@@ -33,7 +33,7 @@ def load_core_functions(names, namespace):
     return namespace
 
 
-class V2SourceTests(unittest.TestCase):
+class SourceTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.config = json.loads(EXAMPLE.read_text())
@@ -75,11 +75,11 @@ class V2SourceTests(unittest.TestCase):
                 source = report['derived']['source_profiles'][name]
                 self.assertAlmostEqual(sum(source['photons_per_second_by_wavelength']), 1e9, delta=1e-5)
 
-    def test_legacy_weights_are_unchanged(self):
-        legacy = SimpleNamespace(wavelengths=np.array([1., 2.]), weights_nm=np.array([3., 4.]))
-        weights, unit = source.integration_weights(legacy)
-        np.testing.assert_array_equal(weights, [3, 4])
-        self.assertEqual(unit, 'nm')
+    def test_unnormalized_weights_are_rejected(self):
+        invalid = SimpleNamespace(wavelengths=np.array([1., 2.]),
+                                  photon_fractions=np.array([0.2, 0.2]))
+        with self.assertRaisesRegex(ValueError, "sum to one"):
+            source.integration_weights(invalid)
 
     def test_frame_dispatch_both_optical_paths_and_detect_once(self):
         calls = []
@@ -126,12 +126,11 @@ class V2SourceTests(unittest.TestCase):
             expected = float(np.dot(spectrum.photon_fractions, spectrum.wavelengths / 1.65e-6))
             for use_fresnel in (False, True):
                 instrument = SimpleNamespace(
-                    config_schema_version=2,
-                    spectrum=spectrum,
+                                        spectrum=spectrum,
                     optics=SimpleNamespace(wvl0=1.65e-6, theta=1.57, mask_diam=1.06),
                     fresnel_relay=SimpleNamespace(enabled=use_fresnel),
                 )
-                # Force the driver to route v2 n=1 through the spectral wrapper.
+                # Force the driver to route single-node through the spectral wrapper.
                 args = dict(opd_input=np.zeros_like(amplitude), amp_input=amplitude,
                             opd_internal=np.zeros_like(amplitude), zwfs_ns=instrument,
                             detector=detector, include_shotnoise=False)
@@ -145,16 +144,16 @@ class V2SourceTests(unittest.TestCase):
     def test_runtime_profile_selection_retains_instrument_grid(self):
         def fake_pupil():
             return np.ones((4, 4))
-        ns = load_core_functions({'select_source_profile_v2', 'source_amplitude_v2'},
+        ns = load_core_functions({'select_source_profile', 'source_amplitude'},
                                  {'SimpleNamespace': SimpleNamespace, 'source': source})
-        inst = SimpleNamespace(config_schema_version=2, resolved_config=self.resolved,
+        inst = SimpleNamespace(resolved_config=self.resolved,
                                grid=SimpleNamespace(pupil_mask=fake_pupil()))
-        inst = ns['select_source_profile_v2'](inst, 'internal')
+        inst = ns['select_source_profile'](inst, 'internal')
         waves = inst.spectrum.wavelengths.copy()
-        first = ns['source_amplitude_v2'](inst)
+        first = ns['source_amplitude'](inst)
         inst.grid.pupil_mask[:2, :] = 0
-        inst = ns['select_source_profile_v2'](inst, 'onsky')
-        second = ns['source_amplitude_v2'](inst)
+        inst = ns['select_source_profile'](inst, 'onsky')
+        second = ns['source_amplitude'](inst)
         np.testing.assert_array_equal(inst.spectrum.wavelengths, waves)
         self.assertNotEqual(float(first[0, 0]), float(second[0, 0]))
         self.assertAlmostEqual(float(np.sum(second**2)), 1e9, delta=1e-5)

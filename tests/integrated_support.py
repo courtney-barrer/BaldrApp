@@ -1,4 +1,4 @@
-"""Headless v2 integration harness for Stage 5 validation.
+"""Headless integration harness for instrument validation.
 
 Uses the *unchanged* production atmosphere, spectrum, Fresnel, ZWFS and
 runtime helper function bodies. The instrument is a small synthetic namespace,
@@ -32,7 +32,7 @@ def three_mode_basis(zwfs, n_modes_removed):
     y = (y - (n-1)/2)/n
     basis = np.column_stack([np.ones(n*n), x.ravel(), y.ravel()])
     if n_modes_removed > basis.shape[1]:
-        raise ValueError('Stage 5 headless AO supports 3 modes maximum')
+        raise ValueError('Integrated headless AO supports 3 modes maximum')
     return basis
 
 
@@ -48,7 +48,7 @@ def _extract(path, names, namespace):
 
 def production_helpers():
     """Load runtime functions without executing its unguarded SHM main loop."""
-    core = _extract(CORE, ['select_source_profile_v2', 'source_amplitude_v2'],
+    core = _extract(CORE, ['select_source_profile', 'source_amplitude'],
                     {'np': np, 'SimpleNamespace': SimpleNamespace, 'source': source})
     bldr = SimpleNamespace(**core)
     names = ['get_cfg_value', 'make_source_pupil_profiles', 'apply_source_pupil',
@@ -62,7 +62,7 @@ def production_helpers():
 
 
 def scenario_configuration(name, *, size=64, pupil_diameter=40, n_wavelengths=3):
-    """Return a small, strictly v2-resolved variant of the supplied example."""
+    """Return a small, strictly configuration-resolved variant of the supplied example."""
     known = {'internal', 'onsky_clear', 'phase_only', 'phase_ao',
              'scintillation', 'scintillation_ao'}
     if name not in known:
@@ -159,8 +159,8 @@ def advance_scenario(state):
         'opd_rms_nm': residual_rms_nm,
         'pupil': inst.grid.pupil_mask.copy(),
         'source': inst.source.active_profile,
-        'simulation_time_s': (state.dynamic['v2_atmosphere'].time_s
-            if state.dynamic['v2_atmosphere'] is not None else 0.0),
+        'simulation_time_s': (state.dynamic['atmosphere_model'].time_s
+            if state.dynamic['atmosphere_model'] is not None else 0.0),
         'complex_fields': incident_fields,
         'scintillation_index': scintillation_index,
     }

@@ -1,20 +1,10 @@
-"""BaldrApp v2 JSON configuration validation and resolution.
+"""Validate BaldrApp JSON inputs and derive optical and atmospheric parameters.
 
-Stage 1 of the configuration refactor. This module deliberately does not
-initialise optical objects or SHM; the v1 simulator continues to consume the
-existing baldr_config.json until the v2 photon-budget and atmosphere paths
-are integrated.
+The user configuration describes physical instrument and source parameters.
+Numerical wavelength weights, turbulence strengths and timescales are derived
+without changing the supplied input dictionary.
 
-Public functions
-----------------
-load_config(path) -> dict                 # strict JSON, v2 only
-resolve_config(config) -> dict           # validated JSON-serialisable report
-load_and_resolve_config(path) -> dict
-
-Command line
-------------
-python -m baldrapp.utils.configuration path/to/baldr_config_v2.json
-python -m baldrapp.utils.configuration path/to/file.json --dump-resolved resolved.json
+CLI: python -m baldrapp.utils.configuration path/to/baldr_config.json
 """
 
 from __future__ import annotations
@@ -27,16 +17,15 @@ from pathlib import Path
 from typing import Any
 
 
-SCHEMA_VERSION = 2
 LAMBDA_REF_M = 500e-9
 PLANCK_C2_M_K = 1.438776877e-2  # h*c/k_B in m K
 
 _TOP_LEVEL_KEYS = frozenset({
-    "schema_version", "grid", "optics", "dm", "fresnel_relay", "detector",
+    "grid", "optics", "dm", "fresnel_relay", "detector",
     "internal_aberrations", "first_stage_ao", "simulator_runtime",
     "bandpass", "source_profiles", "atmosphere", "meta", "throughput",
 })
-_OLD_TOP_LEVEL_KEYS = {"source", "stellar", "spectrum"}
+_OLD_TOP_LEVEL_KEYS = {"source", "stellar", "spectrum", "schema_version"}
 _PUPIL_MODELS = frozenset({"SOLARSTEIN", "AT", "UT", "DISC"})
 
 
@@ -107,7 +96,7 @@ def _reject_nonfinite(token: str) -> None:
 
 
 def load_config(path: str | Path) -> dict:
-    """Read strict JSON, then validate it as the v2 configuration schema."""
+    """Read strict JSON and validate the instrument and source inputs."""
     config_path = Path(path)
     try:
         with config_path.open("r", encoding="utf-8") as stream:
@@ -122,24 +111,17 @@ def load_config(path: str | Path) -> dict:
 
 
 def validate_config(cfg: dict) -> None:
-    """Check v2 physical inputs and reject mixed v1/v2 configurations.
-
-    Validates all new/changed blocks strictly. Legacy-unmodified instrument
-    blocks are checked for being objects and preserved for their existing
-    initialisers; their deeper validation is outside Stage 1.
-    """
+    """Validate physical inputs, including nested source and atmosphere blocks."""
     if not isinstance(cfg, dict):
         _fail("$", "configuration must be a JSON object")
     for old in sorted(_OLD_TOP_LEVEL_KEYS & set(cfg)):
-        _fail(f"$.{old}", "legacy v1 field; use bandpass and source_profiles in schema v2")
+        _fail(f"$.{old}", "obsolete input; use bandpass and source_profiles instead")
     _object(cfg, "$", required={
-        "schema_version", "grid", "optics", "dm", "bandpass",
+        "grid", "optics", "dm", "bandpass",
         "source_profiles", "atmosphere", "simulator_runtime",
     }, optional=_TOP_LEVEL_KEYS)
-    if type(cfg["schema_version"]) is not int or cfg["schema_version"] != SCHEMA_VERSION:
-        _fail("$.schema_version", "must be the integer 2 for this parser (v1 remains in the legacy loader)")
 
-    # Unchanged hardware sections are *not* rewritten in this stage.
+    # Preserve established hardware block contents for the optical initializer.
     for section in ("grid", "optics", "dm", "fresnel_relay", "detector",
                     "internal_aberrations", "first_stage_ao", "simulator_runtime",
                     "throughput", "meta"):
@@ -229,8 +211,7 @@ def validate_config(cfg: dict) -> None:
                     required={"enabled"})
     _boolean(scint["enabled"], "$.atmosphere.scintillation.enabled")
 
-    # Stage 3 consumes these fields for the v2 modal AO. Validate now so
-    # malformed lag/gain settings cannot be silently rounded or ignored.
+    # Validate modal-AO controls before any atmospheric state is created.
     if "first_stage_ao" in cfg:
         ao = cfg["first_stage_ao"]
         if "enabled" in ao:
@@ -294,8 +275,7 @@ def _spectral_fraction(nodes: list[float], model: dict) -> list[float]:
 def resolve_config(cfg: dict) -> dict:
     """Return validated input plus *separate*, JSON-serialisable derived fields.
 
-    Resolution here does not instantiate an instrument or apply optical
-    propagation. Stage 2 will consume these spectral fractions and photon rates.
+    Resolution does not instantiate an instrument or apply optical propagation.
     """
     validate_config(cfg)
     band = cfg["bandpass"]
@@ -367,9 +347,9 @@ def load_and_resolve_config(path: str | Path) -> dict:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Validate BaldrApp configuration schema v2 and show derived parameters."
+        description="Validate BaldrApp configuration and show derived parameters."
     )
-    parser.add_argument("config", type=Path, help="Input v2 JSON configuration")
+    parser.add_argument("config", type=Path, help="Input BaldrApp JSON configuration")
     parser.add_argument("--dump-resolved", type=Path, metavar="PATH",
                         help="Write a JSON snapshot containing config + derived values")
     args = parser.parse_args(argv)
@@ -378,7 +358,7 @@ def main(argv: list[str] | None = None) -> int:
     except (ConfigurationError, OSError) as exc:
         parser.exit(2, f"Configuration error: {exc}\n")
     derived = report["derived"]
-    print(f"Valid BaldrApp configuration v{SCHEMA_VERSION}: {args.config}")
+    print(f"Valid BaldrApp configuration: {args.config}")
     wavelengths = derived["bandpass"]["wavelengths_m"]
     limits = report["configuration"]["bandpass"]
     print(f"  Bandpass: {limits['wavelength_min_m']*1e9:.1f}–{limits['wavelength_max_m']*1e9:.1f} nm"

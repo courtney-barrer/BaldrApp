@@ -37,7 +37,7 @@ def load_runtime_scintillation():
     return ns
 
 
-class ScintillationV2Tests(unittest.TestCase):
+class ScintillationTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.cfg = json.loads(REFERENCE.read_text(encoding='utf-8'))
@@ -128,11 +128,11 @@ class ScintillationV2Tests(unittest.TestCase):
         pupil = np.ones((n,n))
         amp = source.source_input_amplitude(pupil, 1e5)
         basis = np.column_stack([np.ones(n*n), xx.ravel()])
-        cfg = dict(scint_enabled=True, v2_atmosphere=StaticAtmosphere(),
+        cfg = dict(scint_enabled=True, atmosphere_model=StaticAtmosphere(),
                    phase_enabled=True, ao_enabled=True, ao_basis=basis,
                    n_modes_removed=2, ao_phase_scaling_factor=1.,
                    ao_correction_gain=1., ao_remove_piston=True,
-                   ao_lag_frames=0, v2_ao_history=deque())
+                   ao_lag_frames=0, ao_history=deque())
         zwfs = SimpleNamespace(grid=SimpleNamespace(pupil_mask=pupil),
              optics=SimpleNamespace(wvl0=1.5e-6),
              spectrum=SimpleNamespace(wavelengths=wavelengths))
@@ -156,7 +156,7 @@ class ScintillationV2Tests(unittest.TestCase):
         amp = source.source_input_amplitude(pupil, 2e6)
         ns = load_runtime_scintillation()
         zwfs = SimpleNamespace(
-            config_schema_version=2, resolved_config=resolved,
+            resolved_config=resolved,
             grid=SimpleNamespace(D=1.8, N=8, dim=16, pupil_mask=pupil),
             optics=SimpleNamespace(wvl0=1.65e-6),
             spectrum=source.spectrum_for_profile(resolved, 'onsky'),
@@ -169,7 +169,7 @@ class ScintillationV2Tests(unittest.TestCase):
         self.assertEqual(fields.shape, (7,16,16))
         self.assertTrue(np.all(fields[:,pupil==0] == 0))
         self.assertEqual(diag.shape, (16,16))
-        self.assertAlmostEqual(state['v2_atmosphere'].time_s, .001)
+        self.assertAlmostEqual(state['atmosphere_model'].time_s, .001)
         self.assertTrue(np.any(np.abs(fields[0,pupil>0])-amp[pupil>0] != 0))
         # Scintillation changes aperture throughput, which must NOT be
         # renormalized to the constant source rate each frame.

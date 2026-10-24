@@ -22,6 +22,7 @@ from . import DM_registration
 from . import config_helper as cfghelp
 from . import spectrum as spec
 from . import source
+from . import configuration
 from . import fresnel
 from abc import ABC, abstractmethod
 from typing import Tuple, Optional, Dict, List
@@ -4422,18 +4423,14 @@ def process_zwfs_intensity(i, zwfs_ns, method, record_telemetry=False, **kwargs)
 ##########################################
 
 
-def select_source_profile_v2(zwfs_ns, name):
-    """Select a v2 spectrum without rebuilding the optical instrument.
+def select_source_profile(zwfs_ns, name):
+    """Select an input source without rebuilding wavelength-dependent optics.
 
-    The caller owns pupil changes. In the simulator the pupil change is
-    handled separately, so dependent NCPA / AO state can be rebuilt. Retrieve
-    the amplitude *after* selecting the new pupil via source_amplitude_v2().
+    The caller also updates the pupil mask and pupil-dependent aberrations.
     """
-    if getattr(zwfs_ns, "config_schema_version", None) != 2:
-        raise ValueError("select_source_profile_v2 requires a schema-v2 instrument")
     report = zwfs_ns.resolved_config
     if name not in report["derived"]["source_profiles"]:
-        raise ValueError(f"Unknown schema-v2 source profile {name!r}")
+        raise ValueError(f"Unknown source profile {name!r}")
     raw = report["configuration"]["source_profiles"][name]
     derived = report["derived"]["source_profiles"][name]
     zwfs_ns.spectrum = source.spectrum_for_profile(report, name)
@@ -4447,10 +4444,8 @@ def select_source_profile_v2(zwfs_ns, name):
     return zwfs_ns
 
 
-def source_amplitude_v2(zwfs_ns):
-    """Band-integrated sqrt(photon/s/pixel) amplitude of the selected pupil."""
-    if getattr(zwfs_ns, "config_schema_version", None) != 2:
-        raise ValueError("source_amplitude_v2 requires schema v2")
+def source_amplitude(zwfs_ns):
+    """Band-integrated sqrt(photon/s/pixel) amplitude of the active pupil."""
     return source.source_input_amplitude(
         zwfs_ns.grid.pupil_mask, zwfs_ns.source.photons_per_second
     )
@@ -4462,101 +4457,17 @@ def init_zwfs_from_json(
     derive_spectrum=True,
     instantiate_detector=True,
 ):
-    """
-    Initialise a Baldr ZWFS namespace directly from a generic JSON
-    configuration file.
+    """Initialize a ZWFS namespace from the validated BaldrApp JSON file.
 
-    This initializer is intended for generic
-    BaldrApp simulations where the optical model, Fresnel relay, spectrum, and
-    optional simulator metadata are described by a JSON file.
-
-    Required JSON sections
-    ----------------------
-    The JSON file must contain:
-
-        grid
-        optics
-        dm
-
-    These are passed to the existing init_zwfs(grid_ns, optics_ns, dm_ns)
-    function.
-
-    Optional derived sections
-    -------------------------
-    fresnel_relay
-        If present and derive_fresnel is True, derived physical relay
-        quantities are added, including:
-
-            D_phys
-            M_nominal
-            s_object_nominal
-            s_image_nominal
-            z_mirror_to_lens
-            s_object
-            s_image
-            z_focus_to_detector_nominal
-            z_focus_to_detector
-            M_pupil
-            D_detector_predicted
-
-    spectrum
-        If present and derive_spectrum is True, this section is passed to
-        baldrapp.common.spectrum.derive_spectrum(...). The returned namespace
-        is attached as zwfs_ns.spectrum.
-
-        If absent, a backwards-compatible monochromatic spectrum is attached:
-
-            wavelength = optics.wvl0
-            weight = 1
-
-    detector
-        If present, the raw detector config is attached as
-        zwfs_ns.detector_config. If instantiate_detector is True, a BaldrApp
-        detector object is also created as zwfs_ns.detector.
-
-    Optional metadata/runtime sections
-    ----------------------------------
-    The following sections are attached as namespaces if present, but are not
-    interpreted by this initializer:
-
-        meta
-        source
-        stellar
-        throughput
-        internal_aberrations
-        atmosphere
-        first_stage_ao
-        simulator_runtime
-
-    Design note
-    -----------
-    This function configures the ZWFS/instrument namespace. It should not
-    generate atmospheric screens, scintillation screens, DM commands, or
-    detector frames. Those should be handled by higher-level simulation code or
-    frame-generation wrappers.
-
-    Example
-    -------
-    zwfs_ns = init_zwfs_from_json("baldr_config.json")
-
-    fr = zwfs_ns.fresnel_relay
-    sp = zwfs_ns.spectrum
+    The configuration contains one shared bandpass and independent internal
+    and on-sky source profiles. Detector and Fresnel objects are instantiated
+    as requested; atmospheric screens belong to the higher-level simulator.
     """
     json_config = Path(json_config)
-    cfg = cfghelp.load_json_config(json_config)
-
-    if "schema_version" in cfg and cfg["schema_version"] != 2:
-        raise ValueError(f"Unsupported schema_version={cfg['schema_version']!r}; omit for v1 or use 2")
-    is_v2 = cfg.get("schema_version") == 2
-    resolved_v2 = None
-    if is_v2:
-        from .configuration import load_and_resolve_config
-        if not derive_spectrum:
-            raise ValueError("schema v2 requires derive_spectrum=True")
-        # Unlike the legacy loader, strict v2 JSON rejects duplicate keys,
-        # comments, and non-finite values even in otherwise unmodified blocks.
-        resolved_v2 = load_and_resolve_config(json_config)
-        cfg = resolved_v2["configuration"]
+    if not derive_spectrum:
+        raise ValueError("The configured instrument requires spectral initialization")
+    resolved = configuration.load_and_resolve_config(json_config)
+    cfg = resolved["configuration"]
 
     for section in ["grid", "optics", "dm"]:
         if section not in cfg:
@@ -4601,72 +4512,9 @@ def init_zwfs_from_json(
                 qe=float(getattr(det_cfg, "qe", 1.0)),
             )
 
-    # # Spectrum config.
-    # # Always attach zwfs_ns.spectrum when derive_spectrum=True, even if the
-    # # JSON has no spectrum section. This keeps downstream wrappers simple and
-    # # backwards-compatible.
-    # if derive_spectrum:
-    #     if "spectrum" in cfg:
-    #         spectrum_ns = spec.derive_spectrum(
-    #             cfg["spectrum"],
-    #             default_wvl0=zwfs_ns.optics.wvl0,
-    #         )
-    #     else:
-    #         spectrum_ns = spec.default_monochromatic_spectrum(
-    #             zwfs_ns.optics.wvl0
-    #         )
-
-    #     spectrum_ns = cfghelp.complete_spectrum_integration_fields(
-    #         spectrum_ns
-    #     )
-    #     zwfs_ns.spectrum = spectrum_ns
-
-    # V2 has one shared wavelength grid and dimensionless photon fractions;
-    # it must never acquire legacy stellar.bandwidth / weights_nm factors.
-    if is_v2:
-        zwfs_ns.config_schema_version = 2
-        zwfs_ns.resolved_config = resolved_v2
-        select_source_profile_v2(zwfs_ns, "internal")
-    else:
-        # Stellar / spectrum config.
-        # Preferred user config is cfg["stellar"]["spectrum"].
-        # Backwards-compatible fallback is top-level cfg["spectrum"].
-        spectrum_cfg = cfghelp.get_spectrum_config_from_cfg(cfg)
-
-        stellar_ns = getattr(zwfs_ns, "stellar", None)
-        stellar_ns, bandwidth_source = cfghelp.ensure_stellar_bandwidth(
-            stellar_ns,
-            spectrum_cfg=spectrum_cfg,
-            default_nm=1.0,
-            verbose=True,
-        )
-        zwfs_ns.stellar = stellar_ns
-
-        cfghelp.check_stellar_bandwidth_consistency(
-            zwfs_ns.stellar,
-            spectrum_cfg=spectrum_cfg,
-            relative_tolerance=1e-3,
-            verbose=True,
-        )
-
-        if derive_spectrum:
-            if spectrum_cfg is not None:
-                spectrum_ns = spec.derive_spectrum(
-                    spectrum_cfg,
-                    default_wvl0=zwfs_ns.optics.wvl0,
-                )
-            else:
-                spectrum_ns = spec.default_monochromatic_spectrum(zwfs_ns.optics.wvl0)
-
-            spectrum_ns = cfghelp.complete_spectrum_integration_fields(spectrum_ns)
-
-            spectrum_ns = cfghelp.apply_stellar_bandwidth_to_spectrum(
-                spectrum_ns,
-                stellar_ns=zwfs_ns.stellar,
-                warn=True,
-            )
-
-            zwfs_ns.spectrum = spectrum_ns
+    # Shared wavelength grid; source switching updates its photon fractions.
+    zwfs_ns.resolved_config = resolved
+    select_source_profile(zwfs_ns, "internal")
 
     # Fresnel relay config.
     if "fresnel_relay" in cfg:
@@ -4814,8 +4662,7 @@ def get_frame_polychromatic(
     inside the wavelength loop, then restores their original values.
 
     """
-    # V1: nm quadrature of photon spectral density.
-    # V2: dimensionless fractions of the band-integrated photon rate.
+    # Integrate monochromatic intensities with dimensionless photon fractions.
     if not hasattr(zwfs_ns, "spectrum"):
         wavelengths = np.array([zwfs_ns.optics.wvl0], dtype=float)
         weights_nm = np.array([1.0], dtype=float)
@@ -4852,11 +4699,10 @@ def get_frame_polychromatic(
     original_theta = zwfs_ns.optics.theta
     original_mask_diam = zwfs_ns.optics.mask_diam
 
-    # Incident fields are pre-weight, band-integrated amplitude samples at
-    # each wavelength; integrate intensities using v2 photon fractions once.
+    # Incident complex fields are weighted once, after optical propagation.
     if incident_fields is not None:
-        if getattr(zwfs_ns, 'config_schema_version', None) != 2:
-            raise ValueError('incident_fields is supported only for schema v2')
+        if not hasattr(zwfs_ns.spectrum, 'photon_fractions'):
+            raise ValueError('incident_fields requires a photon-fraction spectrum')
         incident_fields = np.asarray(incident_fields)
         expected = (len(wavelengths), *np.asarray(amp_input).shape)
         if (incident_fields.shape != expected or
@@ -5270,8 +5116,7 @@ def get_frame_fresnel_polychromatic(
             "Initialise from a config with a fresnel_relay section."
         )
 
-    # V1: nm quadrature of photon spectral density.
-    # V2: dimensionless fractions of the band-integrated photon rate.
+    # Integrate monochromatic intensities with dimensionless photon fractions.
     if not hasattr(zwfs_ns, "spectrum"):
         wavelengths = np.array([zwfs_ns.optics.wvl0], dtype=float)
         weights_nm = np.array([1.0], dtype=float)
@@ -5303,11 +5148,10 @@ def get_frame_fresnel_polychromatic(
     if np.sum(weights_nm) <= 0:
         raise ValueError("Spectrum weights_nm must have positive sum.")
 
-    # Incident fields are pre-weight, band-integrated amplitude samples at
-    # each wavelength; integrate intensities using v2 photon fractions once.
+    # Incident complex fields are weighted once, after optical propagation.
     if incident_fields is not None:
-        if getattr(zwfs_ns, 'config_schema_version', None) != 2:
-            raise ValueError('incident_fields is supported only for schema v2')
+        if not hasattr(zwfs_ns.spectrum, 'photon_fractions'):
+            raise ValueError('incident_fields requires a photon-fraction spectrum')
         incident_fields = np.asarray(incident_fields)
         expected = (len(wavelengths), *np.asarray(amp_input).shape)
         if (incident_fields.shape != expected or
@@ -5552,25 +5396,25 @@ def get_frame_configured(
             spectrum_enabled = getattr(zwfs_ns.spectrum, "enabled", True)
             wavelengths = np.asarray(zwfs_ns.spectrum.wavelengths, dtype=float)
             use_polychromatic = bool(spectrum_enabled) and (
-                len(wavelengths) > 1 or getattr(zwfs_ns, "config_schema_version", None) == 2
+                len(wavelengths) > 1 or hasattr(zwfs_ns.spectrum, "photon_fractions")
             )
         else:
             use_polychromatic = False
     else:
         use_polychromatic = bool(force_polychromatic)
 
-    if getattr(zwfs_ns, "config_schema_version", None) == 2:
+    if hasattr(getattr(zwfs_ns, "spectrum", None), "photon_fractions"):
         if force_polychromatic is False and len(zwfs_ns.spectrum.wavelengths) > 1:
-            raise ValueError("schema v2 cannot discard spectral samples with force_polychromatic=False")
+            raise ValueError("Cannot discard configured spectral samples with force_polychromatic=False")
         if spectral_bandwidth not in (_AUTO_SPECTRAL_BANDWIDTH, None):
-            raise ValueError("schema v2 uses band-integrated photons/s; do not specify spectral_bandwidth")
+            raise ValueError("Configured sources use band-integrated photons/s; do not specify spectral_bandwidth")
         # Even for a one-node monochromatic simulation the input is already
         # band integrated and must not be multiplied by an arbitrary bandwidth.
         spectral_bandwidth = None
 
     if incident_fields is not None:
-        if getattr(zwfs_ns, 'config_schema_version', None) != 2 or not use_polychromatic:
-            raise ValueError('incident_fields requires the schema v2 spectral integration path')
+        if not hasattr(zwfs_ns.spectrum, 'photon_fractions') or not use_polychromatic:
+            raise ValueError('incident_fields requires photon-fraction spectral integration')
 
     # Optional per-frame DM OPD supplied by the runtime.  In particular this
     # must NOT be cached on zwfs_ns: SHM commands can change every frame.
@@ -5628,7 +5472,7 @@ def get_frame_configured(
         )
 
     # ------------------------------------------------------------
-    # Non-Fresnel + monochromatic legacy path
+    # Non-Fresnel + monochromatic path
     # ------------------------------------------------------------
     if return_intermediates:
         raise ValueError(

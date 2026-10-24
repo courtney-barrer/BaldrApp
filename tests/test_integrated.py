@@ -1,4 +1,4 @@
-"""Stage 5 end-to-end headless physics integration and scenario validation.
+"""Integrated end-to-end headless physics integration and scenario validation.
 
 Not a live SHM/camera-server test and not a test of HCIPy DM initialization.
 """
@@ -8,7 +8,7 @@ from integrated_support import (start_scenario, advance_scenario,
                                    run_scenarios, production_helpers)
 
 
-class IntegratedV2Tests(unittest.TestCase):
+class IntegratedTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.helpers = production_helpers()
@@ -50,7 +50,7 @@ class IntegratedV2Tests(unittest.TestCase):
             np.testing.assert_allclose(x['pre'], y['pre'], rtol=0, atol=1e-8)
             observed.append(x['pre'])
         self.assertGreater(np.linalg.norm(observed[-1]-observed[0]), 1)
-        self.assertAlmostEqual(a.dynamic['v2_atmosphere'].time_s, .04)
+        self.assertAlmostEqual(a.dynamic['atmosphere_model'].time_s, .04)
 
     def test_phase_only_ao_reduces_modal_residual(self):
         raw = start_scenario('phase_only', helpers=self.helpers, fresnel_enabled=False)

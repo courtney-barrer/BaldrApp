@@ -1,4 +1,4 @@
-"""Hardware-independent tests for the BaldrApp v2 configuration contract."""
+"""Hardware-independent tests for the BaldrApp configuration contract."""
 
 import copy
 import json
@@ -13,12 +13,12 @@ from baldrapp.utils.configuration import (
 
 
 EXAMPLE = (Path(__file__).resolve().parents[1] / "src" / "baldrapp" /
-           "paranal_simulator" / "fake_configs" / "baldr_config_v2.json")
+           "paranal_simulator" / "fake_configs" / "baldr_config.json")
 LEGACY = EXAMPLE.with_name("baldr_config.json")
 REFERENCE = Path(__file__).resolve().parent / "fixtures" / "baldr_config_reference.json"
 
 
-class V2ConfigurationTests(unittest.TestCase):
+class ConfigurationTests(unittest.TestCase):
     def setUp(self):
         self.cfg = json.loads(REFERENCE.read_text(encoding="utf-8"))
 
@@ -34,20 +34,16 @@ class V2ConfigurationTests(unittest.TestCase):
         live_cfg = load_config(EXAMPLE)
         validate_config(live_cfg)
         report = load_and_resolve_config(EXAMPLE)
-        self.assertEqual(report["configuration"]["schema_version"], 2)
+        self.assertNotIn("schema_version", report["configuration"])
         self.assertEqual(
             len(report["derived"]["bandpass"]["wavelengths_m"]),
             live_cfg["bandpass"]["n_wavelengths"],
         )
         validate_config(self.cfg)
 
-    def test_original_config_remains_available_for_v1(self):
-        legacy = json.loads(LEGACY.read_text(encoding="utf-8"))
-        self.assertIn("stellar", legacy)
-        self.assertIn("source", legacy)
-        self.assertNotIn("schema_version", legacy)
-        with self.assertRaisesRegex(ConfigurationError, "legacy v1 field"):
-            validate_config(legacy)
+    def test_old_configuration_fields_are_rejected(self):
+        with self.assertRaisesRegex(ConfigurationError, "obsolete input"):
+            validate_config({**self.cfg, "schema_version": 2})
 
     def test_legacy_input_is_rejected_with_location(self):
         self.assert_invalid(r"\$\.stellar", lambda c: c.update(stellar={"bandwidth":300}))

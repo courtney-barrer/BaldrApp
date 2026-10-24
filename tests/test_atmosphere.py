@@ -1,7 +1,7 @@
-"""Stage 3: physical multilayer OPD and v2 runtime integration tests.
+"""Atmospheric physical multilayer OPD and runtime integration tests.
 
 No hardware, SHM or HCIPy dependency: the runtime functions are extracted from
-production source via AST, as in the Stage-2 wrapper tests.
+production source via AST, as in the Source wrapper tests.
 """
 import ast
 from collections import deque
@@ -39,7 +39,7 @@ def real_runtime_functions():
     return namespace
 
 
-class MultilayerV2Tests(unittest.TestCase):
+class MultilayerAtmosphereTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.config = json.loads(REFERENCE.read_text(encoding='utf-8'))
@@ -207,7 +207,7 @@ class MultilayerV2Tests(unittest.TestCase):
         delayed=modal_ao_residual_opd(2*opd,modes,pupil,2,lag_frames=1,history=history)
         np.testing.assert_allclose(delayed,opd,atol=1e-20)
 
-    def test_v2_runtime_initialization_and_frame_phase(self):
+    def test_runtime_initialization_and_frame_phase(self):
         ns = real_runtime_functions()
         cfg=deepcopy(self.config)
         cfg['grid']['dim']=16
@@ -215,7 +215,7 @@ class MultilayerV2Tests(unittest.TestCase):
         cfg['first_stage_ao']['enabled']=False
         r=resolve_config(cfg)
         zwfs=SimpleNamespace(
-            config_schema_version=2, resolved_config=r,
+            resolved_config=r,
             optics=SimpleNamespace(wvl0=cfg['optics']['wvl0']),
             grid=SimpleNamespace(D=1.8,N=8,dim=16,pupil_mask=np.ones((16,16))),
             atmosphere=SimpleNamespace(**cfg['atmosphere']),
@@ -229,13 +229,13 @@ class MultilayerV2Tests(unittest.TestCase):
         np.testing.assert_array_equal(outamp,amp)
         self.assertEqual(first.shape,(16,16))
         self.assertTrue(np.any(first != 0))
-        self.assertAlmostEqual(state['v2_atmosphere'].time_s,0.001)
+        self.assertAlmostEqual(state['atmosphere_model'].time_s,0.001)
         second,_=ns['generate_atmosphere_and_source_for_beam'](zwfs,amp,state)
         self.assertFalse(np.array_equal(first,second))
         state['phase_enabled']=False
         zero,_=ns['generate_atmosphere_and_source_for_beam'](zwfs,amp,state)
         np.testing.assert_array_equal(zero,np.zeros((16,16)))
-        self.assertAlmostEqual(state['v2_atmosphere'].time_s,0.003)
+        self.assertAlmostEqual(state['atmosphere_model'].time_s,0.003)
 
     def test_runtime_modal_ao_with_one_frame_lag(self):
         ns = real_runtime_functions()
@@ -249,7 +249,7 @@ class MultilayerV2Tests(unittest.TestCase):
         modes = np.stack((np.ones((16, 16)), xx.astype(float)), axis=-1).reshape(16*16, 2)
         ns['make_first_stage_ao_basis'] = lambda zwfs, count: modes
         zwfs = SimpleNamespace(
-            config_schema_version=2, resolved_config=r,
+            resolved_config=r,
             optics=SimpleNamespace(wvl0=cfg['optics']['wvl0']),
             grid=SimpleNamespace(D=1.8,N=8,dim=16,pupil_mask=np.ones((16,16))),
             atmosphere=SimpleNamespace(**cfg['atmosphere']),
@@ -257,12 +257,12 @@ class MultilayerV2Tests(unittest.TestCase):
         )
         state = ns['init_dynamic_atmosphere_for_beam'](zwfs)
         self.assertTrue(state['ao_enabled'])
-        raw0 = state['v2_atmosphere'].opd_at(0)
-        raw1 = state['v2_atmosphere'].opd_at(0.001)
+        raw0 = state['atmosphere_model'].opd_at(0)
+        raw1 = state['atmosphere_model'].opd_at(0.001)
         amp = np.ones((16,16))
         first, _ = ns['generate_atmosphere_and_source_for_beam'](zwfs, amp, state)
         np.testing.assert_allclose(first, raw0)
-        self.assertEqual(len(state['v2_ao_history']), 1)
+        self.assertEqual(len(state['ao_history']), 1)
         second, _ = ns['generate_atmosphere_and_source_for_beam'](zwfs, amp, state)
         projection = raw1 - second
         # Fitted delayed correction should be exactly representable by the
@@ -274,7 +274,7 @@ class MultilayerV2Tests(unittest.TestCase):
         )
         state['phase_enabled'] = False
         ns['generate_atmosphere_and_source_for_beam'](zwfs, amp, state)
-        self.assertEqual(len(state['v2_ao_history']), 0)
+        self.assertEqual(len(state['ao_history']), 0)
 
     def test_scintillation_uses_the_same_original_infinite_screen_backend(self):
         from baldrapp.utils.phasescreens import PhaseScreenKolmogorov
@@ -297,7 +297,7 @@ class MultilayerV2Tests(unittest.TestCase):
         cfg['atmosphere']['enabled']=False
         report=self.fast_report(cfg)
         zwfs=SimpleNamespace(
-            config_schema_version=2, resolved_config=report,
+            resolved_config=report,
             optics=SimpleNamespace(wvl0=1.65e-6),
             grid=SimpleNamespace(D=1.8,N=8,dim=16,pupil_mask=np.ones((16,16))),
             atmosphere=SimpleNamespace(**cfg['atmosphere']),

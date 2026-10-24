@@ -197,7 +197,7 @@ class MultilayerAtmosphere:
         return layer_opds
 
     def next_opd(self) -> np.ndarray:
-        """Phase-only atmosphere, preserving the Stage 3 behaviour."""
+        """Return the summed phase-screen OPD in metres."""
         return sum(self.next_layer_opds(), np.zeros(self.output_shape))
 
     def next_fields(self, wavelengths_m) -> np.ndarray:

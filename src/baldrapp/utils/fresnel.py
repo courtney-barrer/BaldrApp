@@ -32,10 +32,24 @@ NormalizationMode = Optional[Literal["peak", "sum"]]
 
 # SciPy pocketfft uses the same transform convention as numpy.fft but can
 # execute individual transforms on multiple CPU workers. Configure once before
-# starting the simulator: BALDR_FFT_WORKERS=1 (default), 2, 4, ...
-_FFT_WORKERS = int(os.environ.get("BALDR_FFT_WORKERS", "1"))
+# starting the simulator: BALDR_FFT_WORKERS=1, 2, 4 (default), ...
+
+
+available_cpus = (
+    len(os.sched_getaffinity(0))
+    if hasattr(os, "sched_getaffinity")
+    else os.cpu_count() or 1
+)
+
+# make default = 1/2 the max number of cpus available (or 1 if low number of cpus)
+default_workers = max(1, min(4, available_cpus // 2))
+
+_FFT_WORKERS = int(
+    os.environ.get("BALDR_FFT_WORKERS", default_workers)
+)
+
 if _FFT_WORKERS < 1:
-    raise ValueError("BALDR_FFT_WORKERS must be a positive integer")
+    raise ValueError("BALDR_FFT_WORKERS must be positive")
 
 
 def fft2(field, norm=None):

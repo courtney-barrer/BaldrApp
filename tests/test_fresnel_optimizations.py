@@ -62,7 +62,7 @@ class FresnelOptimizationTests(unittest.TestCase):
             self.assertIs(mask, fresnel.circular_focal_mask(Nf, radius))
 
     def test_polychromatic_real_optics_matches_unmodified_reference(self):
-        # Calculated using the unmodified Stage 5 NumPy Fresnel implementation,
+        # Calculated using the unmodified Integrated NumPy Fresnel implementation,
         # 64x64, 7 wavelengths, and the deterministic OPD below.
         inst, amp = make_instrument(self.cfg, 7, size=64, pupil_diameter=40,
                                     fresnel_enabled=True)
