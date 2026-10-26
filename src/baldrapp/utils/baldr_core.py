@@ -2474,7 +2474,8 @@ class CompiledDM(GaussianDM):
         influ = []
         for c in range(self.nact):
             influ.append(self.actuator(c).evaluate(1.0, xx, yy))
-        self.influ = np.array(influ)
+        # truncate to f32 for speed, speeds up this calc by about 40% on JC laptop
+        self.influ = np.array(influ).astype(np.float32)
 
     def eval(self, com: NDArray) -> NDArray:
         return np.einsum("i...,i->...", self.influ, com)

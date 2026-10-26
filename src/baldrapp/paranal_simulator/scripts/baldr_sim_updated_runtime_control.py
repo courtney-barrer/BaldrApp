@@ -1657,8 +1657,10 @@ if do_profile:
     pr = cProfile.Profile()
     pr.enable()
     # do 100 frames
-    iterator = range(100)
-    print("RUNNING IN PROFILING MODE, WILL STOP AFTER 100 FRAMES")
+    NFRAMES = 100
+    iterator = range(NFRAMES)
+    print(f"RUNNING IN PROFILING MODE, WILL STOP AFTER {NFRAMES} FRAMES")
+    t1 = time.time()
 else:
     # loop forever
     iterator = itertools.count()
@@ -1955,5 +1957,6 @@ if do_profile:
     ps.print_stats()
     with open("profile.out", "w") as f:
         f.write(s.getvalue())
+    print(f"AVG Framerate: {NFRAMES/(time.time()-t1):0.2f} Hz")
     print("FINISHED PROFILING. RESULT WRITTEN TO `profile.out`. STOPPING.")
 
