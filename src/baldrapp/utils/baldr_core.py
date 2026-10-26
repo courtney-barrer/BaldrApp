@@ -1852,14 +1852,30 @@ def get_frame_fresnel(
         dx_phys,
     )
 
+    # somehow when I test the fresenl prop methods in isolation against numpy,
+    # fresnel-prop wins hands down, but when testing this simulator with a numpy
+    # based fresnel propagation vs `fresnel-prop`, the version using numpy
+    # is faster. I'm still debugging this, but for now we have a flag to use the
+    # original numpy version until I can figure out the profiling contradiction.
+    METHOD = "numpy"
+
     # 1. Propagate from post-collimator ZWFS pupil plane to D/knife-edge mirror.
-    zwfs_ns.propagator.ang_spec(
-        psi_C,
-        fr.z_to_mirror,
-        wavelength,
-        (dx_phys * zwfs_ns.grid.dim, dx_phys * zwfs_ns.grid.dim),
-    )
-    psi_mirror = psi_C
+    if METHOD == "numpy":
+        psi_mirror = fresnel.propagate(
+            psi_C,
+            wavelength=wavelength,
+            dx=dx_phys,
+            z=fr.z_to_mirror,
+            method="angular_spectrum",
+        )
+    else:
+        zwfs_ns.propagator.ang_spec(
+            psi_C,
+            fr.z_to_mirror,
+            wavelength,
+            (dx_phys * zwfs_ns.grid.dim, dx_phys * zwfs_ns.grid.dim),
+        )
+        psi_mirror = psi_C
 
     mirror_mask_full = fresnel.circular_aperture(
         psi_mirror.shape,
@@ -1874,13 +1890,22 @@ def get_frame_fresnel(
     psi_after_mirror = psi_mirror * mirror_mask_D
 
     # 2. Propagate mirror to re-imaging lens.
-    zwfs_ns.propagator.ang_spec(
-        psi_after_mirror,
-        fr.z_mirror_to_lens,
-        wavelength,
-        (dx_phys * zwfs_ns.grid.dim, dx_phys * zwfs_ns.grid.dim),
-    )
-    field_at_lens = psi_after_mirror
+    if METHOD == "numpy":
+        field_at_lens = fresnel.propagate(
+            psi_after_mirror,
+            wavelength=wavelength,
+            dx=dx_phys,
+            z=fr.z_mirror_to_lens,
+            method="angular_spectrum",
+        )
+    else:
+        zwfs_ns.propagator.ang_spec(
+            psi_after_mirror,
+            fr.z_mirror_to_lens,
+            wavelength,
+            (dx_phys * zwfs_ns.grid.dim, dx_phys * zwfs_ns.grid.dim),
+        )
+        field_at_lens = psi_after_mirror
 
     # 3. Apply re-imaging lens.
     field_after_lens = fresnel.apply_thin_lens(
