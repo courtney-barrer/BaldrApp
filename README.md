@@ -57,3 +57,10 @@ If you are running this as another user on your linux you might need to give you
 sudo chown <user>:<user> /dev/shm/*some_shms* 
 ```
 obviously using your username and whatever shared memory addresses (SHMs) you need to use
+
+The simulator in this repository (baldr start | stop) comes with pre-built (C/C++) servers. If you are using an older version of GLIBC on linux this may not work. These servers can be rebuilt 
+```
+cd src/baldrapp/paranal_simulator/scripts
+./build_cpp.sh 
+```
+look within the bash script and CMakeLists.txt in this directory to understand dependancies. 
