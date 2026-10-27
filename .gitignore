@@ -18,3 +18,7 @@ BaldrApp.egg-info/
 .venv/
 *.egg-info/
 .vscode
+
+.release-venv/
+.smoke-venv/
+release-artifacts/

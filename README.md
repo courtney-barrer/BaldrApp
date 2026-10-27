@@ -11,33 +11,57 @@ Because the simulator consumes DM shared memory to update the optical model and 
 
 ![Baldr Simulation Architecture](BaldrApp_schematic.jpeg)
 
-## Installation with `pip`
-```    
-the project can be cloned from the Github:
+## Installation with pip
+
+For Python optics and simulation modules:
+
 ```bash
-git clone https://github.com/courtney-barrer/BaldrApp
-cd /path/to/BaldrApp
-pip install . -e
+pip install BaldrApp
 ```
-The pip installation was tested on only on python 3.12.7. To import modules in python for general use:
-```
-python
-import baldrapp
-```
-To run the paranal simulator after installation simply write in the command line.
+
+For the full Paranal simulator, including precompiled native helpers:
+
 ```bash
+pip install "BaldrApp[simulator]"
 baldr start
-```
-this should start all the camera, DM and MDS (multi-device server - which controls motors in the real system) as well as a gui to control the Baldr system state, and a gui for the DM control and simulated camera frames of Baldr. For troubleshooting logs will be written to BaldrApp/logs. The PIDs of all these processes are tracked and will continue running in the background even if you close the guis - so to close things properly run 
-```bash
+baldr status
 baldr stop
 ```
-which will look at the PID log file and close safety all the processes running with the simulator. 
 
-The configuration for the simulator by default is found (and can be updated) here: 
+The base package does not install the Linux shared-memory or GUI dependencies.
+The `simulator` extra adds `baldrapp-simulator-native` and the simulator's Python
+and GUI dependencies. The bundled executables require Linux x86-64 with the
+`manylinux_2_39` compatibility level and the standard C++ runtime. Older Linux
+systems, macOS, Windows, and ARM cannot install this native wheel. Core Python
+functionality remains available subject to its scientific Python dependencies.
+A graphical session is required for the simulator GUIs.
+
+Logs and process IDs are stored under `${XDG_STATE_HOME:-~/.local/state}/baldrapp`
+(in `logs` and `run`). Override the location using `BALDR_STATE_DIR`.
+Before switching from the older checkout launcher, stop any running simulator
+with that older launcher: the new launcher does not read the old `.run/pids`.
+
+Use `BALDR_CONFIG_PATH=/absolute/path/to/baldr_config.json` to select a custom
+configuration. Relative resource paths in that file are resolved beside the
+configuration. Old repository-relative paths for bundled defaults remain
+supported. To copy the installed default for editing:
+
 ```bash
-BaldrApp/src/baldrapp/paranal_simulator/fake_configs/baldr_config.json
+python -c 'from baldrapp.paranal_simulator.paths import CONFIG_DIR; import shutil; shutil.copytree(CONFIG_DIR, "baldr-config")'
+BALDR_CONFIG_PATH="$PWD/baldr-config/baldr_config.json" baldr start
 ```
+
+To use edited split or phasemask files in that copy, set their configuration
+values to `cred1_split.json` and `phasemask_properties.json`, respectively.
+The launcher passes the selected split file to the native shared-memory creator.
+
+For development, clone the repository and use `pip install -e .` for the core.
+To build native helpers yourself, use the existing `scripts/build_cpp.sh` with
+ImageStreamIO and nlohmann_json installed, then set `BALDR_NATIVE_BIN_DIR` to
+the directory containing both executables. This is an alternative to installing
+the precompiled native package; the simulator Python dependencies are still
+required. See [RELEASING.md](RELEASING.md) for the two-package release procedure.
+
 ## Installation with Nix `flake`s
 If you are using Nix for package management, you can initialise a `devShell` with all the required dependencies, and installing the python package and GUIs using:
 ```bash

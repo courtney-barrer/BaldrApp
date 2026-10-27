@@ -29,59 +29,61 @@ set -euo pipefail
 # Baldr/Heimdallr simulation startup helper
 # ============================================================
 
-# --- Config ---
-# 1. Find where this script lives (now in the 'scripts' folder)
+# Resolve installed resources; never require Git or a checkout-local virtualenv.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-
-# 2. Set the main simulation directory one level up (paranal_simulator)
 SIM_DIR="$(dirname "$SCRIPT_DIR")"
-
-# 3. Find the git root and venv
-GIT_ROOT="$(git -C "$SCRIPT_DIR" rev-parse --show-toplevel)"
-VENV_PATH="${GIT_ROOT}/.venv/bin/activate"
-
-# 4. Run everything from the main paranal_simulator directory
-
-# 4. Run everything from the main paranal_simulator directory
-cd "$SIM_DIR"
-
-# CHANGED: Moved logs and run files to the project root
-RUNDIR="${GIT_ROOT}/.run"
-LOGDIR="${GIT_ROOT}/.logs"
-PIDFILE="${RUNDIR}/pids"
+PYTHON="${BALDR_PYTHON:-python3}"
+# Enables direct use from a src checkout as well as an installed package.
+export PYTHONPATH="$(dirname "$(dirname "$SIM_DIR")")${PYTHONPATH:+:$PYTHONPATH}"
+export PYTHONUNBUFFERED=1
+BALDR_CONFIG_PATH="$("$PYTHON" -c 'from baldrapp.paranal_simulator.paths import configuration_path; print(configuration_path())')"
+export BALDR_CONFIG_PATH
+STATE_DIR="${BALDR_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/baldrapp}"
+mkdir -p "$STATE_DIR"
+cd "$STATE_DIR"
+STATE_DIR="$PWD"
+RUNDIR="$STATE_DIR/run"
+LOGDIR="$STATE_DIR/logs"
+PIDFILE="$RUNDIR/pids"
 mkdir -p "$RUNDIR" "$LOGDIR"
+SIM_SCRIPT="${SIM_SCRIPT:-$SCRIPT_DIR/baldr_simulator.py}"
+GUI_SCRIPT="$SIM_DIR/guis/baldr_sim_control_gui.py"
+declare -A PROCS
+START_ORDER=(sim_mdm_server fake_zmq_server lab_mdm_gui shmview_gui baldr_sim baldr_sim_gui)
 
-
-
-# 5. Update paths to point to the new subdirectories
-SIM_SCRIPT="scripts/baldr_simulator.py"
-GUI_SCRIPT="guis/baldr_sim_control_gui.py"
-
-# Common Python launch prefix.
-PY_PREFIX="export PYTHONUNBUFFERED=1 && export PYTHONPATH=\"${GIT_ROOT}/src\":\${PYTHONPATH:-} && source \"${VENV_PATH}\""
-
-# --- Process Definitions ---
-# 6. Prepend 'scripts/' to the binaries and python files
-declare -A PROCS=(
-  [shm_creator_sim]="tail -f /dev/null | ./scripts/shm_creator_sim"
-  [sim_mdm_server]="tail -f /dev/null | ./scripts/sim_mdm_server"
-  [fake_zmq_server]="bash -c '${PY_PREFIX} && python -u scripts/fake_asgard_ZMQ_CRED1_server.py'"
-  [baldr_sim]="bash -c '${PY_PREFIX} && python -u ${SIM_SCRIPT}'"
-  [lab_mdm_gui]="bash -c 'source \"${VENV_PATH}\" && lab-MDM-control'"
-  [shmview_gui]="bash -c 'source \"${VENV_PATH}\" && shmview /dev/shm/cred1.im.shm'"
-  [baldr_sim_gui]="bash -c '${PY_PREFIX} && python -u ${GUI_SCRIPT}'"
-)
-
-
-START_ORDER=(
-  shm_creator_sim
-  sim_mdm_server
-  fake_zmq_server
-  lab_mdm_gui
-  shmview_gui
-  baldr_sim
-  baldr_sim_gui
-)
+configure_processes() {
+  local native_dir split_json native_cmd
+  if [[ -n "${BALDR_NATIVE_BIN_DIR:-}" ]]; then
+    native_dir="$BALDR_NATIVE_BIN_DIR"
+  else
+    native_dir="$("$PYTHON" -c 'from baldrapp_simulator_native import binary_directory; print(binary_directory())' 2>/dev/null)" || {
+      echo '[ERR] Install simulator support: pip install "BaldrApp[simulator]"' >&2
+      return 1
+    }
+  fi
+  for executable in shm_creator_sim sim_mdm_server; do
+    [[ -x "$native_dir/$executable" ]] || {
+      echo "[ERR] Missing executable: $native_dir/$executable" >&2
+      return 1
+    }
+  done
+  split_json="$("$PYTHON" -c '
+import json
+from baldrapp.paranal_simulator.paths import configuration_path, resource_path
+config = configuration_path()
+with config.open() as f:
+    value = json.load(f).get("simulator_runtime", {}).get("shared_memory", {}).get("split_json", "cred1_split.json")
+print(resource_path(value, config))')"
+  [[ -f "$split_json" ]] || { echo "[ERR] Missing configuration: $split_json" >&2; return 1; }
+  printf -v SHM_CREATE '%q ' "$native_dir/shm_creator_sim" "$split_json"
+  printf -v native_cmd '%q ' "$native_dir/sim_mdm_server"
+  PROCS[sim_mdm_server]="tail -f /dev/null | $native_cmd"
+  printf -v 'PROCS[fake_zmq_server]' '%q ' "$PYTHON" -u "$SCRIPT_DIR/fake_asgard_ZMQ_CRED1_server.py"
+  printf -v 'PROCS[baldr_sim]' '%q ' "$PYTHON" -u "$SIM_SCRIPT"
+  printf -v 'PROCS[baldr_sim_gui]' '%q ' "$PYTHON" -u "$GUI_SCRIPT"
+  PROCS[lab_mdm_gui]="lab-MDM-control"
+  PROCS[shmview_gui]="shmview /dev/shm/cred1.im.shm"
+}
 
 # --- Helpers ---
 have_setsid() { command -v setsid >/dev/null 2>&1; }
@@ -99,27 +101,21 @@ pgid_of() {
 }
 
 check_required_files() {
-  local missing=0
-
-  for f in "scripts/shm_creator_sim" "scripts/sim_mdm_server" "scripts/fake_asgard_ZMQ_CRED1_server.py" "$SIM_SCRIPT" "$GUI_SCRIPT"; do
-    if [[ ! -e "$f" ]]; then
-      echo "[ERR] Missing required file in ${SIM_DIR}: $f" >&2
-      missing=1
-    fi
+  for f in "$SCRIPT_DIR/fake_asgard_ZMQ_CRED1_server.py" "$SIM_SCRIPT" "$GUI_SCRIPT"; do
+    [[ -f "$f" ]] || { echo "[ERR] Missing script: $f" >&2; return 1; }
   done
-
-  if [[ ! -f "$VENV_PATH" ]]; then
-    echo "[ERR] Missing virtualenv activate script: $VENV_PATH" >&2
-    missing=1
-  fi
-
-  if [[ "$missing" -ne 0 ]]; then
-    exit 1
-  fi
+  for command in lab-MDM-control shmview setsid; do
+    command -v "$command" >/dev/null || {
+      echo "[ERR] Missing $command; install BaldrApp[simulator] in the active environment." >&2
+      return 1
+    }
+  done
+  "$PYTHON" -c 'import xaosim.shmlib, zmq, PyQt5, pyqtgraph'
 }
 
 start_one() {
-  local cmd="$1" name="$2" log="${LOGDIR}/${name}.log"
+  local cmd="$1" name="$2"
+  local log="${LOGDIR}/${name}.log"
   echo "======== $(date -Is) START ${name} ========" >>"$log"
   echo "[START] ${name}: ${cmd}"
 
@@ -134,9 +130,9 @@ start_one() {
   fi
 
   if have_setsid; then
-    nohup bash -c "exec setsid ${cmd}" >>"$log" 2>&1 &
+    nohup setsid bash -c "$cmd" >>"$log" 2>&1 &
   else
-    nohup bash -c "exec ${cmd}" >>"$log" 2>&1 &
+    nohup bash -c "$cmd" >>"$log" 2>&1 &
   fi
 
   local pid="$!"
@@ -162,8 +158,11 @@ start_all() {
     exit 1
   fi
 
+  configure_processes
   check_required_files
 
+  # The creator initializes shared memory and exits; it is not a daemon.
+  bash -c "$SHM_CREATE" >"$LOGDIR/shm_creator_sim.log" 2>&1
   : > "$PIDFILE"
 
   echo "[INFO] Using simulator script: ${SIM_SCRIPT}"

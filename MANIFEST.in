@@ -1,3 +1,14 @@
-include requirements.txt
-recursive-include baldrapp/configurations *
-recursive-include baldrapp/data *
+include LICENSE README.md RELEASING.md pyproject.toml
+recursive-include src/baldrapp *.py *.json *.txt *.sh *.cpp *.md
+recursive-include tests *.py *.json
+prune baldrapp
+prune .release-venv
+prune build
+prune dist
+exclude *.tar.gz *.zip *.whl
+exclude README.proposed.md baldr_after_cleanup.svg baldr_profile.svg compress_repo.sh
+exclude src/baldrapp/paranal_simulator/scripts/shm_creator_sim
+exclude src/baldrapp/paranal_simulator/scripts/sim_mdm_server
+global-exclude __pycache__ *.py[cod]
+prune native
+prune .smoke-venv

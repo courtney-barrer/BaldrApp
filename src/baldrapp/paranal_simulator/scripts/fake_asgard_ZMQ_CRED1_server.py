@@ -4,15 +4,7 @@ import zmq
 import threading
 import time
 import json
-import subprocess
-from pathlib import Path
-
-def get_git_root() -> Path:
-    return Path(
-        subprocess.check_output(["git", "rev-parse", "--show-toplevel"], text=True).strip()
-    )
-
-root_path = get_git_root()
+from baldrapp.paranal_simulator.paths import CONFIG_DIR
 
 # --- Shared State ---
 camera_state = {
@@ -29,18 +21,12 @@ camera_state = {
 
 
 phasemask_positions = {}
-for beam in [1,2,3,4]:
-    # with open(root_path / f"baldrapp/apps/paranal_simulator/fake_configs/phase_positions_beam{beam}_2025-01-01T00-00-00.json") as f:
-    #     phasemask_positions[beam] = json.load( f ) 
-    with open(root_path / f"src/baldrapp/paranal_simulator/fake_configs/phase_positions_beam{beam}_2025-01-01T00-00-00.json") as f:
-            phasemask_positions[beam] = json.load( f )
-#/home/rtc/Documents/dcs/simulation/fake_configs/phase_positions_beam4_2025-07-11T15-04-05.json
+for beam in [1, 2, 3, 4]:
+    with open(CONFIG_DIR / f"phase_positions_beam{beam}_2025-01-01T00-00-00.json") as f:
+        phasemask_positions[beam] = json.load(f)
 
-# with open(root_path / "baldrapp/apps/paranal_simulator/fake_configs/mds_state.json") as f:
-#     mds_state = json.load( f )
-# CHANGED: Added 'src/' and removed 'apps/'
-with open(root_path / "src/baldrapp/paranal_simulator/fake_configs/mds_state.json") as f:
-    mds_state = json.load( f )
+with open(CONFIG_DIR / "mds_state.json") as f:
+    mds_state = json.load(f)
 
 motor_state = {d["name"]: d for d in mds_state}
 

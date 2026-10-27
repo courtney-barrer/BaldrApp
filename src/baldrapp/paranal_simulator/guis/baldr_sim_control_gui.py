@@ -4,7 +4,7 @@ import json
 import math
 import time
 from pathlib import Path
-import subprocess
+import os
 import zmq
 from PyQt5 import QtCore, QtGui, QtWidgets
 from baldrapp.paranal_simulator.scripts.ncpa_dialog import NcpaDialog
@@ -20,16 +20,11 @@ DEFAULT_MASK = "J3"
 BEAMS = [1, 2, 3, 4]
 
 
-def get_git_root() -> Path:
-    return Path(
-        subprocess.check_output(
-            ["git", "rev-parse", "--show-toplevel"],
-            text=True,
-        ).strip()
-    )
-
-ROOT_DIR = get_git_root() #Path(__file__).resolve().parent.parent
-DEFAULT_LOG_PATH = ROOT_DIR / "logs" / "baldr_sim.log"
+# Match the launcher's writable state directory, including user overrides.
+STATE_DIR = Path(os.environ.get("BALDR_STATE_DIR") or (
+    Path(os.environ.get("XDG_STATE_HOME") or (Path.home() / ".local/state")) / "baldrapp"
+)).expanduser()
+DEFAULT_LOG_PATH = STATE_DIR / "logs" / "baldr_sim.log"
 
 
 # ============================================================

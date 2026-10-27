@@ -7,7 +7,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "BaldrApp"
-version = "0.1.7"
+version = "0.1.10"
 description = "Simulating Baldr - the Zernike Wavefront Sensor for Asgard"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -21,15 +21,8 @@ dependencies = [
     "numpy>=2.4.6",
     "pandas>=3.0.3",
     "poppy>=1.1.2",
-    "pyqt5>=5.15.11",
-    "pyqtgraph>=0.14.0",
     "scikit-image>=0.26.0",
     "scipy>=1.17.1",
-    "scipy-stubs>=1.17.1.5",
-    "shmview>=0.0.10",
-    "streamlit>=1.58.0",
-    "pyzmq>=25.0.0",
-    "asgard_lab_DM_tools==0.0.10",
     "hcipy>=0.7.1",
 ]
 classifiers = [
@@ -38,15 +31,41 @@ classifiers = [
 ]
 
 
+[project.optional-dependencies]
+simulator = [
+    "baldrapp-simulator-native==0.1.9",
+    "xaosim>=1.0.11",
+    "pyqt5>=5.15.11",
+    "pyqtgraph>=0.14.0",
+    "shmview>=0.0.10",
+    "pyzmq>=25.0.0",
+    "asgard_lab_DM_tools==0.0.10",
+]
+
 [project.scripts]
 baldr = "baldrapp.paranal_simulator.cli:run_heimbal"
 
 
+[tool.setuptools]
+package-dir = {"" = "src"}
+include-package-data = false
+
+[tool.setuptools.package-data]
+"baldrapp" = ["data/*.txt"]
+"baldrapp.paranal_simulator" = ["fake_configs/*.json", "scripts/*.sh", "scripts/*.cpp", "scripts/CMakeLists.txt", "readme.md"]
+
 [tool.setuptools.packages.find]
 where = ["src"]
+namespaces = true
 include = ["baldrapp", "baldrapp.*"]
 
 [dependency-groups]
 dev = [
     "ipython>=9.17.1",
+    "scipy-stubs>=1.17.1.5",
 ]
+
+# Resolve the unpublished companion locally during development. Published wheel
+# metadata still uses the normal versioned PyPI dependency above.
+[tool.uv.sources]
+baldrapp-simulator-native = { path = "native" }

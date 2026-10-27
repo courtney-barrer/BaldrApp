@@ -12,7 +12,7 @@ import zmq
 import time
 import os
 from xaosim.shmlib import shm
-import subprocess
+from baldrapp.paranal_simulator.paths import CONFIG_DIR, configuration_path, resource_path
 from pathlib import Path
 from copy import copy
 from collections import deque
@@ -120,14 +120,6 @@ def precompute_active_phasemask_spectrum_cache(zwfs):
 # Helpers
 # ============================================================
 
-
-def get_git_root() -> Path:
-    return Path(
-        subprocess.check_output(
-            ["git", "rev-parse", "--show-toplevel"],
-            text=True,
-        ).strip()
-    )
 
 
 def convert_12x12_to_140(arr):
@@ -1008,15 +1000,7 @@ def poll_control_socket(
 # Configuration / initialisation
 # ============================================================
 
-root_path = get_git_root()
-
-# Override the default configuration with BALDR_CONFIG_PATH=/path/to/config.json
-config_path = Path(os.environ.get(
-    "BALDR_CONFIG_PATH",
-    str(root_path / "src/baldrapp/paranal_simulator/fake_configs/baldr_config.json"),
-)).expanduser()
-if not config_path.is_absolute():
-    config_path = root_path / config_path
+config_path = configuration_path()
 
 # set DM flat on channel zero to 0.5 for all beams 
 
@@ -1141,11 +1125,9 @@ print(f"[SOURCE] Available source profiles: {sorted(source_profiles)}", flush=Tr
 split_filename = get_cfg_value(
     shared_memory_cfg,
     "split_json",
-    str(root_path / "src/baldrapp/paranal_simulator/fake_configs/cred1_split.json"),
+    str(CONFIG_DIR / "cred1_split.json"),
 )
-split_filename = Path(split_filename)
-if not split_filename.is_absolute():
-    split_filename = root_path / split_filename
+split_filename = resource_path(split_filename, config_path)
 
 with open(split_filename, "r") as file:
     split_dict = json.load(file)
@@ -1298,12 +1280,10 @@ phasemask_runtime_cfg = getattr(runtime_cfg, "phasemask", None)
 phasemask_properties_path = get_cfg_value(
     phasemask_runtime_cfg,
     "properties_file",
-    "baldrapp/apps/paranal_simulator/fake_configs/phasemask_properties.json",
+    str(CONFIG_DIR / "phasemask_properties.json"),
 )
 
-phasemask_properties_path = Path(phasemask_properties_path)
-if not phasemask_properties_path.is_absolute():
-    phasemask_properties_path = root_path / phasemask_properties_path
+phasemask_properties_path = resource_path(phasemask_properties_path, config_path)
 
 with open(phasemask_properties_path, "r") as f:
     phasemask_properties = json.load(f)
