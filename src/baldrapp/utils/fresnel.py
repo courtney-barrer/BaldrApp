@@ -13,7 +13,7 @@ Conventions
 - wavelength is in metres.
 - z is propagation distance in metres.
 - Positive z propagates forward.
-- FFTs use NumPy's native unnormalised convention.
+- FFTs use the NumPy-compatible SciPy pocketfft convention.
 """
 
 from __future__ import annotations
@@ -21,13 +21,81 @@ from __future__ import annotations
 from typing import Literal, Optional, Tuple
 
 import numpy as np
-
+import os
+from scipy import fft as scipy_fft
 
 from functools import lru_cache
 
 
 ArrayLike = np.ndarray
 NormalizationMode = Optional[Literal["peak", "sum"]]
+
+# SciPy pocketfft uses the same transform convention as numpy.fft but can
+# execute individual transforms on multiple CPU workers. Configure once before
+# starting the simulator: BALDR_FFT_WORKERS=1, 2, 4 (default), ...
+
+
+available_cpus = (
+    len(os.sched_getaffinity(0))
+    if hasattr(os, "sched_getaffinity")
+    else os.cpu_count() or 1
+)
+
+# make default = 1/2 the max number of cpus available (or 1 if low number of cpus)
+default_workers = max(1, min(4, available_cpus // 2))
+
+_FFT_WORKERS = int(
+    os.environ.get("BALDR_FFT_WORKERS", default_workers)
+)
+
+if _FFT_WORKERS < 1:
+    raise ValueError("BALDR_FFT_WORKERS must be positive")
+
+
+def fft2(field, norm=None):
+    return scipy_fft.fft2(field, norm=norm, workers=_FFT_WORKERS)
+
+
+def ifft2(field, norm=None):
+    return scipy_fft.ifft2(field, norm=norm, workers=_FFT_WORKERS)
+
+
+@lru_cache(maxsize=16)
+def centered_pixel_radius(shape):
+    """Centered focal-plane radius grid in pixels, shared across calls."""
+    ny, nx = shape
+    yy, xx = np.ogrid[:ny, :nx]
+    radius = np.hypot(yy - (ny - 1) / 2.0, xx - (nx - 1) / 2.0)
+    radius.flags.writeable = False
+    return radius
+
+
+@lru_cache(maxsize=32)
+def circular_focal_mask(n, radius_pixels):
+    """Read-only focal-plane disc; exactly keyed by its computed radius."""
+    result = (centered_pixel_radius((n, n)) <= radius_pixels).astype(float)
+    result.flags.writeable = False
+    return result
+
+
+@lru_cache(maxsize=32)
+def cached_d_mirror_mask(shape, dx, diameter, offset, angle):
+    """Static D-mirror support; cache keys include all mutable relay settings."""
+    X, Y = make_coordinate_grid(shape, dx)
+    full = circular_aperture(shape, dx=dx, radius=diameter / 2.0)
+    Xr = X * np.cos(angle) + Y * np.sin(angle)
+    mask = (Xr >= offset).astype(float) * full
+    mask.flags.writeable = False
+    return mask
+
+
+@lru_cache(maxsize=32)
+def cached_coldstop_mask(shape, dx, dy, diameter, offset_x, offset_y):
+    """Cold-stop support (wavelength-dependent via dx/dy)."""
+    X, Y = make_coordinate_grid(shape, dx, dy)
+    mask = (np.hypot(X - offset_x, Y - offset_y) <= diameter / 2.0).astype(float)
+    mask.flags.writeable = False
+    return mask
 
 
 # ============================================================
@@ -222,7 +290,7 @@ def angular_spectrum_propagate(
         include_global_phase=include_global_phase,
     )
 
-    return np.fft.ifft2(np.fft.fft2(field) * H)
+    return ifft2(fft2(field) * H)
 
 
 def fresnel_transfer_function_propagate(
@@ -250,7 +318,7 @@ def fresnel_transfer_function_propagate(
         include_global_phase=include_global_phase,
     )
 
-    return np.fft.ifft2(np.fft.fft2(field) * H)
+    return ifft2(fft2(field) * H)
 
 
 def propagate(
@@ -496,7 +564,7 @@ def fft_psf(
             mode="constant",
         )
 
-    ef = np.fft.fftshift(np.fft.fft2(np.fft.ifftshift(field)))
+    ef = np.fft.fftshift(fft2(np.fft.ifftshift(field)))
     psf = np.abs(ef) ** 2
 
     if normalize == "peak":
@@ -738,7 +806,7 @@ def fresnel_one_step_propagate(
     )
 
     spectrum = np.fft.fftshift(
-        np.fft.fft2(
+        fft2(
             np.fft.ifftshift(field * quad_in)
         )
     )
@@ -807,7 +875,7 @@ def lens_focal_plane_field(
     Xf, Yf = make_coordinate_grid(field.shape, dx_focal, dy_focal)
 
     spectrum = np.fft.fftshift(
-        np.fft.fft2(
+        fft2(
             np.fft.ifftshift(field)
         )
     )

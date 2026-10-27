@@ -1,13 +1,8 @@
-## Run ./shm_creator_sim first to create the shm in the right format.
-# Do not pass data here otherwise it will overwrite/recreate with the Python
-# shmlib.py wrapper format, which may differ from the RTC-required format.
+"""Baldr simulator runtime: ZMQ/SHM devices and polychromatic optical frames.
 
-
-##############################################################################################################
-# reverted back to stable version, i tried to implement adding dynamic phasemask changing throug baldrapp/apps/paranal_simulator/fake_configs/phasemask_properties_physica_NOTWORKING.json
-# which relies on an updated (still backwards compatible) spectrum.py script which is here
-# These changes have not been commited or implemented
-
+Run the SHM creator/server before starting this process. It uses the existing
+ImageStreamIO SHM layout and must not recreate those segments as raw Python SHM.
+"""
 
 from hcipy import make_pupil_grid
 import numpy as np
@@ -20,14 +15,13 @@ from xaosim.shmlib import shm
 import subprocess
 from pathlib import Path
 from copy import copy
+from collections import deque
 
-# CHANGED: Removed 'apps' and added 'scripts'
 from baldrapp.paranal_simulator.scripts.sim_ncpa import NcpaProfile, handle_ncpa_command
 
-# CHANGED: Replaced 'common' with 'utils'
 from baldrapp.utils import baldr_core as bldr
 from baldrapp.utils import utilities as util
-from baldrapp.utils import phasescreens as ps
+from baldrapp.utils import atmosphere
 from baldrapp.utils import spectrum as spec
 from baldrapp.utils import pupils as aperture
 
@@ -285,8 +279,9 @@ def update_opd_diagnostics(
 ):
     """Measure the entrance wavefront using this frame's current DM command.
 
-    The DM contribution is added once here for diagnostics only. Propagation
-    continues to receive the original OPD inputs and adds the DM itself.
+    The DM contribution is added once to the diagnostic OPD. Propagation
+    receives the same optional DM OPD separately and adds it once optically;
+    it is never included in opd_input or opd_internal by the runtime.
     """
     if opd_dm is None:
         opd_dm = zwfs.compiled_dm.eval(zwfs.dm.current_cmd * zwfs.dm.opd_per_cmd)
@@ -304,137 +299,19 @@ def update_opd_diagnostics(
     return metrics
 
 
-def get_photon_flux_density_from_config(zwfs):
-    """
-    Return photons / second / wave-space-pixel / nm for the simulator source.
-
-    Preferred new JSON config field:
-        zwfs.source.photons_per_second_per_pixel_per_nm
-
-    Fallback:
-        1.0e5 photons / s / pixel / nm
-
-    """
-    source_cfg = getattr(zwfs, "source", None)
-
-    return float(
-        get_cfg_value(
-            source_cfg,
-            "photons_per_second_per_pixel_per_nm",
-            1.0e5,
-        )
-    )
+def get_source_amplitude_from_config(zwfs):
+    """Photon-rate-normalized amplitude for the selected entrance pupil."""
+    return bldr.source_amplitude(zwfs)
 
 
 def apply_source_profile_fixed_grid(zwfs, profile_name, source_profiles):
+    """Switch the source spectrum without changing the wavelength grid.
+
+    The runtime handles pupil and NCPA changes separately.
     """
-    Apply source flux and blackbody temperature while keeping the existing
-    wavelength grid fixed.
-
-    This updates:
-        zwfs.source.photons_per_second_per_pixel_per_nm
-        zwfs.source.active_profile
-        zwfs.spectrum.weights
-        zwfs.spectrum.weights_normalized
-        zwfs.spectrum.weights_nm
-        zwfs.stellar.spectrum.temperature_K
-
-    It does NOT change:
-        zwfs.spectrum.wavelengths
-
-    Therefore it does NOT invalidate the active_phasemask wavelength cache.
-    """
-    if source_profiles is None:
-        raise ValueError("source_profiles is None")
-
-    if isinstance(source_profiles, dict):
-        profiles = source_profiles
-    else:
-        profiles = vars(source_profiles)
-
-    if profile_name not in profiles:
-        raise ValueError(
-            f"Unknown source profile {profile_name!r}. "
-            f"Available profiles: {sorted(profiles.keys())}"
-        )
-
-    profile = profiles[profile_name]
-
-    flux_model = str(get_cfg_value(profile, "flux_model", "")).strip()
-    if flux_model != "photon_density":
-        raise ValueError(
-            f"Unsupported flux_model={flux_model!r} for source profile "
-            f"{profile_name!r}. Only 'photon_density' is supported."
-        )
-
-    flux_density = float(
-        get_cfg_value(
-            profile,
-            "photons_per_second_per_pixel_per_nm",
-            np.nan,
-        )
-    )
-
-    if not np.isfinite(flux_density) or flux_density < 0:
-        raise ValueError(
-            f"Invalid photons_per_second_per_pixel_per_nm for profile "
-            f"{profile_name!r}: {flux_density!r}"
-        )
-
-    temperature_K = float(get_cfg_value(profile, "temperature_K", np.nan))
-
-    if not np.isfinite(temperature_K) or temperature_K <= 0:
-        raise ValueError(
-            f"Invalid temperature_K for profile {profile_name!r}: " f"{temperature_K!r}"
-        )
-
-    # Update flux source.
-    if not hasattr(zwfs, "source") or zwfs.source is None:
-        from types import SimpleNamespace
-
-        zwfs.source = SimpleNamespace()
-
-    zwfs.source.photons_per_second_per_pixel_per_nm = flux_density
-    zwfs.source.active_profile = profile_name
-    zwfs.source.flux_model = flux_model
-
-    # Keep existing wavelength grid fixed.
-    wavelengths_m = np.asarray(zwfs.spectrum.wavelengths, dtype=float)
-
-    # Get weighting mode from current stellar.spectrum if present.
-    stellar_spectrum = getattr(getattr(zwfs, "stellar", None), "spectrum", None)
-    weighting = get_cfg_value(stellar_spectrum, "weighting", "photon")
-    normalize = get_cfg_value(stellar_spectrum, "normalize", "sum")
-
-    # Recompute blackbody weights on the fixed wavelength grid.
-    weights = spec.blackbody_weights(
-        wavelengths_m,
-        temperature_K=temperature_K,
-        weighting=weighting,
-    )
-
-    weights_normalized = spec.normalize_weights(
-        weights,
-        normalize=normalize,
-    )
-
-    zwfs.spectrum.weights = weights
-    zwfs.spectrum.weights_normalized = weights_normalized
-
-    # Preserve current effective bandwidth convention.
-    bandwidth_nm = float(getattr(zwfs.stellar, "bandwidth", 1.0))
-    zwfs.spectrum.weights_nm = weights_normalized * bandwidth_nm
-
-    # Keep stellar metadata informative.
-    if stellar_spectrum is not None:
-        if isinstance(stellar_spectrum, dict):
-            stellar_spectrum["temperature_K"] = temperature_K
-        else:
-            stellar_spectrum.temperature_K = temperature_K
-
-    zwfs.stellar.active_source_profile = profile_name
-
-    return zwfs
+    if profile_name not in source_profiles:
+        raise ValueError(f"Unknown source profile {profile_name!r}")
+    return bldr.select_source_profile(zwfs, profile_name)
 
 
 def get_internal_opd_from_config(zwfs):
@@ -524,7 +401,7 @@ def set_phase_mask_state(
     # ----------------------------
     masks = phasemask_properties.get("masks", {})
     if mask_name not in masks:
-        # Backwards-compatible fallback: use whatever was in baldr_config.json.
+        # Use configured baseline optics if no per-mask entry is available.
         zwfs.optics.current_mask = mask_name
 
         if verbose:
@@ -596,13 +473,6 @@ def read_dm_command(dm_shm):
 # ============================================================
 
 
-def scale_r0_to_wavelength(r0_ref_m, wavelength_m, reference_wavelength_m):
-    """Scale Fried parameter from reference_wavelength_m to wavelength_m."""
-    return float(r0_ref_m) * (float(wavelength_m) / float(reference_wavelength_m)) ** (
-        6.0 / 5.0
-    )
-
-
 def make_first_stage_ao_basis(zwfs, n_modes_removed: int) -> NDArray:
     """
     Build a Zernike basis on the BaldrApp wave-space grid for first-stage AO.
@@ -619,161 +489,103 @@ def make_first_stage_ao_basis(zwfs, n_modes_removed: int) -> NDArray:
     return basis
 
 
-def upsample_to_size(arr, target_size):
-    """Nearest-neighbour upsample/pad/crop a square 2D array to target_size."""
-    arr = np.asarray(arr)
-
-    if arr.shape[0] == target_size:
-        return arr
-
-    factor = max(1, int(target_size) // int(arr.shape[0]))
-    out = util.upsample_by_factor(arr, factor)
-
-    if out.shape[0] < target_size:
-        pad = target_size - out.shape[0]
-        out = np.pad(out, ((0, pad), (0, pad)), mode="edge")
-
-    if out.shape[0] > target_size:
-        out = out[:target_size, :target_size]
-
-    return out
-
-
-def update_scintillation_amplitude(
-    scint_screen,
-    zwfs,
-    pxl_scale,
-    wavelength_m,
-    rows_per_frame=1,
-    propagation_distance_m=10000.0,
-    renormalize_mean_intensity=True,
-    clip_negative_intensity=True,
-):
-    """
-    Evolve a high-altitude phase screen and return scintillation amplitude.
-
-    This uses baldrapp.common.phasescreens.angularSpectrum, not aotools.
-    The returned quantity is field amplitude, so amp_input is multiplied by it.
-    """
-    for _ in range(int(rows_per_frame)):
-        scint_screen.add_row()
-
-    wavefront = np.exp(1j * scint_screen.scrn)
-
-    propagated = ps.angularSpectrum(
-        inputComplexAmp=wavefront,
-        z=float(propagation_distance_m),
-        wvl=float(wavelength_m),
-        inputSpacing=float(pxl_scale),
-        outputSpacing=float(pxl_scale),
-    )
-
-    intensity = np.abs(propagated) ** 2
-
-    if clip_negative_intensity:
-        intensity = np.clip(intensity, 0.0, np.inf)
-
-    amp = np.sqrt(intensity)
-    amp = upsample_to_size(amp, zwfs.grid.pupil_mask.shape[0])
-
-    if renormalize_mean_intensity:
-        pupil = zwfs.grid.pupil_mask.astype(bool)
-        mean_intensity = np.mean(amp[pupil] ** 2)
-        if mean_intensity > 0:
-            amp = amp / np.sqrt(mean_intensity)
-
-    return amp
-
-
 def init_dynamic_atmosphere_for_beam(zwfs):
-    """
-    Initialise Kolmogorov phase, first-stage AO basis, and scintillation state
-    from the JSON-derived zwfs namespace.
-    """
-    wvl0 = float(zwfs.optics.wvl0)
+    """Initialize atmospheric layers and modal first-stage AO for one beam."""
     dx = float(zwfs.grid.D) / float(zwfs.grid.N)
-
     atm_cfg = getattr(zwfs, "atmosphere", None)
-    phase_cfg = getattr(atm_cfg, "phase", None)
-    scint_cfg = getattr(atm_cfg, "scintillation", None)
+    enabled = bool(get_cfg_value(atm_cfg, "enabled", False))
     ao_cfg = getattr(zwfs, "first_stage_ao", None)
-
-    phase_enabled = bool(get_cfg_value(phase_cfg, "enabled", False))
-    ao_enabled = bool(get_cfg_value(ao_cfg, "enabled", False))
-    scint_enabled = bool(get_cfg_value(scint_cfg, "enabled", False))
-
-    phase_screen = None
-    if phase_enabled:
-        r0_500_m = float(get_cfg_value(phase_cfg, "r0_500_m", 0.126))
-        reference_wavelength_m = float(
-            get_cfg_value(phase_cfg, "reference_wavelength_m", 500e-9)
-        )
-        r0_wvl_m = scale_r0_to_wavelength(
-            r0_500_m,
-            wvl0,
-            reference_wavelength_m,
-        )
-
-        phase_screen = ps.PhaseScreenKolmogorov(
-            nx_size=int(zwfs.grid.dim),
-            pixel_scale=dx,
-            r0=r0_wvl_m,
-            L0=float(get_cfg_value(phase_cfg, "L0_m", 25.0)),
-            random_seed=get_cfg_value(phase_cfg, "random_seed", None),
-        )
-
-    n_modes_removed = int(get_cfg_value(ao_cfg, "Nmodes_removed", 0))
-    ao_basis = None
-    if phase_enabled and ao_enabled and n_modes_removed > 0:
-        ao_basis = make_first_stage_ao_basis(zwfs, n_modes_removed)
-
-    scint_screen = None
-    if scint_enabled:
-        scint_r0_500_m = float(get_cfg_value(scint_cfg, "r0_500_m", 0.126))
-        scint_ref_wvl_m = float(
-            get_cfg_value(scint_cfg, "reference_wavelength_m", 500e-9)
-        )
-        scint_r0_wvl_m = scale_r0_to_wavelength(
-            scint_r0_500_m,
-            wvl0,
-            scint_ref_wvl_m,
-        )
-
-        scint_screen = ps.PhaseScreenVonKarman(
-            nx_size=int(zwfs.grid.dim),
-            pixel_scale=dx,
-            r0=scint_r0_wvl_m,
-            L0=float(get_cfg_value(scint_cfg, "L0_m", 25.0)),
-            random_seed=get_cfg_value(scint_cfg, "random_seed", None),
-        )
-
+    ao_enabled = enabled and bool(get_cfg_value(ao_cfg, "enabled", False))
+    n_modes = int(get_cfg_value(ao_cfg, "Nmodes_removed", 0))
+    model = (atmosphere.MultilayerAtmosphere.from_resolved_config(
+        zwfs.resolved_config,
+        grid_dim=int(zwfs.grid.dim),
+        pupil_pixel_scale_m=dx,
+    ) if enabled else None)
+    basis = (make_first_stage_ao_basis(zwfs, n_modes)
+             if ao_enabled and n_modes > 0 else None)
     return {
-        "dx": dx,
-        "phase_enabled": phase_enabled,
-        "phase_screen": phase_screen,
-        "phase_rows_per_frame": int(get_cfg_value(phase_cfg, "rows_per_frame", 1)),
-        "phase_scaling_factor": float(
-            get_cfg_value(phase_cfg, "phase_scaling_factor", 1.0)
-        ),
+        "atmosphere_model": model,
+        "phase_enabled": enabled,
         "ao_enabled": ao_enabled,
-        "ao_basis": ao_basis,
-        "n_modes_removed": n_modes_removed,
-        "ao_phase_scaling_factor": float(
-            get_cfg_value(ao_cfg, "phase_scaling_factor", 1.0)
-        ),
-        "scint_enabled": scint_enabled,
-        "scint_screen": scint_screen,
-        "scint_rows_per_frame": int(get_cfg_value(scint_cfg, "rows_per_frame", 1)),
-        "scint_propagation_distance_m": float(
-            get_cfg_value(scint_cfg, "propagation_distance_m", 10000.0)
-        ),
-        "scint_renormalize_mean_intensity": bool(
-            get_cfg_value(scint_cfg, "renormalize_mean_intensity", True)
-        ),
-        "scint_clip_negative_intensity": bool(
-            get_cfg_value(scint_cfg, "clip_negative_intensity", True)
-        ),
+        "scint_enabled": enabled and bool(get_cfg_value(
+            get_cfg_value(atm_cfg, "scintillation"), "enabled", False)),
+        "ao_basis": basis,
+        "n_modes_removed": n_modes,
+        "ao_phase_scaling_factor": float(get_cfg_value(ao_cfg, "phase_scaling_factor", 1.0)),
+        "ao_correction_gain": float(get_cfg_value(ao_cfg, "correction_gain", 1.0)),
+        "ao_lag_frames": int(get_cfg_value(ao_cfg, "lag_frames", 0)),
+        "ao_remove_piston": bool(get_cfg_value(ao_cfg, "remove_piston", True)),
+        "ao_history": deque(),
     }
+
+
+def generate_scintillation_fields_for_beam(zwfs, amp_input_0, dynamic_state):
+    """Return an on-sky complex field at every configured wavelength.
+
+    The original independent infinite-screen layers are advanced once per
+    physical frame, then propagated top-down. Modal AO applies a common
+    wavelength-independent OPD correction to the complex pupil fields.
+    The source pupil is applied only AFTER atmospheric propagation.
+
+    Returns
+    -------
+    incident_fields : complex ndarray, shape (n_wavelength, ny, nx)
+        Entrance-pupil amplitude carrying band-integrated photons/s/pixel;
+        do not multiply by photon fractions here (frame wrapper does that).
+    diagnostic_opd : 2D ndarray (m)
+        The reference-wavelength wavefront residual for telemetry only.
+        This must NOT be supplied as opd_input to the frame dispatcher,
+        since its phase already exists in incident_fields.
+    """
+    if not dynamic_state.get('scint_enabled', False):
+        raise ValueError('scintillation is disabled in runtime state')
+    model = dynamic_state['atmosphere_model']
+    if model is None:
+        raise ValueError('atmosphere is disabled')
+    wavelengths = np.asarray(zwfs.spectrum.wavelengths, dtype=float)
+    atmospheric_fields = model.next_fields(wavelengths)
+    pupil = np.asarray(zwfs.grid.pupil_mask, dtype=float)
+    amplitude = np.asarray(amp_input_0, dtype=float)
+    if amplitude.shape != pupil.shape or np.any(amplitude < 0):
+        raise ValueError('source amplitude does not match pupil')
+
+    # Estimate the sensed pupil OPD at the nearest sampled reference
+    # wavelength; unwrap on the unmasked wave-optics grid, then correct only
+    # over the telescope pupil. AO correction is applied to every wavelength
+    # as OPD, i.e. exp(-2pi*i*OPD/λ), never as wavelength-independent phase.
+    k_ref = int(np.argmin(np.abs(wavelengths - float(zwfs.optics.wvl0))))
+    phase = np.angle(atmospheric_fields[k_ref])
+    phase_unwrapped = np.unwrap(np.unwrap(phase, axis=0), axis=1)
+    physical_opd = phase_unwrapped * (wavelengths[k_ref] / (2*np.pi))
+    correction_opd = np.zeros_like(pupil)
+    diagnostic_opd = np.zeros_like(pupil)
+    if dynamic_state['phase_enabled']:
+        diagnostic_opd = np.where(pupil > 0, physical_opd, 0.0)
+        if dynamic_state['ao_enabled'] and dynamic_state['ao_basis'] is not None:
+            # Apply that correction to the chromatically propagated field.
+            sensed = diagnostic_opd * dynamic_state['ao_phase_scaling_factor']
+            diagnostic_opd = atmosphere.modal_ao_residual_opd(
+                sensed, dynamic_state['ao_basis'], pupil,
+                dynamic_state['n_modes_removed'],
+                correction_gain=dynamic_state['ao_correction_gain'],
+                remove_piston=dynamic_state['ao_remove_piston'],
+                lag_frames=dynamic_state['ao_lag_frames'],
+                history=dynamic_state['ao_history'],
+            )
+            correction_opd = np.where(pupil > 0, sensed - diagnostic_opd, 0.0)
+        else:
+            dynamic_state['ao_history'].clear()
+    else:
+        dynamic_state['ao_history'].clear()
+        # The runtime phase toggle may be disabled independently of
+        # scintillation. Retain atmospheric amplitude in that case.
+        atmospheric_fields = np.abs(atmospheric_fields).astype(complex)
+
+    correction_phase = np.exp(-2j*np.pi*correction_opd[None] /
+                              wavelengths[:, None, None])
+    incident_fields = atmospheric_fields * correction_phase * amplitude[None]
+    return incident_fields, diagnostic_opd
 
 
 def generate_atmosphere_and_source_for_beam(zwfs, amp_input_0, dynamic_state):
@@ -786,54 +598,33 @@ def generate_atmosphere_and_source_for_beam(zwfs, amp_input_0, dynamic_state):
     current DM command internally.
     """
     pupil = zwfs.grid.pupil_mask
-    wvl0 = float(zwfs.optics.wvl0)
-
-    if dynamic_state["phase_enabled"]:
-        scrn = dynamic_state["phase_screen"]
-        for _ in range(int(dynamic_state["phase_rows_per_frame"])):
-            scrn.add_row()
-
-        phase_scaling = float(dynamic_state["phase_scaling_factor"])
-
-        if (
-            dynamic_state["ao_enabled"]
-            and dynamic_state["ao_basis"] is not None
-            and dynamic_state["n_modes_removed"] > 0
-        ):
-            phase_after_ao = bldr.first_stage_ao(
-                atm_scrn=scrn,
-                Nmodes_removed=dynamic_state["n_modes_removed"],
-                basis=dynamic_state["ao_basis"],
-                phase_scaling_factor=(
-                    phase_scaling * float(dynamic_state["ao_phase_scaling_factor"])
-                ),
-                return_reconstructor=False,
+    model = dynamic_state["atmosphere_model"]
+    # The on-sky simulation clock advances by time_step_s, not sleep_time_s.
+    # Advance even while the phase control is temporarily disabled.
+    physical_opd = model.next_opd() if model is not None else np.zeros_like(pupil)
+    if not dynamic_state["phase_enabled"]:
+        # Avoid applying stale AO reconstructions when phase is re-enabled.
+        dynamic_state["ao_history"].clear()
+        opd_input = np.zeros_like(pupil, dtype=float)
+    else:
+        opd_input = physical_opd
+        if dynamic_state["ao_enabled"] and dynamic_state["ao_basis"] is not None:
+            opd_input = atmosphere.modal_ao_residual_opd(
+                opd_input * dynamic_state["ao_phase_scaling_factor"],
+                dynamic_state["ao_basis"], pupil,
+                dynamic_state["n_modes_removed"],
+                correction_gain=dynamic_state["ao_correction_gain"],
+                remove_piston=dynamic_state["ao_remove_piston"],
+                lag_frames=dynamic_state["ao_lag_frames"],
+                history=dynamic_state["ao_history"],
             )
         else:
-            phase_after_ao = pupil * phase_scaling * scrn.scrn
+            # Clear stale delayed corrections after AO is disabled.
+            dynamic_state["ao_history"].clear()
+            opd_input = np.where(pupil > 0, opd_input, 0.0)
+    # Phase-only path when scintillation is disabled.
+    return opd_input, amp_input_0
 
-        opd_input = pupil * (wvl0 / (2.0 * np.pi)) * phase_after_ao
-    else:
-        opd_input = np.zeros_like(pupil, dtype=float)
-
-    if dynamic_state["scint_enabled"]:
-        amp_scint = update_scintillation_amplitude(
-            scint_screen=dynamic_state["scint_screen"],
-            zwfs=zwfs,
-            pxl_scale=dynamic_state["dx"],
-            wavelength_m=wvl0,
-            rows_per_frame=dynamic_state["scint_rows_per_frame"],
-            propagation_distance_m=dynamic_state["scint_propagation_distance_m"],
-            renormalize_mean_intensity=dynamic_state[
-                "scint_renormalize_mean_intensity"
-            ],
-            clip_negative_intensity=dynamic_state["scint_clip_negative_intensity"],
-        )
-        amp_input = amp_input_0 * amp_scint
-    else:
-        amp_input = amp_input_0
-
-    return opd_input, amp_input
 
 
 def center_crop_or_pad_to_shape(arr, target_shape, fill_value=0.0):
@@ -1219,12 +1010,13 @@ def poll_control_socket(
 
 root_path = get_git_root()
 
-# New generic BaldrApp JSON config. This should include:
-#   grid, optics, dm, stellar.spectrum, fresnel_relay, detector, source, etc.
-config_path = (
-    root_path
-    / "src/baldrapp/paranal_simulator/fake_configs/baldr_config.json"
-)
+# Override the default configuration with BALDR_CONFIG_PATH=/path/to/config.json
+config_path = Path(os.environ.get(
+    "BALDR_CONFIG_PATH",
+    str(root_path / "src/baldrapp/paranal_simulator/fake_configs/baldr_config.json"),
+)).expanduser()
+if not config_path.is_absolute():
+    config_path = root_path / config_path
 
 # set DM flat on channel zero to 0.5 for all beams 
 
@@ -1250,18 +1042,7 @@ for beam in beams_shown:
     zwfs = bldr.init_zwfs_from_json(config_path)
     source_pupil_profiles[beam] = make_source_pupil_profiles(zwfs)
 
-    # Optional per-simulator override retained from the old script.
-    zwfs.dm.actuator_coupling_factor = 0.7
-
-    # Recompute DM registration after changing actuator coupling factor.
-    # This keeps act_sigma_wavesp consistent with the updated coupling.
-    zwfs = bldr.update_dm_registration_wavespace(
-        zwfs.dm2wavespace_registration.dm_to_wavesp_transform_matrix,
-        zwfs,
-    )
-
-    flux_density = get_photon_flux_density_from_config(zwfs)
-    amp_input[beam] = np.sqrt(flux_density) * zwfs.grid.pupil_mask
+    amp_input[beam] = get_source_amplitude_from_config(zwfs)
 
     opd_internal[beam] = get_internal_opd_from_config(zwfs)
     ncpa_profiles[beam] = {}
@@ -1327,11 +1108,8 @@ print("config_path:", config_path)
 print("grid N:", zwfs_ns[default_tel].grid.N)
 print("grid dim:", zwfs_ns[default_tel].grid.dim)
 print("detector binning:", zwfs_ns[default_tel].detector.binning)
-print(
-    "stellar.bandwidth [nm]:", getattr(zwfs_ns[default_tel].stellar, "bandwidth", None)
-)
 print("spectrum wavelengths [um]:", zwfs_ns[default_tel].spectrum.wavelengths * 1e6)
-print("sum spectrum weights_nm:", np.sum(zwfs_ns[default_tel].spectrum.weights_nm))
+print("sum photon fractions:", np.sum(zwfs_ns[default_tel].spectrum.photon_fractions))
 print("fresnel enabled:", getattr(zwfs_ns[default_tel].fresnel_relay, "enabled", None))
 print(
     "atmosphere phase enabled:", dynamic_atmosphere_state[default_tel]["phase_enabled"]
@@ -1355,32 +1133,16 @@ shared_memory_cfg = getattr(runtime_cfg, "shared_memory", None)
 source_profiles = getattr(zwfs_ns[default_tel], "source_profiles", None)
 
 if source_profiles is None:
-    print(
-        "[SOURCE] No source_profiles block found; using existing source/stellar config.",
-        flush=True,
-    )
-else:
-    if not isinstance(source_profiles, dict):
-        source_profiles = vars(source_profiles)
-
-    print(
-        f"[SOURCE] Available source profiles: {sorted(source_profiles.keys())}",
-        flush=True,
-    )
+    raise ValueError("Configuration must define internal and onsky source profiles")
+if not isinstance(source_profiles, dict):
+    source_profiles = vars(source_profiles)
+print(f"[SOURCE] Available source profiles: {sorted(source_profiles)}", flush=True)
 
 split_filename = get_cfg_value(
     shared_memory_cfg,
     "split_json",
     str(root_path / "src/baldrapp/paranal_simulator/fake_configs/cred1_split.json"),
 )
-# New generic BaldrApp JSON config. This should include:
-#   grid, optics, dm, stellar.spectrum, fresnel_relay, detector, source, etc.
-config_path = (
-    root_path
-    # CHANGED: Added 'src/' and removed 'apps/'
-    / "src/baldrapp/paranal_simulator/fake_configs/baldr_config.json"
-)
-
 split_filename = Path(split_filename)
 if not split_filename.is_absolute():
     split_filename = root_path / split_filename
@@ -1470,7 +1232,7 @@ runtime_status = {
     "last_beam1_intensity_sum": None,
     "last_beam1_subim_sum": None,
     "source_profile": None,
-    "source_flux_density": None,
+    "source_photons_per_second": None,
     "source_temperature_K": None,
     "pupil_model": zwfs_ns[default_tel].grid.active_pupil_model,
     "opd_diagnostics": {},
@@ -1615,10 +1377,7 @@ if source_profiles is not None:
         ):
             opd_internal[beam] = get_internal_opd_from_config(zwfs_ns[beam])
 
-        amp_input[beam] = (
-            np.sqrt(get_photon_flux_density_from_config(zwfs_ns[beam]))
-            * zwfs_ns[beam].grid.pupil_mask
-        )
+        amp_input[beam] = get_source_amplitude_from_config(zwfs_ns[beam])
 
         last_source_profile[beam] = desired_profile
 
@@ -1626,22 +1385,15 @@ if source_profiles is not None:
 
     runtime_status["source_profile"] = desired_profile
     runtime_status["pupil_model"] = zwfs_ns[default_tel].grid.active_pupil_model
-    runtime_status["source_flux_density"] = get_photon_flux_density_from_config(
-        zwfs_ns[default_tel]
-    )
+    runtime_status["source_photons_per_second"] = zwfs_ns[default_tel].source.photons_per_second
     runtime_status["source_temperature_K"] = get_cfg_value(
-        profile,
-        "temperature_K",
-        None,
+        get_cfg_value(profile, "spectrum"), "temperature_K", None
     )
-
+    source_flux_label = f"{runtime_status['source_photons_per_second']:.6g} phot/s at pupil"
     print(
         f"[SOURCE] Initial source profile {desired_profile!r}: "
-        f"flux_density={runtime_status['source_flux_density']:.6g} "
-        f"phot/s/pix/nm, "
-        f"T={runtime_status['source_temperature_K']} K, "
-        f"pupil={runtime_status['pupil_model']}",
-        flush=True,
+        f"{source_flux_label}, T={runtime_status['source_temperature_K']} K, "
+        f"pupil={runtime_status['pupil_model']}", flush=True,
     )
 
 t1 = time.time()
@@ -1698,10 +1450,7 @@ while True:
                         flush=True,
                     )
 
-                amp_input[beam] = (
-                    np.sqrt(get_photon_flux_density_from_config(zwfs_ns[beam]))
-                    * zwfs_ns[beam].grid.pupil_mask
-                )
+                amp_input[beam] = get_source_amplitude_from_config(zwfs_ns[beam])
 
                 last_source_profile[beam] = desired_profile
 
@@ -1712,23 +1461,15 @@ while True:
                     runtime_status["pupil_model"] = zwfs_ns[
                         beam
                     ].grid.active_pupil_model
-                    runtime_status["source_flux_density"] = (
-                        get_photon_flux_density_from_config(zwfs_ns[beam])
-                    )
+                    runtime_status["source_photons_per_second"] = zwfs_ns[beam].source.photons_per_second
                     runtime_status["source_temperature_K"] = get_cfg_value(
-                        profile,
-                        "temperature_K",
-                        None,
+                        get_cfg_value(profile, "spectrum"), "temperature_K", None
                     )
-
+                    source_flux_label = f"{runtime_status['source_photons_per_second']:.6g} phot/s at pupil"
                     print(
                         f"[SOURCE] switched to {desired_profile!r}: "
-                        f"flux_density="
-                        f"{runtime_status['source_flux_density']:.6g} "
-                        f"phot/s/pix/nm, "
-                        f"T={runtime_status['source_temperature_K']} K, "
-                        f"pupil={runtime_status['pupil_model']}",
-                        flush=True,
+                        f"{source_flux_label}, T={runtime_status['source_temperature_K']} K, "
+                        f"pupil={runtime_status['pupil_model']}", flush=True,
                     )
 
     # Select one complete NCPA profile before propagation/diagnostics/telemetry.
@@ -1779,6 +1520,8 @@ while True:
         # OPD through opd_input. This avoids double-counting the DM.
         zwfs_ns[beam].dm.current_cmd = dmcmd.copy()
 
+        incident_fields_runtime = None
+        opd_diagnostic_runtime = None
         # If this script has dynamic atmosphere functions/state defined, use them
         # in on-sky mode. Otherwise fall back to the current internal/static path.
         if (
@@ -1790,16 +1533,33 @@ while True:
                 dynamic_atmosphere_state[beam],
                 sim_control,
             )
-            opd_input_runtime, amp_input_runtime = (
-                generate_atmosphere_and_source_for_beam(
-                    zwfs=zwfs_ns[beam],
-                    amp_input_0=amp_input[beam],
-                    dynamic_state=runtime_dynamic_state,
+            if runtime_dynamic_state['scint_enabled']:
+                incident_fields_runtime, opd_diagnostic_runtime = (
+                    generate_scintillation_fields_for_beam(
+                        zwfs_ns[beam], amp_input[beam], runtime_dynamic_state,
+                    )
                 )
-            )
+                # Atmospheric phase already resides in the complex fields.
+                opd_input_runtime = np.zeros_like(zero_opd[beam])
+                amp_input_runtime = amp_input[beam]
+            else:
+                opd_input_runtime, amp_input_runtime = (
+                    generate_atmosphere_and_source_for_beam(
+                        zwfs=zwfs_ns[beam],
+                        amp_input_0=amp_input[beam],
+                        dynamic_state=runtime_dynamic_state,
+                    )
+                )
         else:
             opd_input_runtime = zero_opd[beam]
             amp_input_runtime = amp_input[beam]
+
+        # Evaluate the freshly read SHM command ONCE for this beam/frame.
+        # Reuse the same physical OPD in propagation, diagnostics and telemetry.
+        # Do not retain across frames: the DM command may change each cycle.
+        frame_dm_opd = zwfs_ns[beam].compiled_dm.eval(
+            zwfs_ns[beam].dm.current_cmd * zwfs_ns[beam].dm.opd_per_cmd
+        )
 
         intensity = bldr.get_frame_configured(
             opd_input=opd_input_runtime,
@@ -1808,20 +1568,17 @@ while True:
             zwfs_ns=zwfs_ns[beam],
             detector=zwfs_ns[beam].detector,
             include_shotnoise=include_shotnoise,
+            incident_fields=incident_fields_runtime,
+            dm_opd=frame_dm_opd,
         )
 
-        telemetry_dm_opd = None
-        if telemetry_publisher is not None:
-            telemetry_dm_opd = zwfs_ns[beam].compiled_dm.eval(
-                zwfs_ns[beam].dm.current_cmd * zwfs_ns[beam].dm.opd_per_cmd
-            )
         runtime_status["opd_diagnostics"][str(beam)] = update_opd_diagnostics(
             zwfs_ns[beam],
-            opd_input_runtime,
+            opd_input_runtime if opd_diagnostic_runtime is None else opd_diagnostic_runtime,
             opd_internal[beam],
             liveindex,
             sim_control["mode"],
-            opd_dm=telemetry_dm_opd,
+            opd_dm=frame_dm_opd,
         )
 
         det_cfg_beam = getattr(zwfs_ns[beam], "detector_config", None)
@@ -1884,7 +1641,7 @@ while True:
                     beam,
                     opd_input_runtime,
                     opd_internal[beam],
-                    telemetry_dm_opd,
+                    frame_dm_opd,
                     zwfs_ns[beam].grid.pupil_mask,
                     {
                         "frame": int(liveindex),
