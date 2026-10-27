@@ -73,8 +73,19 @@ def scenario_configuration(name, *, size=64, pupil_diameter=40, n_wavelengths=3)
     cfg['bandpass']['n_wavelengths'] = n_wavelengths
     cfg['atmosphere']['enabled'] = name not in ('internal', 'onsky_clear')
     cfg['atmosphere']['scintillation']['enabled'] = name in ('scintillation', 'scintillation_ao')
-    cfg['first_stage_ao']['enabled'] = name in ('phase_ao', 'scintillation_ao')
-    cfg['first_stage_ao']['Nmodes_removed'] = 3
+
+    cfg['first_stage_ao'].update({
+        'enabled': name in ('phase_ao', 'scintillation_ao'),
+        'Nmodes_removed': 3,
+        'correction_gain': 1.0,
+        'phase_scaling_factor': 1.0,
+        'lag_frames': 0,
+        'remove_piston': True,
+    })
+
+
+    # cfg['first_stage_ao']['enabled'] = name in ('phase_ao', 'scintillation_ao')
+    # cfg['first_stage_ao']['Nmodes_removed'] = 3
     cfg['simulator_runtime']['time_step_s'] = 0.01
     return cfg
 
