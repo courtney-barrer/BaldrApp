@@ -20,7 +20,7 @@ from dataclasses import dataclass, field
 import numpy as np
 from scipy.ndimage import map_coordinates
 
-from baldrapp.utils import fresnel, phasescreens
+from baldrapp.utils import fresnel_old as fresnel, phasescreens
 
 LAMBDA_REF_M = 500e-9
 

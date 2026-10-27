@@ -3,7 +3,7 @@ import json
 import unittest
 
 import numpy as np
-from baldrapp.utils import fresnel
+from baldrapp.utils import fresnel_old as fresnel
 from test_real_optics import EXAMPLE, load_real_optics, make_instrument
 
 
