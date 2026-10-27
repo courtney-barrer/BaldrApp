@@ -13,10 +13,12 @@ Because the simulator consumes DM shared memory to update the optical model and 
 
 ## Installation with `pip`
 ```    
-the project can be cloned from the Github:
+the project can be cloned from the Github (and it is recommended to install it in virtual enviornment):
 ```bash
 git clone https://github.com/courtney-barrer/BaldrApp
 cd /path/to/BaldrApp
+python -m venv .venv
+source .venv/bin/activate
 pip install . -e
 ```
 The pip installation was tested on only on python 3.12.7. To import modules in python for general use:
@@ -67,3 +69,11 @@ PROFILE=1 baldr start
 This will run for 100 iterations, and then save the profiling results to `profile.out`. Note
 that this profile only captures the loop components of the simulation, not the initialisation
 or guis. That is, improving this profile will certainly improve the loop-rate of the simulator.
+
+## `C` servers
+The simulator in this repository (baldr start | stop) comes with pre-built (C/C++) servers. If you are using an older version of GLIBC on linux this may not work. These servers can be rebuilt 
+```
+cd src/baldrapp/paranal_simulator/scripts
+./build_cpp.sh 
+```
+look within the bash script and CMakeLists.txt in this directory to understand dependancies. 

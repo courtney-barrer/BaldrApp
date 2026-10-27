@@ -22,6 +22,8 @@ from . import DM_registration
 from . import config_helper as cfghelp
 from . import spectrum as spec
 from . import fresnel_old as fresnel
+from . import source
+from . import configuration
 from abc import ABC, abstractmethod
 from typing import Tuple, Optional, Dict, List
 from numpy.typing import NDArray
@@ -408,7 +410,7 @@ def get_zwfs_output_field(
 
     # Focal-plane field before phase mask.
     psi_B = np.fft.fftshift(
-        np.fft.fft2(
+        fresnel.fft2(
             np.fft.ifftshift(psi_A_pad),
             norm="ortho",
         )
@@ -449,9 +451,7 @@ def get_zwfs_output_field(
             phase_disc = (phase_disc > 0.5).astype(float)
 
         # Infer pixels per lambda/D from the supplied mask.
-        yy, xx = np.indices((Nf, Nf))
-        c = (Nf - 1) / 2.0
-        rr = np.hypot(yy - c, xx - c)
+        rr = fresnel.centered_pixel_radius((Nf, Nf))
 
         if np.any(phase_disc > 0):
             r_pix = rr[phase_disc > 0].max()
@@ -460,29 +460,24 @@ def get_zwfs_output_field(
             pix_per_wvld = float(pixels_across_mask)
 
     else:
-        # Infer pixels per lambda/D from the padded pupil support.
-        amp_pad = np.zeros((Nf, Nf), dtype=float)
-        amp_pad[pad : pad + N, pad : pad + N] = np.abs(amp_work)
-
-        support = amp_pad > 0
-
-        yy, xx = np.indices((Nf, Nf))
-        c = (Nf - 1) / 2.0
-        rr = np.hypot(yy - c, xx - c)
+        # Infer scale from the actual illuminated pupil; do not cache support
+        # because scintillation/source switching can change its geometry.
+        support = np.abs(amp_work) > 0
+        rr = fresnel.centered_pixel_radius((Nf, Nf))
 
         if np.any(support):
-            r_pupil_pix = rr[support].max()
+            r_pupil_pix = rr[pad : pad + N, pad : pad + N][support].max()
             d_pupil_pix = 2.0 * r_pupil_pix
             pix_per_wvld = float(Nf) / max(d_pupil_pix, 1e-12)
         else:
             pix_per_wvld = float(pixels_across_mask)
 
         r_mask_pix = 0.5 * float(phasemask_diameter) * pix_per_wvld
-        phase_disc = (rr <= r_mask_pix).astype(float)
+        phase_disc = fresnel.circular_focal_mask(Nf, r_mask_pix)
 
     # Reference wave b = IFFT{M FFT{psi_A}}.
     b_pad = np.fft.fftshift(
-        np.fft.ifft2(
+        fresnel.ifft2(
             np.fft.ifftshift(phase_disc * psi_B),
             norm="ortho",
         )
@@ -1217,6 +1212,7 @@ def get_frame(
     detector=None,
     include_shotnoise=True,
     spectral_bandwidth=_AUTO_SPECTRAL_BANDWIDTH,
+    dm_opd=None,
 ):
     """_summary_
     propagates the input field with phase described by opd_input and internal aberrations described by opd_internal, field flux described by amp_input
@@ -1238,10 +1234,13 @@ def get_frame(
         _type_: field intensity
     """
 
-    # I could do this outside to save time but for now just do it here
-    opd_current_dm = zwfs_ns.compiled_dm.eval(
-        zwfs_ns.dm.current_cmd * zwfs_ns.dm.opd_per_cmd
-    )
+    # An external runtime may supply the DM OPD sampled from this frame's
+    # command. Standalone callers continue to evaluate the current command.
+    opd_current_dm = dm_opd
+    if opd_current_dm is None:
+        opd_current_dm = zwfs_ns.compiled_dm.eval(
+            zwfs_ns.dm.current_cmd * zwfs_ns.dm.opd_per_cmd
+        )
 
     opd_map = opd_input + opd_internal + opd_current_dm
 
@@ -1294,94 +1293,51 @@ def get_frame(
 ##########################################
 
 
+def select_source_profile(zwfs_ns, name):
+    """Select an input source without rebuilding wavelength-dependent optics.
+
+    The caller also updates the pupil mask and pupil-dependent aberrations.
+    """
+    report = zwfs_ns.resolved_config
+    if name not in report["derived"]["source_profiles"]:
+        raise ValueError(f"Unknown source profile {name!r}")
+    raw = report["configuration"]["source_profiles"][name]
+    derived = report["derived"]["source_profiles"][name]
+    zwfs_ns.spectrum = source.spectrum_for_profile(report, name)
+    zwfs_ns.source = SimpleNamespace(
+        active_profile=name,
+        pupil_model=derived["pupil_model"],
+        photons_per_second=float(derived["total_photons_per_second"]),
+        spectrum_model=raw["spectrum"]["model"],
+        temperature_K=raw["spectrum"].get("temperature_K"),
+    )
+    return zwfs_ns
+
+
+def source_amplitude(zwfs_ns):
+    """Band-integrated sqrt(photon/s/pixel) amplitude of the active pupil."""
+    return source.source_input_amplitude(
+        zwfs_ns.grid.pupil_mask, zwfs_ns.source.photons_per_second
+    )
+
+
 def init_zwfs_from_json(
     json_config,
     derive_fresnel=True,
     derive_spectrum=True,
     instantiate_detector=True,
 ):
-    """
-    Initialise a Baldr ZWFS namespace directly from a generic JSON
-    configuration file.
+    """Initialize a ZWFS namespace from the validated BaldrApp JSON file.
 
-    This initializer is intended for generic
-    BaldrApp simulations where the optical model, Fresnel relay, spectrum, and
-    optional simulator metadata are described by a JSON file.
-
-    Required JSON sections
-    ----------------------
-    The JSON file must contain:
-
-        grid
-        optics
-        dm
-
-    These are passed to the existing init_zwfs(grid_ns, optics_ns, dm_ns)
-    function.
-
-    Optional derived sections
-    -------------------------
-    fresnel_relay
-        If present and derive_fresnel is True, derived physical relay
-        quantities are added, including:
-
-            D_phys
-            M_nominal
-            s_object_nominal
-            s_image_nominal
-            z_mirror_to_lens
-            s_object
-            s_image
-            z_focus_to_detector_nominal
-            z_focus_to_detector
-            M_pupil
-            D_detector_predicted
-
-    spectrum
-        If present and derive_spectrum is True, this section is passed to
-        baldrapp.common.spectrum.derive_spectrum(...). The returned namespace
-        is attached as zwfs_ns.spectrum.
-
-        If absent, a backwards-compatible monochromatic spectrum is attached:
-
-            wavelength = optics.wvl0
-            weight = 1
-
-    detector
-        If present, the raw detector config is attached as
-        zwfs_ns.detector_config. If instantiate_detector is True, a BaldrApp
-        detector object is also created as zwfs_ns.detector.
-
-    Optional metadata/runtime sections
-    ----------------------------------
-    The following sections are attached as namespaces if present, but are not
-    interpreted by this initializer:
-
-        meta
-        source
-        stellar
-        throughput
-        internal_aberrations
-        atmosphere
-        first_stage_ao
-        simulator_runtime
-
-    Design note
-    -----------
-    This function configures the ZWFS/instrument namespace. It should not
-    generate atmospheric screens, scintillation screens, DM commands, or
-    detector frames. Those should be handled by higher-level simulation code or
-    frame-generation wrappers.
-
-    Example
-    -------
-    zwfs_ns = init_zwfs_from_json("baldr_config.json")
-
-    fr = zwfs_ns.fresnel_relay
-    sp = zwfs_ns.spectrum
+    The configuration contains one shared bandpass and independent internal
+    and on-sky source profiles. Detector and Fresnel objects are instantiated
+    as requested; atmospheric screens belong to the higher-level simulator.
     """
     json_config = Path(json_config)
-    cfg = cfghelp.load_json_config(json_config)
+    if not derive_spectrum:
+        raise ValueError("The configured instrument requires spectral initialization")
+    resolved = configuration.load_and_resolve_config(json_config)
+    cfg = resolved["configuration"]
 
     for section in ["grid", "optics", "dm"]:
         if section not in cfg:
@@ -1426,65 +1382,9 @@ def init_zwfs_from_json(
                 qe=float(getattr(det_cfg, "qe", 1.0)),
             )
 
-    # # Spectrum config.
-    # # Always attach zwfs_ns.spectrum when derive_spectrum=True, even if the
-    # # JSON has no spectrum section. This keeps downstream wrappers simple and
-    # # backwards-compatible.
-    # if derive_spectrum:
-    #     if "spectrum" in cfg:
-    #         spectrum_ns = spec.derive_spectrum(
-    #             cfg["spectrum"],
-    #             default_wvl0=zwfs_ns.optics.wvl0,
-    #         )
-    #     else:
-    #         spectrum_ns = spec.default_monochromatic_spectrum(
-    #             zwfs_ns.optics.wvl0
-    #         )
-
-    #     spectrum_ns = cfghelp.complete_spectrum_integration_fields(
-    #         spectrum_ns
-    #     )
-    #     zwfs_ns.spectrum = spectrum_ns
-
-    # Stellar / spectrum config.
-    # Preferred user config is now cfg["stellar"]["spectrum"].
-    # Backwards-compatible fallback is top-level cfg["spectrum"].
-    spectrum_cfg = cfghelp.get_spectrum_config_from_cfg(cfg)
-
-    stellar_ns = getattr(zwfs_ns, "stellar", None)
-    stellar_ns, bandwidth_source = cfghelp.ensure_stellar_bandwidth(
-        stellar_ns,
-        spectrum_cfg=spectrum_cfg,
-        default_nm=1.0,
-        verbose=True,
-    )
-    zwfs_ns.stellar = stellar_ns
-
-    cfghelp.check_stellar_bandwidth_consistency(
-        zwfs_ns.stellar,
-        spectrum_cfg=spectrum_cfg,
-        relative_tolerance=1e-3,
-        verbose=True,
-    )
-
-    if derive_spectrum:
-        if spectrum_cfg is not None:
-            spectrum_ns = spec.derive_spectrum(
-                spectrum_cfg,
-                default_wvl0=zwfs_ns.optics.wvl0,
-            )
-        else:
-            spectrum_ns = spec.default_monochromatic_spectrum(zwfs_ns.optics.wvl0)
-
-        spectrum_ns = cfghelp.complete_spectrum_integration_fields(spectrum_ns)
-
-        spectrum_ns = cfghelp.apply_stellar_bandwidth_to_spectrum(
-            spectrum_ns,
-            stellar_ns=zwfs_ns.stellar,
-            warn=True,
-        )
-
-        zwfs_ns.spectrum = spectrum_ns
+    # Shared wavelength grid; source switching updates its photon fractions.
+    zwfs_ns.resolved_config = resolved
+    select_source_profile(zwfs_ns, "internal")
 
     # Fresnel relay config.
     if "fresnel_relay" in cfg:
@@ -1583,6 +1483,8 @@ def get_frame_polychromatic(
     detector=None,
     include_shotnoise=True,
     return_intermediates=False,
+    incident_fields=None,
+    dm_opd=None,
 ):
     """
     Generate a polychromatic Baldr ZWFS frame using the existing non-Fresnel
@@ -1630,29 +1532,14 @@ def get_frame_polychromatic(
     inside the wavelength loop, then restores their original values.
 
     """
-    # Backwards-compatible fallback if no spectrum namespace exists.
+    # Integrate monochromatic intensities with dimensionless photon fractions.
     if not hasattr(zwfs_ns, "spectrum"):
         wavelengths = np.array([zwfs_ns.optics.wvl0], dtype=float)
         weights_nm = np.array([1.0], dtype=float)
+        weight_unit = "nm"
     else:
         wavelengths = np.asarray(zwfs_ns.spectrum.wavelengths, dtype=float)
-
-        if hasattr(zwfs_ns.spectrum, "weights_nm"):
-            weights_nm = np.asarray(zwfs_ns.spectrum.weights_nm, dtype=float)
-        else:
-            if hasattr(zwfs_ns.spectrum, "weights_normalized"):
-                weights_normalized = np.asarray(
-                    zwfs_ns.spectrum.weights_normalized,
-                    dtype=float,
-                )
-            else:
-                weights_normalized = np.ones_like(wavelengths, dtype=float) / len(
-                    wavelengths
-                )
-
-            bandwidth_nm = float(getattr(zwfs_ns.spectrum, "bandwidth_nm", 1.0))
-
-            weights_nm = bandwidth_nm * weights_normalized
+        weights_nm, weight_unit = source.integration_weights(zwfs_ns.spectrum)
 
     if wavelengths.ndim != 1:
         raise ValueError("zwfs_ns.spectrum.wavelengths must be one-dimensional.")
@@ -1682,11 +1569,22 @@ def get_frame_polychromatic(
     original_theta = zwfs_ns.optics.theta
     original_mask_diam = zwfs_ns.optics.mask_diam
 
+    # Incident complex fields are weighted once, after optical propagation.
+    if incident_fields is not None:
+        if not hasattr(zwfs_ns.spectrum, 'photon_fractions'):
+            raise ValueError('incident_fields requires a photon-fraction spectrum')
+        incident_fields = np.asarray(incident_fields)
+        expected = (len(wavelengths), *np.asarray(amp_input).shape)
+        if (incident_fields.shape != expected or
+                not np.iscomplexobj(incident_fields) or
+                not np.all(np.isfinite(incident_fields))):
+            raise ValueError(f'incident_fields must be finite complex with shape {expected}')
+
     I_rate = None
     per_wavelength_outputs = []
 
     try:
-        for wavelength, weight_nm in zip(wavelengths, weights_nm):
+        for sample_index, (wavelength, weight_nm) in enumerate(zip(wavelengths, weights_nm)):
 
             theta = spec.theta_at_wavelength(
                 zwfs_ns.optics,
@@ -1705,13 +1603,22 @@ def get_frame_polychromatic(
             zwfs_ns.optics.theta = float(theta)
             zwfs_ns.optics.mask_diam = float(phasemask_diameter)
 
+            if incident_fields is None:
+                wavelength_opd = opd_input
+                wavelength_amp = amp_input
+            else:
+                field = incident_fields[sample_index]
+                wavelength_amp = np.abs(field)
+                wavelength_opd = opd_input + (float(wavelength)/(2*np.pi))*np.angle(field)
+
             I_density = get_frame(
-                opd_input=opd_input,
-                amp_input=amp_input,
+                opd_input=wavelength_opd,
+                amp_input=wavelength_amp,
                 opd_internal=opd_internal,
                 zwfs_ns=zwfs_ns,
                 detector=None,
                 include_shotnoise=False,
+                **({"dm_opd": dm_opd} if dm_opd is not None else {}),
             )
 
             if I_rate is None:
@@ -1723,7 +1630,8 @@ def get_frame_polychromatic(
                 per_wavelength_outputs.append(
                     {
                         "wavelength": float(wavelength),
-                        "weight_nm": float(weight_nm),
+                        "integration_weight": float(weight_nm),
+                        "integration_weight_unit": weight_unit,
                         "theta": float(theta),
                         "phasemask_diameter": float(phasemask_diameter),
                         "intensity_density": I_density,
@@ -1764,8 +1672,11 @@ def get_frame_polychromatic(
         "intensity": intensity,
         "intensity_pre_detector": I_rate,
         "wavelengths": wavelengths,
-        "weights_nm": weights_nm,
-        "weights_nm_sum": float(np.sum(weights_nm)),
+        "weights_nm": weights_nm if weight_unit == "nm" else None,
+        "integration_weights": weights_nm,
+        "integration_weight_unit": weight_unit,
+        "weights_nm_sum": float(np.sum(weights_nm)) if weight_unit == "nm" else None,
+        "integration_weights_sum": float(np.sum(weights_nm)),
         "per_wavelength_outputs": per_wavelength_outputs,
     }
 
@@ -1782,6 +1693,8 @@ def get_frame_fresnel(
     theta=None,
     phasemask_diameter=None,
     return_intermediates=False,
+    _opd_current_dm=None,
+    _opd_total=None,
 ):
     """
     Generate a monochromatic detector-plane Baldr frame using the analytic ZWFS
@@ -1816,11 +1729,16 @@ def get_frame_fresnel(
 
     pupil = zwfs_ns.grid.pupil_mask
 
-    opd_current_dm = zwfs_ns.compiled_dm.eval(
-        zwfs_ns.dm.current_cmd * zwfs_ns.dm.opd_per_cmd
-    )
-
-    opd_total = pupil * (opd_input + opd_internal + opd_current_dm)
+    # The polychromatic caller can reuse a single DM evaluation (and, when
+    # incident wavefronts are achromatic, the combined OPD) across wavelengths.
+    if _opd_total is None:
+        if _opd_current_dm is None:
+            _opd_current_dm = zwfs_ns.compiled_dm.eval(
+                zwfs_ns.dm.current_cmd * zwfs_ns.dm.opd_per_cmd
+            )
+        opd_total = pupil * (opd_input + opd_internal + _opd_current_dm)
+    else:
+        opd_total = _opd_total
 
     if theta is None:
         theta = spec.theta_at_wavelength(zwfs_ns.optics, wavelength)
@@ -1847,11 +1765,6 @@ def get_frame_fresnel(
 
     dx_phys = fr.D_phys / zwfs_ns.grid.N
 
-    X_phys, Y_phys = fresnel.make_coordinate_grid(
-        psi_C.shape,
-        dx_phys,
-    )
-
     # somehow when I test the fresenl prop methods in isolation against numpy,
     # fresnel-prop wins hands down, but when testing this simulator with a numpy
     # based fresnel propagation vs `fresnel-prop`, the version using numpy
@@ -1877,15 +1790,9 @@ def get_frame_fresnel(
         )
         psi_mirror = psi_C
 
-    mirror_mask_full = fresnel.circular_aperture(
-        psi_mirror.shape,
-        dx=dx_phys,
-        radius=fr.D_mirror / 2.0,
-    ).astype(float)
-
-    Xr = X_phys * np.cos(fr.edge_angle) + Y_phys * np.sin(fr.edge_angle)
-
-    mirror_mask_D = (Xr >= fr.edge_offset).astype(float) * mirror_mask_full
+    mirror_mask_D = fresnel.cached_d_mirror_mask(
+        psi_mirror.shape, dx_phys, fr.D_mirror, fr.edge_offset, fr.edge_angle,
+    )
 
     psi_after_mirror = psi_mirror * mirror_mask_D
 
@@ -1924,18 +1831,10 @@ def get_frame_fresnel(
         include_global_phase=False,
     )
 
-    X_cold, Y_cold = fresnel.make_coordinate_grid(
-        field_coldstop_plane.shape,
-        dx=dx_cold,
-        dy=dy_cold,
+    coldstop_mask_phys = fresnel.cached_coldstop_mask(
+        field_coldstop_plane.shape, dx_cold, dy_cold,
+        fr.D_coldstop, fr.coldstop_x_offset, fr.coldstop_y_offset,
     )
-
-    R_cold = np.hypot(
-        X_cold - fr.coldstop_x_offset,
-        Y_cold - fr.coldstop_y_offset,
-    )
-
-    coldstop_mask_phys = (R_cold <= fr.D_coldstop / 2.0).astype(float)
 
     field_after_coldstop = field_coldstop_plane * coldstop_mask_phys
 
@@ -2014,6 +1913,8 @@ def get_frame_fresnel_polychromatic(
     detector=None,
     include_shotnoise=True,
     return_intermediates=False,
+    incident_fields=None,
+    dm_opd=None,
 ):
     """
     Generate a polychromatic detector-plane Baldr frame using the analytic ZWFS
@@ -2096,32 +1997,14 @@ def get_frame_fresnel_polychromatic(
             "Initialise from a config with a fresnel_relay section."
         )
 
-    # Backwards-compatible fallback if zwfs_ns was not initialised from the
-    # new JSON/config path.
+    # Integrate monochromatic intensities with dimensionless photon fractions.
     if not hasattr(zwfs_ns, "spectrum"):
         wavelengths = np.array([zwfs_ns.optics.wvl0], dtype=float)
         weights_nm = np.array([1.0], dtype=float)
+        weight_unit = "nm"
     else:
         wavelengths = np.asarray(zwfs_ns.spectrum.wavelengths, dtype=float)
-
-        if hasattr(zwfs_ns.spectrum, "weights_nm"):
-            weights_nm = np.asarray(zwfs_ns.spectrum.weights_nm, dtype=float)
-        else:
-            # Robust fallback. Prefer explicit weights_nm from config_helper,
-            # but allow older derived spectrum namespaces to work.
-            if hasattr(zwfs_ns.spectrum, "weights_normalized"):
-                weights_normalized = np.asarray(
-                    zwfs_ns.spectrum.weights_normalized,
-                    dtype=float,
-                )
-            else:
-                weights_normalized = np.ones_like(wavelengths, dtype=float) / len(
-                    wavelengths
-                )
-
-            bandwidth_nm = float(getattr(zwfs_ns.spectrum, "bandwidth_nm", 1.0))
-
-            weights_nm = bandwidth_nm * weights_normalized
+        weights_nm, weight_unit = source.integration_weights(zwfs_ns.spectrum)
 
     if wavelengths.ndim != 1:
         raise ValueError("zwfs_ns.spectrum.wavelengths must be one-dimensional.")
@@ -2146,10 +2029,43 @@ def get_frame_fresnel_polychromatic(
     if np.sum(weights_nm) <= 0:
         raise ValueError("Spectrum weights_nm must have positive sum.")
 
+    # Incident complex fields are weighted once, after optical propagation.
+    if incident_fields is not None:
+        if not hasattr(zwfs_ns.spectrum, 'photon_fractions'):
+            raise ValueError('incident_fields requires a photon-fraction spectrum')
+        incident_fields = np.asarray(incident_fields)
+        expected = (len(wavelengths), *np.asarray(amp_input).shape)
+        if (incident_fields.shape != expected or
+                not np.iscomplexobj(incident_fields) or
+                not np.all(np.isfinite(incident_fields))):
+            raise ValueError(f'incident_fields must be finite complex with shape {expected}')
+
     I_rate = None
     per_wavelength_outputs = []
 
-    for wavelength, weight_nm in zip(wavelengths, weights_nm):
+    # The DM is a physical OPD map, independent of wavelength. Take one
+    # snapshot per frame rather than reevaluating it for every sample.
+    dm_kwargs = {}
+    # Production instruments have a compiled DM.  Keep the older, simpler
+    # monochromatic function signature usable by pure spectral/mock callers.
+    if dm_opd is not None:
+        opd_current_dm = dm_opd
+    elif hasattr(zwfs_ns, "compiled_dm"):
+        opd_current_dm = zwfs_ns.compiled_dm.eval(
+            zwfs_ns.dm.current_cmd * zwfs_ns.dm.opd_per_cmd
+        )
+    else:
+        opd_current_dm = None
+    if opd_current_dm is not None:
+        dm_kwargs["_opd_current_dm"] = opd_current_dm
+        # Phase-only inputs share an identical pupil OPD across wavelengths.
+        # With chromatic incident_fields the input phase differs by wavelength.
+        if incident_fields is None:
+            dm_kwargs["_opd_total"] = zwfs_ns.grid.pupil_mask * (
+                opd_input + opd_internal + opd_current_dm
+            )
+
+    for sample_index, (wavelength, weight_nm) in enumerate(zip(wavelengths, weights_nm)):
 
         theta = spec.theta_at_wavelength(
             zwfs_ns.optics,
@@ -2162,9 +2078,17 @@ def get_frame_fresnel_polychromatic(
             default_wvl0=zwfs_ns.optics.wvl0,
         )
 
+        if incident_fields is None:
+            wavelength_opd = opd_input
+            wavelength_amp = amp_input
+        else:
+            field = incident_fields[sample_index]
+            wavelength_amp = np.abs(field)
+            wavelength_opd = opd_input + (float(wavelength)/(2*np.pi))*np.angle(field)
+
         out = get_frame_fresnel(
-            opd_input=opd_input,
-            amp_input=amp_input,
+            opd_input=wavelength_opd,
+            amp_input=wavelength_amp,
             opd_internal=opd_internal,
             zwfs_ns=zwfs_ns,
             detector=None,
@@ -2174,12 +2098,14 @@ def get_frame_fresnel_polychromatic(
             theta=theta,
             phasemask_diameter=phasemask_diameter,
             return_intermediates=return_intermediates,
+            **dm_kwargs,
         )
 
         if return_intermediates:
             I_density = out["intensity_pre_detector"]
             out["wavelength"] = float(wavelength)
-            out["weight_nm"] = float(weight_nm)
+            out["integration_weight"] = float(weight_nm)
+            out["integration_weight_unit"] = weight_unit
             out["theta"] = float(theta)
             out["phasemask_diameter"] = float(phasemask_diameter)
             per_wavelength_outputs.append(out)
@@ -2219,8 +2145,11 @@ def get_frame_fresnel_polychromatic(
         "intensity": intensity,
         "intensity_pre_detector": I_rate,
         "wavelengths": wavelengths,
-        "weights_nm": weights_nm,
-        "weights_nm_sum": float(np.sum(weights_nm)),
+        "weights_nm": weights_nm if weight_unit == "nm" else None,
+        "integration_weights": weights_nm,
+        "integration_weight_unit": weight_unit,
+        "weights_nm_sum": float(np.sum(weights_nm)) if weight_unit == "nm" else None,
+        "integration_weights_sum": float(np.sum(weights_nm)),
         "per_wavelength_outputs": per_wavelength_outputs,
     }
 
@@ -2236,6 +2165,8 @@ def get_frame_configured(
     force_fresnel=None,
     force_polychromatic=None,
     return_intermediates=False,
+    incident_fields=None,
+    dm_opd=None,
 ):
     """
     Generate a Baldr frame using the propagation mode configured in zwfs_ns.
@@ -2319,6 +2250,11 @@ def get_frame_configured(
         Only supported by the Fresnel and polychromatic wrapper paths. For the
         plain get_frame(...) path, this must be False.
 
+    dm_opd : ndarray or None
+        Optional physical DM OPD (metres, wave-space pupil grid) evaluated from
+        the freshly sampled DM command for this frame. When omitted, direct
+        callers retain the original internal DM evaluation behaviour.
+
     Returns
     -------
     frame : ndarray or dict
@@ -2340,11 +2276,32 @@ def get_frame_configured(
         if hasattr(zwfs_ns, "spectrum"):
             spectrum_enabled = getattr(zwfs_ns.spectrum, "enabled", True)
             wavelengths = np.asarray(zwfs_ns.spectrum.wavelengths, dtype=float)
-            use_polychromatic = bool(spectrum_enabled) and len(wavelengths) > 1
+            use_polychromatic = bool(spectrum_enabled) and (
+                len(wavelengths) > 1 or hasattr(zwfs_ns.spectrum, "photon_fractions")
+            )
         else:
             use_polychromatic = False
     else:
         use_polychromatic = bool(force_polychromatic)
+
+    if hasattr(getattr(zwfs_ns, "spectrum", None), "photon_fractions"):
+        if force_polychromatic is False and len(zwfs_ns.spectrum.wavelengths) > 1:
+            raise ValueError("Cannot discard configured spectral samples with force_polychromatic=False")
+        if spectral_bandwidth not in (_AUTO_SPECTRAL_BANDWIDTH, None):
+            raise ValueError("Configured sources use band-integrated photons/s; do not specify spectral_bandwidth")
+        # Even for a one-node monochromatic simulation the input is already
+        # band integrated and must not be multiplied by an arbitrary bandwidth.
+        spectral_bandwidth = None
+
+    if incident_fields is not None:
+        if not hasattr(zwfs_ns.spectrum, 'photon_fractions') or not use_polychromatic:
+            raise ValueError('incident_fields requires photon-fraction spectral integration')
+
+    # Optional per-frame DM OPD supplied by the runtime.  In particular this
+    # must NOT be cached on zwfs_ns: SHM commands can change every frame.
+    if dm_opd is not None and np.shape(dm_opd) != np.shape(zwfs_ns.grid.pupil_mask):
+        raise ValueError("dm_opd must match the wave-space pupil grid shape")
+    dm_kwargs = {"dm_opd": dm_opd} if dm_opd is not None else {}
 
     # ------------------------------------------------------------
     # Fresnel + polychromatic
@@ -2358,6 +2315,8 @@ def get_frame_configured(
             detector=detector,
             include_shotnoise=include_shotnoise,
             return_intermediates=return_intermediates,
+            incident_fields=incident_fields,
+            **dm_kwargs,
         )
 
     # ------------------------------------------------------------
@@ -2374,6 +2333,7 @@ def get_frame_configured(
             spectral_bandwidth=spectral_bandwidth,
             wavelength=zwfs_ns.optics.wvl0,
             return_intermediates=return_intermediates,
+            **({"_opd_current_dm": dm_opd} if dm_opd is not None else {}),
         )
 
     # ------------------------------------------------------------
@@ -2388,10 +2348,12 @@ def get_frame_configured(
             detector=detector,
             include_shotnoise=include_shotnoise,
             return_intermediates=return_intermediates,
+            incident_fields=incident_fields,
+            **dm_kwargs,
         )
 
     # ------------------------------------------------------------
-    # Non-Fresnel + monochromatic legacy path
+    # Non-Fresnel + monochromatic path
     # ------------------------------------------------------------
     if return_intermediates:
         raise ValueError(
@@ -2407,6 +2369,7 @@ def get_frame_configured(
         detector=detector,
         include_shotnoise=include_shotnoise,
         spectral_bandwidth=spectral_bandwidth,
+        **dm_kwargs,
     )
 
 
