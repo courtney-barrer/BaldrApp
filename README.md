@@ -13,10 +13,12 @@ Because the simulator consumes DM shared memory to update the optical model and 
 
 ## Installation with `pip`
 ```    
-the project can be cloned from the Github:
+the project can be cloned from the Github (and it is recommended to install it in virtual enviornment):
 ```bash
 git clone https://github.com/courtney-barrer/BaldrApp
 cd /path/to/BaldrApp
+python -m venv .venv
+source .venv/bin/activate
 pip install . -e
 ```
 The pip installation was tested on only on python 3.12.7. To import modules in python for general use:
