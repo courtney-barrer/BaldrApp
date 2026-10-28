@@ -7,42 +7,632 @@ import os
 from pathlib import Path
 import matplotlib.pyplot as plt
 from types import SimpleNamespace
-from scipy.stats import pearsonr
-from scipy.signal import TransferFunction, bode
-from scipy.ndimage import binary_erosion
-import datetime
-from astropy.io import fits
-import pickle
-import baldrapp.utils.pupils as aperture
-from . import utilities as util
-from . import DM_basis
-from . import phasescreens
+from . import pupils as aperture
 from . import DM_registration
-
 from . import config_helper as cfghelp
 from . import spectrum as spec
 from . import fresnel_old as fresnel
 from . import source
 from . import configuration
 from abc import ABC, abstractmethod
-from typing import Tuple, Optional, Dict, List
+from typing import Any, Sequence, Tuple, Optional, Dict, List
 from numpy.typing import NDArray
 
 from fresnel import InplacePropagator
 
-"""
-1/11/25 - updated get_pupil_intensity to use fft and not mft for speed, added coldstop diam and coldstop_offset as input argunments removes and remove precomupted mask 
-
-25/5/26 - updating with fresnel propagation and baldr specific optics, updating polychromatic (gneeralised spectrum) configuration
-
-"""
-
-
 _AUTO_SPECTRAL_BANDWIDTH = "auto"
 
 
+class Detector:
+    def __init__(self, dit: float, ron: float, qe: float, binning: int):
+        """_summary_
+
+        Args:
+            binning (tuple): _description_ binning factor (rows to sum, columns to sum)
+            qe (scalar): _description_ quantum efficiency of detector
+            dit (scalar): _description_ integration time of detector
+            ron (int): _description_. readout noise in electrons per pixel
+        """
+        self.dit = dit
+        self.ron = ron
+        self.qe = qe
+        self.binning = binning
+
+    def detect(self, i, include_shotnoise=True, spectral_bandwidth=None):
+        """
+        Convert an input photon-rate image into a detected detector frame.
+        """
+
+        i = sum_subarrays(array=i, block_size=(self.binning, self.binning))
+
+        if spectral_bandwidth is None:
+            i *= self.qe * self.dit
+        else:
+            i *= self.qe * self.dit * spectral_bandwidth
+
+        if include_shotnoise:
+            noisy_intensity = np.random.poisson(lam=i)
+        else:  # no noise
+            noisy_intensity = i
+
+        if self.ron > 0:
+            noisy_intensity += np.random.normal(
+                0, self.ron, noisy_intensity.shape
+            ).astype(int)
+
+        return np.clip(noisy_intensity, 0, np.inf)
+
+
+class DetectorConfig:
+    def __init__(
+        self,
+        enabled: bool,
+        binning: int,
+        dit: float,
+        ron: float,
+        qe: float,
+        crop_to_pixels: Tuple[int, int],
+        crop_after_detection: bool,
+        adu_offset: float,
+        noise_std_adu: float,
+        include_shotnoise: bool,
+        include_readnoise: bool,
+    ):
+        self.enabled = enabled
+        self.binning = binning
+        self.dit = dit
+        self.ron = ron
+        self.qe = qe
+        self.crop_to_pixels = crop_to_pixels
+        self.crop_after_detection = crop_after_detection
+        self.adu_offset = adu_offset
+        self.noise_std_adu = noise_std_adu
+        self.include_shotnoise = include_shotnoise
+        self.include_readnoise = include_readnoise
+
+
+class Source:
+    def __init__(
+        self,
+        active_profile: str,
+        pupil_model: str,
+        photons_per_second: float,
+        spectrum_model: str,
+        temperature_K: float,
+    ):
+        self.active_profile = active_profile
+        self.pupil_model = pupil_model
+        self.photons_per_second = photons_per_second
+        self.spectrum_model = spectrum_model
+        self.temperature_K = temperature_K
+
+
+class SourceProfiles:
+    def __init__(
+        self,
+        internal: Dict[str, Dict[str, str | float]],
+        onsky: Dict[str, Dict[str, str | float]],
+    ):
+        self.internal = internal
+        self.onsky = onsky
+
+
+class WaveCoord:
+    def __init__(self, x: NDArray, y: NDArray, X: NDArray, Y: NDArray):
+        self.x = x
+        self.y = y
+        self.X = X
+        self.Y = Y
+
+
+class DmCoord:
+    def __init__(
+        self,
+        dm_coords: List[Tuple[float, float]],  # DM coordinates DM space
+        dm_coord_wavesp: NDArray,
+        act_x0_list_wavesp: List,  # actuator x coorindate in pixel space
+        act_y0_list_wavesp: List,  # actuator y coordinate in pixel space
+        act_sigma_wavesp: NDArray,
+    ):
+        self.dm_coords = dm_coords
+        self.dm_coord_wavesp = dm_coord_wavesp
+        self.act_x0_list_wavesp = act_x0_list_wavesp
+        self.act_y0_list_wavesp = act_y0_list_wavesp
+        self.act_sigma_wavesp = act_sigma_wavesp
+
+
+class Grid:
+    dm_coord: Optional[DmCoord] = None
+
+    def __init__(self, *, telescope: Optional[str], D: float, N: int, dim: int):
+        self.telescope = telescope
+        self.D = D
+        self.N = N
+        self.dim = dim
+
+        if telescope is not None:
+            if telescope.upper() == "UT":
+                pupil = aperture.vlt_pupil(
+                    diameter=N,
+                    dim=dim,
+                    spiders_thickness=0.008 * N / dim,
+                )  # padding_factor = 2 )
+            elif telescope.upper() == "AT":
+                pupil = aperture.AT_pupil(
+                    diameter=N,
+                    dim=dim,
+                    spiders_thickness=0.016 * N / dim,
+                    strict=False,
+                    cpix=False,
+                )  # , padding_factor = 2 )
+            elif telescope.upper() == "DISC":
+                pupil = aperture.disc(
+                    dim=dim,
+                    size=N,
+                    diameter=True,
+                    strict=False,
+                    center=(),
+                    cpix=False,
+                    invert=False,
+                    mask=False,
+                )
+            elif (
+                telescope.upper() == "SOLARSTEIN"
+            ):  # ASGARD internal source SOLARSTEIN which has UT like secondary with no spiders
+                pupil = aperture.disc_obstructed(
+                    dim=dim,
+                    size=N,
+                    obs=1100 / 8000,
+                    diameter=True,
+                    strict=False,
+                )
+            else:
+                raise TypeError(
+                    f"telescope: `{telescope}` not implemented. Try one of [DISC, AT, UT, SOLARSTEIN]"
+                )
+        else:
+            pupil = aperture.disc(
+                dim=dim,
+                size=N,
+                diameter=True,
+                strict=False,
+                center=(),
+                cpix=False,
+                invert=False,
+                mask=False,
+            )
+            # raise UserWarning("telescope not defined in grid_ns. Defaulting to disk pupil")
+            print("telescope not defined in grid_ns. Defaulting to disk pupil")
+        self.pupil_mask = pupil
+        # grid_ns.phasemask_mask = phasemask
+
+        # coorindates in the pupil plance
+        padding_factor = dim / N
+        x = np.linspace(
+            -(D * padding_factor) // 2,
+            (D * padding_factor) // 2,
+            pupil.shape[0],
+        )
+        y = np.linspace(
+            -(D * padding_factor) // 2,
+            (D * padding_factor) // 2,
+            pupil.shape[0],
+        )
+        X, Y = np.meshgrid(x, y)
+
+        wave_coord_dict = {
+            "x": x,
+            "y": y,
+            "X": X,
+            "Y": Y,
+        }
+
+        wave_coord = WaveCoord(**wave_coord_dict)
+
+        self.wave_coord = wave_coord
+
+        # focal plane sampling is hardcoded. we use mft to sample when calculating output intensity.
+        # hold a fixed phasemask mask here so don't have to re-init each run
+        focal_plane_sampling_dict = {"fplane_pixels": 300, "pixels_across_mask": 10}
+
+        phasemask_mask = aperture.disc(
+            focal_plane_sampling_dict["fplane_pixels"],
+            focal_plane_sampling_dict["fplane_pixels"]
+            // focal_plane_sampling_dict["pixels_across_mask"],
+            diameter=True,
+            cpix=True,
+            strict=False,
+        )
+
+        self.fplane_pixels = focal_plane_sampling_dict["fplane_pixels"]
+        self.pixels_across_mask = focal_plane_sampling_dict["pixels_across_mask"]
+
+        # attach to grid_ns for legacy reasons (not have to make lots of edits )
+        self.phasemask_mask = phasemask_mask
+
+
+class SimulatorRuntime:
+    def __init__(
+        self,
+        publish_opd: bool,
+        active_beams: Sequence[int],
+        nrs: int,
+        sleep_time_s: float,
+        shared_memory: Dict[str, str],
+        servers: Dict[str, str],
+        phasemask: Dict[str, str | bool | float],
+        time_step_s: float,
+    ):
+        self.publish_opd = publish_opd
+        self.active_beams = active_beams
+        self.nrs = nrs
+        self.sleep_time_s = sleep_time_s
+        self.shared_memory = shared_memory
+        self.servers = servers
+        self.phasemask = phasemask
+        self.time_step_s = time_step_s
+
+
+class FirstStageAo:
+    def __init__(
+        self,
+        enabled: bool,
+        model: str,
+        basis: str,
+        Nmodes_removed: int,
+        apply_to: str,
+        lag_frames: int,
+        correction_gain: float,
+        remove_piston: bool,
+        phase_scaling_factor: float,
+    ):
+        self.enabled = enabled
+        self.model = model
+        self.basis = basis
+        self.Nmodes_removed = Nmodes_removed
+        self.apply_to = apply_to
+        self.lag_frames = lag_frames
+        self.correction_gain = correction_gain
+        self.remove_piston = remove_piston
+        self.phase_scaling_factor = phase_scaling_factor
+
+
+class Atmosphere:
+    def __init__(
+        self,
+        enabled: bool,
+        model: str,
+        r0_500nm_m: float,
+        L0_m: float,
+        random_seed: int,
+        layers: List[Dict[str, float]],
+        scintillation: Dict[str, bool],
+    ):
+        self.enabled = enabled
+        self.model = model
+        self.r0_500nm_m = r0_500nm_m
+        self.L0_m = L0_m
+        self.random_seed = random_seed
+        self.layers = layers
+        self.scintillation = scintillation
+
+
+class InternalAberrations:
+    def __init__(
+        self,
+        enabled: bool,
+        static_opd_mode: str,
+        dm_flat: Dict[str, bool],
+        parabolic_scratches: Dict[str, List[float] | bool],
+    ):
+        self.enabled = enabled
+        self.static_opd_mode = static_opd_mode
+        self.dm_flat = dm_flat
+        self.parabolic_scratches = parabolic_scratches
+
+
+class DmToWavespaceRegistration:
+    def __init__(
+        self,
+        dm_to_wavesp_transform_matrix: NDArray,
+        dm_actuator_to_coord: Dict[int, Tuple[float, float]],
+        dm_coord_to_actuator: Dict[Tuple[float, float], int],
+    ):
+        self.dm_to_wavesp_transform_matrix = dm_to_wavesp_transform_matrix
+        self.dm_actuator_to_coord = dm_actuator_to_coord
+        self.dm_coord_to_actuator = dm_coord_to_actuator
+
+
+class Optics:
+    def __init__(
+        self,
+        *,
+        wvl0: float,
+        F_number: float,
+        mask_diam: float,
+        mask_diam_mode: Optional[str],
+        theta: float,
+        theta_mode: Optional[str],
+        coldstop_diam: float,
+        coldstop_offset: Tuple[float, float],
+    ):
+        self.wvl0 = wvl0
+        self.F_number = F_number
+        self.mask_diam = mask_diam
+        if mask_diam_mode is None:
+            self.mask_diam_mode = "lambda_over_D"
+        else:
+            self.mask_diam_mode = mask_diam_mode
+
+        self.theta = theta
+        if theta_mode is None:
+            self.theta_mode = "constant"
+        else:
+            self.theta_mode = theta_mode
+
+        self.coldstop_diam = coldstop_diam
+        self.coldstop_offset = coldstop_offset
+
+
+class Dm:
+    def __init__(
+        self,
+        *,
+        dm_model: str,
+        actuator_coupling_factor: float,
+        dm_pitch: float,
+        dm_aoi: float,
+        opd_per_cmd: float,
+        flat_rmse: float,
+    ):
+        self.dm_model = dm_model
+        self.actuator_coupling_factor = actuator_coupling_factor
+        self.dm_pitch = dm_pitch
+        self.dm_aoi = dm_aoi
+        self.opd_per_cmd = opd_per_cmd
+        self.flat_rmse = flat_rmse
+
+        if dm_model == "BMC-multi-3.5":
+            # 12x12 with missing corners
+            self.Nact_x = 12  # actuators along DM x axis
+            self.Nact_y = 12  # actuators along DM y axis
+            self.Nact = 140  # total number of actuators
+            self.dm_flat = 0.5 + flat_rmse * np.random.rand(
+                self.Nact
+            )  # add some noise to the DM flat
+            self.current_cmd = self.dm_flat  # default set to dm flat
+        else:
+            raise TypeError("input DM model not implemented. Try BMC-multi-3.5")
+
+
+class FocalPlane:
+    def __init__(
+        self,
+        x: NDArray,
+        y: NDArray,
+        X: NDArray,
+        Y: NDArray,
+        fplane_pixels: int,
+        pixels_across_mask: int,
+    ):
+        self.x = x
+        self.y = y
+        self.X = X
+        self.Y = Y
+        self.fplane_pixels = fplane_pixels
+        self.pixels_across_mask = pixels_across_mask
+
+
+class Stellar:
+    def __init__(self):
+        self.bandwidth = None
+
+
+class FresnelRelay:
+    def __init__(
+        self,
+        enabled: bool,
+        D_entrance: float,
+        f_oap: float,
+        f_coll: float,
+        z_to_mirror: float,
+        D_mirror: float,
+        edge_offset: float,
+        edge_angle: float,
+        f_imaging: float,
+        D_coldstop: float,
+        coldstop_x_offset: float,
+        coldstop_y_offset: float,
+        D_detector_pupil: float,
+        pupil_misconjugation: float,
+        use_nominal_pupil_conjugation: bool,
+        z_mirror_to_lens: Optional[float],
+    ):
+        self.enabled = enabled
+        self.D_entrance = D_entrance
+        self.f_oap = f_oap
+        self.f_coll = f_coll
+        self.z_to_mirror = z_to_mirror
+        self.D_mirror = D_mirror
+        self.edge_offset = edge_offset
+        self.edge_angle = edge_angle
+        self.f_imaging = f_imaging
+        self.D_coldstop = D_coldstop
+        self.coldstop_x_offset = coldstop_x_offset
+        self.coldstop_y_offset = coldstop_y_offset
+        self.D_detector_pupil = D_detector_pupil
+        self.pupil_misconjugation = pupil_misconjugation
+        self.use_nominal_pupil_conjugation = use_nominal_pupil_conjugation
+        self.z_mirror_to_lens = z_mirror_to_lens
+
+    def derive_parameters(self):
+        self.D_phys = self.D_entrance * self.f_coll / self.f_oap
+
+        self.M_nominal = self.D_detector_pupil / self.D_phys
+
+        self.s_object_nominal = self.f_imaging * (1.0 + 1.0 / self.M_nominal)
+
+        self.s_image_nominal = self.f_imaging * (1.0 + self.M_nominal)
+
+        if self.use_nominal_pupil_conjugation:
+            self.z_mirror_to_lens = self.s_object_nominal - self.z_to_mirror
+        else:
+            if self.z_mirror_to_lens is None:
+                raise ValueError(
+                    "fresnel_relay.z_mirror_to_lens must be provided when "
+                    "use_nominal_pupil_conjugation is false."
+                )
+
+        self.s_object = self.z_to_mirror + self.z_mirror_to_lens
+
+        if self.s_object <= self.f_imaging:
+            raise ValueError(
+                "Invalid Fresnel relay geometry: s_object must be greater "
+                "than f_imaging."
+            )
+
+        self.s_image = 1.0 / (1.0 / self.f_imaging - 1.0 / self.s_object)
+
+        self.z_focus_to_detector_nominal = self.s_image - self.f_imaging
+
+        self.z_focus_to_detector = (
+            self.z_focus_to_detector_nominal + self.pupil_misconjugation
+        )
+
+        if self.z_focus_to_detector <= 0:
+            raise ValueError(
+                "Invalid Fresnel relay geometry: detector is before or at "
+                "the cold-stop plane."
+            )
+
+        self.M_pupil = self.s_image / self.s_object
+
+        self.D_detector_predicted = self.M_pupil * self.D_phys
+
+
+class Zwfs:
+    config_json: Optional[dict] = None
+    config_path: Optional[str] = None
+    detector: Optional[Detector] = None
+    resolved_config: Dict
+    spectrum: source.Spectrum
+    source: Source
+
+    def __init__(
+        self,
+        *,
+        grid: Grid,
+        optics: Optics,
+        dm: Dm,
+        focal_plane: FocalPlane,
+        stellar: Stellar,
+    ):
+        self.grid = grid
+        self.optics = optics
+        self.dm = dm
+        self.focal_plane = focal_plane
+        self.stellar = stellar
+        self.propagator = InplacePropagator(self.grid.wave_coord.X.shape)
+
+    def update_dm_registration_wavespace(self, transform_matrix: NDArray):
+        """_summary_
+        # STANDARD WAY TO UPDATE THE REGISTRATION OF THE DM IN WAVE SPACE
+        # UPDATES --> zwfs_ns <--- name space !!! Only use this method to update registration
+
+        Args:
+            transform_matrix (_type_): _description_ affine transform describing the mapping from DM actuators to the wavefront
+            zwfs_ns (_type_): _description_ the zwfs name space (holding configuration details)
+
+        zwfs_ns dependancies (must have in namespace for code to work):
+            zwfs_ns.dm.Nact_x  (int)
+            zwfs_ns.dm.Nact_y  (int)
+            zwfs_ns.dm.dm_pitch  (float)
+            zwfs_ns.dm.actuator_coupling_factor (float)
+            zwfs_ns.dm.current_cmd (1D array, size 140 for BMC multi-3.5 DM)
+
+        """
+
+        dm_coords, dm_actuator_to_coord, dm_coord_to_actuator = (
+            DM_registration.generate_dm_coordinates(
+                Nx=self.dm.Nact_x, Ny=self.dm.Nact_y, spacing=self.dm.dm_pitch
+            )
+        )
+
+        # plt.figure(); plt.scatter([xx[0] for xx in dm_coords], [xx[1] for xx in dm_coords] ); plt.show();
+
+        pixel_coord_list = np.array(
+            [dm_to_pixel(c, transform_matrix) for c in dm_coords]
+        )
+
+        # plt.figure(); plt.scatter([xx[0] for xx in pixel_coord_list], [xx[1] for xx in pixel_coord_list] ); plt.show();
+
+        # projecting the DM actuator space to wavespace. For convinience this is same as pixel space (before binnning)
+        sigma = (
+            self.dm.actuator_coupling_factor
+            * abs(pixel_coord_list[0][0] - pixel_coord_list[1][0])
+            * np.ones(len(self.dm.current_cmd))
+        )  # coupling of actuators projected to wavespace
+
+        x0_list = [xx[0] for xx in pixel_coord_list]
+        y0_list = [yy[1] for yy in pixel_coord_list]
+
+        dm_coord_ns = DmCoord(
+            dm_coords=dm_coords,
+            dm_coord_wavesp=pixel_coord_list,
+            act_x0_list_wavesp=x0_list,
+            act_y0_list_wavesp=y0_list,
+            act_sigma_wavesp=sigma,
+        )
+
+        dm2wavespace_registration_ns = DmToWavespaceRegistration(
+            dm_to_wavesp_transform_matrix=transform_matrix,
+            dm_actuator_to_coord=dm_actuator_to_coord,
+            dm_coord_to_actuator=dm_coord_to_actuator,
+        )
+
+        # Add DM and wave coorindates to grid namespace
+        self.grid.dm_coord = dm_coord_ns
+        self.dm2wavespace_registration = dm2wavespace_registration_ns
+
+        self.compiled_dm = CompiledDM(
+            self.grid.wave_coord.X,
+            self.grid.wave_coord.Y,
+            np.array(self.grid.dm_coord.act_x0_list_wavesp),
+            np.array(self.grid.dm_coord.act_y0_list_wavesp),
+            np.array(self.grid.dm_coord.act_sigma_wavesp),
+        )
+
+    def attach_optional_config_sections(self, cfg: Dict[Any, Any]):
+        """I know this is more tediuous than just recursively populating
+        untyped namespaces, but it makes debugging/optimising so much easier
+        when we have meaningful type hints.
+
+        I've left some of these unimplemented because they appear to never be
+        set or read, so I can't guess what they would usually contain. Those that
+        are ignored are:
+         - "meta"
+         - "throughput",
+        """
+        if "internal_aberrations" in cfg:
+            self.internal_aberrations = InternalAberrations(
+                **cfg["internal_aberrations"]
+            )
+        if "atmosphere" in cfg:
+            self.atmosphere = Atmosphere(**cfg["atmosphere"])
+        if "first_stage_ao" in cfg:
+            self.first_stage_ao = FirstStageAo(**cfg["first_stage_ao"])
+        if "simulator_runtime" in cfg:
+            self.simulator_runtime = SimulatorRuntime(**cfg["simulator_runtime"])
+        if "source_profiles" in cfg:
+            self.source_profiles = SourceProfiles(**cfg["source_profiles"])
+        if "detector" in cfg:
+            self.detector_config = DetectorConfig(**cfg["detector"])
+        if "fresnel_relay" in cfg:
+            self.fresnel_relay = FresnelRelay(**cfg["fresnel_relay"])
+
+
 def _resolve_detector_spectral_bandwidth(
-    zwfs_ns,
+    zwfs_ns: Zwfs,
     spectral_bandwidth=_AUTO_SPECTRAL_BANDWIDTH,
 ):
     """
@@ -66,179 +656,6 @@ def _resolve_detector_spectral_bandwidth(
     return None
 
 
-
-
-class detector:
-    def __init__(self, dit, ron, qe, binning):
-        """_summary_
-
-        Args:
-            binning (tuple): _description_ binning factor (rows to sum, columns to sum)
-            qe (scalar): _description_ quantum efficiency of detector
-            dit (scalar): _description_ integration time of detector
-            ron (int): _description_. readout noise in electrons per pixel
-        """
-        self.dit = dit
-        self.ron = ron
-        self.qe = qe
-        self.binning = binning
-
-    def detect(self, i, include_shotnoise=True, spectral_bandwidth=None):
-        """
-        Convert an input photon-rate image into a detected detector frame.
-
-        Unit convention
-        ---------------
-        This detector method supports two closely related input conventions,
-        controlled by the `spectral_bandwidth` argument.
-
-        1. Monochromatic or spectral-density input
-
-            If `spectral_bandwidth` is not None, the input image `i` is assumed
-            to have units:
-
-                photons / second / wave-space-pixel / nm
-
-            The detector first spatially bins the image, then multiplies by:
-
-                spectral_bandwidth * dit * qe
-
-            to obtain detected photoelectrons.
-
-            This is the historical BaldrApp convention and corresponds to a flat
-            spectrum across the supplied spectral bandwidth.
-
-        2. Already spectrally integrated input
-
-            If `spectral_bandwidth` is None, the input image `i` is assumed to
-            already have units:
-
-                photons / second / wave-space-pixel
-
-            In this case no spectral-bandwidth multiplication is applied. The
-            detector only applies spatial binning, detector integration time, QE,
-            optional shot noise, and read noise.
-
-        Polychromatic simulations
-        -------------------------
-        For non-flat or explicitly sampled spectra, spectral integration should be
-        performed before calling this detector method.
-
-        If each monochromatic image `I_density_k` has units:
-
-            photons / second / wave-space-pixel / nm
-
-        then the spectral integration must include wavelength-bin widths. For a
-        discrete wavelength grid this is generally:
-
-            I_rate = sum_k I_density_k * spectral_shape_k * delta_lambda_k_nm
-
-        where `delta_lambda_k_nm` is the wavelength-bin width associated with
-        wavelength sample k, and `spectral_shape_k` is the relative spectral shape
-        evaluated at that sample.
-
-        Equivalently, define integration weights:
-
-            weights_nm_k = spectral_shape_k * delta_lambda_k_nm
-
-        with units of nm. Then:
-
-            I_rate = sum_k weights_nm_k * I_density_k
-
-        The resulting `I_rate` has units:
-
-            photons / second / wave-space-pixel
-
-        and should be passed to this detector method with:
-
-            spectral_bandwidth=None
-
-        If using fractional weights normalized such that:
-
-            sum_k weight_k = 1
-
-        then the full-band integration can also be written as:
-
-            I_rate = bandwidth_nm * sum_k weight_k * I_density_k
-
-        but this is only equivalent when:
-
-            bandwidth_nm * weight_k
-
-        correctly represents the wavelength-bin integration weight for sample k.
-        To avoid ambiguity, higher-level polychromatic frame-generation code should
-        prefer explicit `weights_nm` or `delta_lambda_k_nm` integration weights.
-
-        Design note
-        -----------
-        The detector intentionally does not inspect `zwfs_ns.spectrum` or any
-        instrument-level spectral configuration. Spectral weighting, chromatic ZWFS
-        propagation, Fresnel propagation, and bandwidth integration should be
-        handled by higher-level frame-generation functions before this detector
-        method is called.
-
-        In other words:
-
-            - Use `spectral_bandwidth` only for the legacy flat-spectrum density
-            convention.
-            - Use `spectral_bandwidth=None` when the image has already been
-            integrated over wavelength.
-
-        Parameters
-        ----------
-        i : ndarray
-            Input photon image. Units depend on `spectral_bandwidth`, as described
-            above.
-
-        include_shotnoise : bool
-            If True, apply Poisson shot noise after conversion to expected detected
-            photoelectrons.
-
-        spectral_bandwidth :  float, None, or "auto"
-            Spectral bandwidth in nm for the legacy flat-spectrum convention.
-            If None, `i` is treated as already spectrally integrated.
-
-        Returns
-        -------
-        detected_image : ndarray
-            Detector image after binning, detector integration time, QE, optional
-            shot noise, and read noise.
-        """
-
-        """_summary_
-        
-        copy of the detect function generalized for this class
-        
-        assumes input intensity is in photons per second per pixel per nm, 
-        if spectral_bandwidth is None than returns photons per pixel per nm of input light,
-        otherwise returns photons per pixel
-        
-        Args:
-            i (2D array like): _description_ input intensity (abs(field)**2!!!) before being detected on a detector (generally higher spatial resolution than detector)
-            include_shotnoise (bool, optional): _description_. Defaults to True. Sample poisson distribution for each pixel (input intensity is the expected value)
-            spectral_bandwidth (_type_, optional): _description_. Defaults to None. if spectral_bandwidth is None than returns photons per pixel per nm of input light,
-        """
-
-        i = sum_subarrays(array=i, block_size=(self.binning, self.binning))
-
-        if spectral_bandwidth is None:
-            i *= self.qe * self.dit
-        else:
-            i *= self.qe * self.dit * spectral_bandwidth
-
-        if include_shotnoise:
-            noisy_intensity = np.random.poisson(lam=i)
-        else:  # no noise
-            noisy_intensity = i
-
-        if self.ron > 0:
-            noisy_intensity += np.random.normal(
-                0, self.ron, noisy_intensity.shape
-            ).astype(int)
-
-        return np.clip(noisy_intensity, 0, np.inf)
-
-
 ### DM actuator influence options
 # @njit
 def gaussian_displacement(c_i, sigma_i, x, y, x0, y0):
@@ -249,8 +666,7 @@ def gaussian_displacement(c_i, sigma_i, x, y, x0, y0):
     # return c_i * ( (x - x0)**2 + (y - y0)**2 <= sigma_i**2 ) # box profile'
 
 
-
-def dm_to_pixel(dm_coord, transform_matrix):
+def dm_to_pixel(dm_coord, transform_matrix) -> Tuple[float, float]:
     """
     Converts DM coordinates to pixel coordinates using the affine transformation.
 
@@ -516,16 +932,12 @@ def get_pupil_intensity(
     theta,
     phasemask_diameter,
     phasemask_mask,
-    pupil_diameter,
     fplane_pixels=300,
     pixels_across_mask=10,
     *,
     coldstop_diam=None,
     coldstop_offset=(0.0, 0.0),
     coldstop_mask=None,
-    include_beta=True,
-    return_field=False,
-    return_terms=False,
     debug=False,
 ):
     """
@@ -539,7 +951,6 @@ def get_pupil_intensity(
     #         theta (_type_): phaseshift of mask (rad)
     #         phasemask_diameter ( ) : diameter in units of 1.22 * F * lambda/D of phasemask
     #         phasemask_mask ( ) : 2D array of the phaseshifting region in image plane (input to make things quicker)
-    #         pupil_diameter () : diameter of pupil in pixels
     #         fplane_pixels (int) : number of pixels in focal plane
     #         pixels_across_mask (int) : number of pixels across the phase shifting region of mask in focal plane
     #     Returns:
@@ -688,251 +1099,41 @@ def get_pupil_intensity(
         plt.tight_layout()
 
     # ---------------- returns ----------------
-    if return_terms or return_field:
-        out = {"Ic": Ic}
-        if return_field:
-            out["field_pupil"] = psi_out
-        if return_terms:
-            # also return pupil-plane terms cropped back to caller’s shape for convenience
-            b_crop = b[pad : pad + N, pad : pad + N]
-            psi_theta_crop = psi_theta_pad[pad : pad + N, pad : pad + N]
-            if padded_even:
-                b_crop = b_crop[:N_orig, :N_orig]
-                psi_theta_crop = psi_theta_crop[:N_orig, :N_orig]
-            out.update(
-                {
-                    "psi_A": amp * np.exp(1j * phi),  # original-resolution pupil field
-                    "b_crop": b_crop,
-                    "psi_theta_crop": psi_theta_crop,
-                    "phase_disc_fp": phase_disc,
-                    "cold_stop_fp": C,
-                    "pix_per_wvld": pix_per_wvld,
-                }
-            )
-        return out
-    # t1 = time.time()
-    # print(t1-t0)
     return Ic
 
 
-def update_dm_registration_wavespace(transform_matrix, zwfs_ns):
-    """_summary_
-    # STANDARD WAY TO UPDATE THE REGISTRATION OF THE DM IN WAVE SPACE
-    # UPDATES --> zwfs_ns <--- name space !!! Only use this method to update registration
-
-    Args:
-        transform_matrix (_type_): _description_ affine transform describing the mapping from DM actuators to the wavefront
-        zwfs_ns (_type_): _description_ the zwfs name space (holding configuration details)
-
-    zwfs_ns dependancies (must have in namespace for code to work):
-        zwfs_ns.dm.Nact_x  (int)
-        zwfs_ns.dm.Nact_y  (int)
-        zwfs_ns.dm.dm_pitch  (float)
-        zwfs_ns.dm.actuator_coupling_factor (float)
-        zwfs_ns.dm.current_cmd (1D array, size 140 for BMC multi-3.5 DM)
-
-    """
-
-    dm_coords, dm_actuator_to_coord, dm_coord_to_actuator = (
-        DM_registration.generate_dm_coordinates(
-            Nx=zwfs_ns.dm.Nact_x, Ny=zwfs_ns.dm.Nact_y, spacing=zwfs_ns.dm.dm_pitch
-        )
-    )
-
-    # plt.figure(); plt.scatter([xx[0] for xx in dm_coords], [xx[1] for xx in dm_coords] ); plt.show();
-
-    pixel_coord_list = np.array([dm_to_pixel(c, transform_matrix) for c in dm_coords])
-
-    # plt.figure(); plt.scatter([xx[0] for xx in pixel_coord_list], [xx[1] for xx in pixel_coord_list] ); plt.show();
-
-    # projecting the DM actuator space to wavespace. For convinience this is same as pixel space (before binnning)
-    sigma = (
-        zwfs_ns.dm.actuator_coupling_factor
-        * abs(pixel_coord_list[0][0] - pixel_coord_list[1][0])
-        * np.ones(len(zwfs_ns.dm.current_cmd))
-    )  # coupling of actuators projected to wavespace
-
-    x0_list = [xx[0] for xx in pixel_coord_list]
-    y0_list = [yy[1] for yy in pixel_coord_list]
-
-    dm2wavespace_registration_dict = {
-        "dm_to_wavesp_transform_matrix": transform_matrix,  # affine transform from DM coordinates to wave coordinates
-        "dm_actuator_to_coord": dm_actuator_to_coord,
-        "dm_coord_to_actuator": dm_coord_to_actuator,
-    }
-
-    dm_coord_dict = {
-        "dm_coords": dm_coords,  # DM coordinates DM space
-        "dm_coord_wavesp": pixel_coord_list,
-        "act_x0_list_wavesp": x0_list,  # actuator x coorindate in pixel space
-        "act_y0_list_wavesp": y0_list,  # actuator y coordinate in pixel space
-        "act_sigma_wavesp": sigma,
-    }
-
-    dm2wavespace_registration_ns = SimpleNamespace(**dm2wavespace_registration_dict)
-    # wave_coord_ns = SimpleNamespace(**wave_coord_dict )
-    dm_coord_ns = SimpleNamespace(**dm_coord_dict)
-
-    # Add DM and wave coorindates to grid namespace
-    zwfs_ns.grid.dm_coord = dm_coord_ns
-    zwfs_ns.dm2wavespace_registration = dm2wavespace_registration_ns
-
-    zwfs_ns.compiled_dm = CompiledDM(
-        zwfs_ns.grid.wave_coord.X,
-        zwfs_ns.grid.wave_coord.Y,
-        np.array(zwfs_ns.grid.dm_coord.act_x0_list_wavesp),
-        np.array(zwfs_ns.grid.dm_coord.act_y0_list_wavesp),
-        np.array(zwfs_ns.grid.dm_coord.act_sigma_wavesp),
-    )
-
-    return zwfs_ns
-
-
-def init_zwfs(grid_ns, optics_ns, dm_ns):
-    #############
-    #### GRID
-
-    if hasattr(grid_ns, "telescope"):
-        if grid_ns.telescope.upper() == "UT":
-            pupil = aperture.vlt_pupil(
-                diameter=grid_ns.N,
-                dim=int(grid_ns.dim),
-                spiders_thickness=0.008 * grid_ns.N / int(grid_ns.dim),
-            )  # padding_factor = 2 )
-        elif grid_ns.telescope.upper() == "AT":
-            pupil = aperture.AT_pupil(
-                diameter=grid_ns.N,
-                dim=int(grid_ns.dim),
-                spiders_thickness=0.016 * grid_ns.N / int(grid_ns.dim),
-                strict=False,
-                cpix=False,
-            )  # , padding_factor = 2 )
-        elif grid_ns.telescope.upper() == "DISC":
-            pupil = aperture.disc(
-                dim=int(grid_ns.dim),
-                size=grid_ns.N,
-                diameter=True,
-                strict=False,
-                center=(),
-                cpix=False,
-                invert=False,
-                mask=False,
-            )
-        elif (
-            grid_ns.telescope.upper() == "SOLARSTEIN"
-        ):  # ASGARD internal source SOLARSTEIN which has UT like secondary with no spiders
-            pupil = aperture.disc_obstructed(
-                dim=int(grid_ns.dim),
-                size=grid_ns.N,
-                obs=1100 / 8000,
-                diameter=True,
-                strict=False,
-            )
-
-        else:
-            raise TypeError("telescope not implemented. Try DISC, AT or UT")
-
-    else:
-        pupil = aperture.disc(
-            dim=int(grid_ns.dim),
-            size=grid_ns.N,
-            diameter=True,
-            strict=False,
-            center=(),
-            cpix=False,
-            invert=False,
-            mask=False,
-        )
-        # raise UserWarning("telescope not defined in grid_ns. Defaulting to disk pupil")
-        print("telescope not defined in grid_ns. Defaulting to disk pupil")
-    grid_ns.pupil_mask = pupil
-    # grid_ns.phasemask_mask = phasemask
-
-    # coorindates in the pupil plance
-    padding_factor = grid_ns.dim / grid_ns.N
-    x = np.linspace(
-        -(grid_ns.D * padding_factor) // 2,
-        (grid_ns.D * padding_factor) // 2,
-        pupil.shape[0],
-    )
-    y = np.linspace(
-        -(grid_ns.D * padding_factor) // 2,
-        (grid_ns.D * padding_factor) // 2,
-        pupil.shape[0],
-    )
-    X, Y = np.meshgrid(x, y)
-
-    wave_coord_dict = {
-        "x": x,
-        "y": y,
-        "X": X,
-        "Y": Y,
-    }
-
-    wave_coord_ns = SimpleNamespace(**wave_coord_dict)
-
-    grid_ns.wave_coord = wave_coord_ns
-
-    # focal plane sampling is hardcoded. we use mft to sample when calculating output intensity.
-    # hold a fixed phasemask mask here so don't have to re-init each run
-    focal_plane_sampling_dict = {"fplane_pixels": 300, "pixels_across_mask": 10}
-
-    phasemask_mask = aperture.disc(
-        focal_plane_sampling_dict["fplane_pixels"],
-        focal_plane_sampling_dict["fplane_pixels"]
-        // focal_plane_sampling_dict["pixels_across_mask"],
-        diameter=True,
-        cpix=True,
-        strict=False,
-    )
-
-    # attach to grid_ns for legacy reasons (not have to make lots of edits )
-    grid_ns.phasemask_mask = phasemask_mask
-
-    # grid_ns.coldstop_mask =
-
+def init_zwfs(grid_ns: Grid, optics_ns: Optics, dm_ns: Dm) -> Zwfs:
+    fplane_pixels = grid_ns.fplane_pixels
+    pixels_across_mask = grid_ns.pixels_across_mask
     # get coordinates in focal plane
     xmin = (
-        -focal_plane_sampling_dict["fplane_pixels"]
-        / focal_plane_sampling_dict["pixels_across_mask"]
+        -fplane_pixels
+        / pixels_across_mask
         * optics_ns.mask_diam
         * optics_ns.wvl0
         * optics_ns.F_number
         / 2
     )
     xmax = (
-        focal_plane_sampling_dict["fplane_pixels"]
-        / focal_plane_sampling_dict["pixels_across_mask"]
+        fplane_pixels
+        / pixels_across_mask
         * optics_ns.mask_diam
         * optics_ns.wvl0
         * optics_ns.F_number
         / 2
     )
-    x = np.linspace(xmin, xmax, focal_plane_sampling_dict["fplane_pixels"])
-    y = np.linspace(xmin, xmax, focal_plane_sampling_dict["fplane_pixels"])
+    x = np.linspace(xmin, xmax, grid_ns.fplane_pixels)
+    y = np.linspace(xmin, xmax, grid_ns.fplane_pixels)
     X, Y = np.meshgrid(x, y)
 
-    focal_plane_sampling_dict["x"] = x
-    focal_plane_sampling_dict["X"] = X
-    focal_plane_sampling_dict["y"] = y
-    focal_plane_sampling_dict["Y"] = Y
-
-    focal_plane_ns = SimpleNamespace(**focal_plane_sampling_dict)
-
-    #############
-    #### DM
-
-    if dm_ns.dm_model == "BMC-multi-3.5":
-        # 12x12 with missing corners
-        dm_ns.Nact_x = 12  # actuators along DM x axis
-        dm_ns.Nact_y = 12  # actuators along DM y axis
-        dm_ns.Nact = 140  # total number of actuators
-        dm_ns.dm_flat = 0.5 + dm_ns.flat_rmse * np.random.rand(
-            dm_ns.Nact
-        )  # add some noise to the DM flat
-        dm_ns.current_cmd = dm_ns.dm_flat  # default set to dm flat
-    else:
-        raise TypeError("input DM model not implemented. Try BMC-multi-3.5")
+    focal_plane_ns = FocalPlane(
+        x=x,
+        y=y,
+        X=X,
+        Y=Y,
+        fplane_pixels=grid_ns.fplane_pixels,
+        pixels_across_mask=grid_ns.pixels_across_mask,
+    )
 
     # set so pupil covers about 10 actuators on BMC multi 3.5 DM
     # np.ptp(wave_coord_dict['y'])
@@ -944,9 +1145,9 @@ def init_zwfs(grid_ns, optics_ns, dm_ns):
     )  # Parameters for affine transform (identity for simplicity)
     # set by default to be centered and overlap with pupil (pupil touches edge of DM )
 
-    t_x, t_y = np.mean(wave_coord_dict["x"]), np.mean(
-        wave_coord_dict["y"]
-    )  # Translation in phase space
+    # Translation in phase space
+    t_x = np.mean(grid_ns.wave_coord.x)
+    t_y = np.mean(grid_ns.wave_coord.y)
 
     # we can introduce mis-registrations by rolling input pupil
 
@@ -954,30 +1155,21 @@ def init_zwfs(grid_ns, optics_ns, dm_ns):
 
     #### Stellar Name Space
     # detect requires stellar.bandwidth input so we set as None as default
-    stellar_ns = SimpleNamespace(**{"bandwidth": None})
+    stellar_ns = Stellar()
 
-    # nned to add
-    # ZWFS NAME SPACE
-    zwfs_dict = {
-        "grid": grid_ns,
-        "optics": optics_ns,
-        "dm": dm_ns,
-        "focal_plane": focal_plane_ns,
-        "stellar": stellar_ns,
-        # "dm2wavespace_registration" : dm2wavespace_registration_ns
-    }
-
-    zwfs_ns = SimpleNamespace(**zwfs_dict)
+    zwfs = Zwfs(
+        grid=grid_ns,
+        optics=optics_ns,
+        dm=dm_ns,
+        focal_plane=focal_plane_ns,
+        stellar=stellar_ns,
+    )
 
     # user warning: only ever use update_dm_registration_wavespace if you want a consistent update across all variables
     # this updates the zwfs_ns.grid with dm coords in DM and wavespace as well as defining dm2wavespace_registration namespace
-    zwfs_ns = update_dm_registration_wavespace(
-        dm_act_2_wave_space_transform_matrix, zwfs_ns
-    )
+    zwfs.update_dm_registration_wavespace(dm_act_2_wave_space_transform_matrix)
 
-    zwfs_ns.propagator = InplacePropagator(zwfs_ns.grid.wave_coord.X.shape)
-
-    return zwfs_ns
+    return zwfs
 
 
 def first_stage_ao(
@@ -1053,139 +1245,7 @@ def sum_subarrays(array, block_size):
 def detect(i, binning, qe, dit, ron=0, include_shotnoise=True, spectral_bandwidth=None):
     """
     Convert an input photon-rate image into a detected detector frame.
-
-    Unit convention
-    ---------------
-    This detector method supports two closely related input conventions,
-    controlled by the `spectral_bandwidth` argument.
-
-    1. Monochromatic or spectral-density input
-
-        If `spectral_bandwidth` is not None, the input image `i` is assumed
-        to have units:
-
-            photons / second / wave-space-pixel / nm
-
-        The detector first spatially bins the image, then multiplies by:
-
-            spectral_bandwidth * dit * qe
-
-        to obtain detected photoelectrons.
-
-        This is the historical BaldrApp convention and corresponds to a flat
-        spectrum across the supplied spectral bandwidth.
-
-    2. Already spectrally integrated input
-
-        If `spectral_bandwidth` is None, the input image `i` is assumed to
-        already have units:
-
-            photons / second / wave-space-pixel
-
-        In this case no spectral-bandwidth multiplication is applied. The
-        detector only applies spatial binning, detector integration time, QE,
-        optional shot noise, and read noise.
-
-    Polychromatic simulations
-    -------------------------
-    For non-flat or explicitly sampled spectra, spectral integration should be
-    performed before calling this detector method.
-
-    If each monochromatic image `I_density_k` has units:
-
-        photons / second / wave-space-pixel / nm
-
-    then the spectral integration must include wavelength-bin widths. For a
-    discrete wavelength grid this is generally:
-
-        I_rate = sum_k I_density_k * spectral_shape_k * delta_lambda_k_nm
-
-    where `delta_lambda_k_nm` is the wavelength-bin width associated with
-    wavelength sample k, and `spectral_shape_k` is the relative spectral shape
-    evaluated at that sample.
-
-    Equivalently, define integration weights:
-
-        weights_nm_k = spectral_shape_k * delta_lambda_k_nm
-
-    with units of nm. Then:
-
-        I_rate = sum_k weights_nm_k * I_density_k
-
-    The resulting `I_rate` has units:
-
-        photons / second / wave-space-pixel
-
-    and should be passed to this detector method with:
-
-        spectral_bandwidth=None
-
-    If using fractional weights normalized such that:
-
-        sum_k weight_k = 1
-
-    then the full-band integration can also be written as:
-
-        I_rate = bandwidth_nm * sum_k weight_k * I_density_k
-
-    but this is only equivalent when:
-
-        bandwidth_nm * weight_k
-
-    correctly represents the wavelength-bin integration weight for sample k.
-    To avoid ambiguity, higher-level polychromatic frame-generation code should
-    prefer explicit `weights_nm` or `delta_lambda_k_nm` integration weights.
-
-    Design note
-    -----------
-    The detector intentionally does not inspect `zwfs_ns.spectrum` or any
-    instrument-level spectral configuration. Spectral weighting, chromatic ZWFS
-    propagation, Fresnel propagation, and bandwidth integration should be
-    handled by higher-level frame-generation functions before this detector
-    method is called.
-
-    In other words:
-
-        - Use `spectral_bandwidth` only for the legacy flat-spectrum density
-        convention.
-        - Use `spectral_bandwidth=None` when the image has already been
-        integrated over wavelength.
-
-    Parameters
-    ----------
-    i : ndarray
-        Input photon image. Units depend on `spectral_bandwidth`, as described
-        above.
-
-    include_shotnoise : bool
-        If True, apply Poisson shot noise after conversion to expected detected
-        photoelectrons.
-
-    spectral_bandwidth : float, None, or "auto"
-        Spectral bandwidth in nm for the legacy flat-spectrum convention.
-        If None, `i` is treated as already spectrally integrated.
-
-    Returns
-    -------
-    detected_image : ndarray
-        Detector image after binning, detector integration time, QE, optional
-        shot noise, and read noise.
     """
-    """_summary_
-    assumes input intensity is in photons per second per pixel per nm, 
-    if spectral_bandwidth is None than returns photons per pixel per nm of input light,
-    otherwise returns photons per pixel
-    
-    Args:
-        i (2D array like): _description_ input intensity before being detected on a detector (generally higher spatial resolution than detector)
-        binning (tuple): _description_ binning factor (rows to sum, columns to sum) 
-        qe (scalar): _description_ quantum efficiency of detector
-        dit (scalar): _description_ integration time of detector
-        ron (int, optional): _description_. Defaults to 1. readout noise in electrons per pixel
-        include_shotnoise (bool, optional): _description_. Defaults to True. Sample poisson distribution for each pixel (input intensity is the expected value)
-        spectral_bandwidth (_type_, optional): _description_. Defaults to None. if spectral_bandwidth is None than returns photons per pixel per nm of input light,
-    """
-
     i = sum_subarrays(array=i, block_size=binning)
 
     if spectral_bandwidth is None:
@@ -1261,7 +1321,6 @@ def get_frame(
         phasemask_diameter=zwfs_ns.optics.mask_diam,
         coldstop_diam=zwfs_ns.optics.coldstop_diam,  # new
         coldstop_offset=zwfs_ns.optics.coldstop_offset,  # new
-        pupil_diameter=zwfs_ns.grid.N,
         fplane_pixels=zwfs_ns.focal_plane.fplane_pixels,
         pixels_across_mask=zwfs_ns.focal_plane.pixels_across_mask,
         phasemask_mask=None,
@@ -1293,7 +1352,7 @@ def get_frame(
 ##########################################
 
 
-def select_source_profile(zwfs_ns, name):
+def select_source_profile(zwfs_ns: Zwfs, name: str):
     """Select an input source without rebuilding wavelength-dependent optics.
 
     The caller also updates the pupil mask and pupil-dependent aberrations.
@@ -1304,7 +1363,7 @@ def select_source_profile(zwfs_ns, name):
     raw = report["configuration"]["source_profiles"][name]
     derived = report["derived"]["source_profiles"][name]
     zwfs_ns.spectrum = source.spectrum_for_profile(report, name)
-    zwfs_ns.source = SimpleNamespace(
+    zwfs_ns.source = Source(
         active_profile=name,
         pupil_model=derived["pupil_model"],
         photons_per_second=float(derived["total_photons_per_second"]),
@@ -1344,11 +1403,9 @@ def init_zwfs_from_json(
             raise ValueError(f"JSON config must contain a '{section}' section.")
 
     # Core sections needed by the existing init_zwfs(...)
-    grid_ns = cfghelp.dict_to_namespace_recursive(cfg["grid"])
-    optics_ns = cfghelp.dict_to_namespace_recursive(cfg["optics"])
-    dm_ns = cfghelp.dict_to_namespace_recursive(cfg["dm"])
-
-    optics_ns = cfghelp.ensure_optics_defaults(optics_ns)
+    grid_ns = Grid(**cfg["grid"])
+    optics_ns = Optics(**cfg["optics"])
+    dm_ns = Dm(**cfg["dm"])
 
     zwfs_ns = init_zwfs(grid_ns, optics_ns, dm_ns)
 
@@ -1357,29 +1414,18 @@ def init_zwfs_from_json(
     zwfs_ns.config_path = str(json_config)
 
     # Attach optional metadata/runtime sections.
-    zwfs_ns = cfghelp.attach_optional_config_sections(zwfs_ns, cfg)
-
-    # Optional runtime source profiles.
-    # This is metadata for higher-level simulators. It is not interpreted here,
-    # so old configs remain fully backwards compatible.
-    if "source_profiles" in cfg:
-        zwfs_ns.source_profiles = cfghelp.dict_to_namespace_recursive(
-            cfg["source_profiles"]
-        )
+    zwfs_ns.attach_optional_config_sections(cfg)
 
     # Detector config/object.
     # Detector instantiation stays here, not in config_helper.py, because the
     # detector class is defined in baldr_core.py.
-    if "detector" in cfg:
-        det_cfg = cfghelp.dict_to_namespace_recursive(cfg["detector"])
-        zwfs_ns.detector_config = det_cfg
-
-        if instantiate_detector and getattr(det_cfg, "enabled", True):
-            zwfs_ns.detector = detector(
-                binning=int(getattr(det_cfg, "binning", 1)),
-                dit=float(getattr(det_cfg, "dit", 1.0)),
-                ron=float(getattr(det_cfg, "ron", 0.0)),
-                qe=float(getattr(det_cfg, "qe", 1.0)),
+    if zwfs_ns.detector_config is not None:
+        if instantiate_detector and zwfs_ns.detector_config.enabled:
+            zwfs_ns.detector = Detector(
+                binning=zwfs_ns.detector_config.binning,
+                dit=zwfs_ns.detector_config.dit,
+                ron=zwfs_ns.detector_config.ron,
+                qe=zwfs_ns.detector_config.qe,
             )
 
     # Shared wavelength grid; source switching updates its photon fractions.
@@ -1387,13 +1433,9 @@ def init_zwfs_from_json(
     select_source_profile(zwfs_ns, "internal")
 
     # Fresnel relay config.
-    if "fresnel_relay" in cfg:
-        fresnel_ns = cfghelp.dict_to_namespace_recursive(cfg["fresnel_relay"])
-
+    if zwfs_ns.fresnel_relay is not None:
         if derive_fresnel:
-            fresnel_ns = cfghelp.derive_fresnel_relay_ns(fresnel_ns)
-
-        zwfs_ns.fresnel_relay = fresnel_ns
+            zwfs_ns.fresnel_relay.derive_parameters()
 
     return zwfs_ns
 
@@ -1402,7 +1444,7 @@ def get_zwfs_output_field_from_opd(
     opd,
     amp,
     wavelength,
-    zwfs_ns,
+    zwfs_ns: Zwfs,
     theta=None,
     phasemask_diameter=None,
     phasemask_mask=None,
@@ -1571,20 +1613,26 @@ def get_frame_polychromatic(
 
     # Incident complex fields are weighted once, after optical propagation.
     if incident_fields is not None:
-        if not hasattr(zwfs_ns.spectrum, 'photon_fractions'):
-            raise ValueError('incident_fields requires a photon-fraction spectrum')
+        if not hasattr(zwfs_ns.spectrum, "photon_fractions"):
+            raise ValueError("incident_fields requires a photon-fraction spectrum")
         incident_fields = np.asarray(incident_fields)
         expected = (len(wavelengths), *np.asarray(amp_input).shape)
-        if (incident_fields.shape != expected or
-                not np.iscomplexobj(incident_fields) or
-                not np.all(np.isfinite(incident_fields))):
-            raise ValueError(f'incident_fields must be finite complex with shape {expected}')
+        if (
+            incident_fields.shape != expected
+            or not np.iscomplexobj(incident_fields)
+            or not np.all(np.isfinite(incident_fields))
+        ):
+            raise ValueError(
+                f"incident_fields must be finite complex with shape {expected}"
+            )
 
     I_rate = None
     per_wavelength_outputs = []
 
     try:
-        for sample_index, (wavelength, weight_nm) in enumerate(zip(wavelengths, weights_nm)):
+        for sample_index, (wavelength, weight_nm) in enumerate(
+            zip(wavelengths, weights_nm)
+        ):
 
             theta = spec.theta_at_wavelength(
                 zwfs_ns.optics,
@@ -1609,7 +1657,9 @@ def get_frame_polychromatic(
             else:
                 field = incident_fields[sample_index]
                 wavelength_amp = np.abs(field)
-                wavelength_opd = opd_input + (float(wavelength)/(2*np.pi))*np.angle(field)
+                wavelength_opd = opd_input + (
+                    float(wavelength) / (2 * np.pi)
+                ) * np.angle(field)
 
             I_density = get_frame(
                 opd_input=wavelength_opd,
@@ -1791,7 +1841,11 @@ def get_frame_fresnel(
         psi_mirror = psi_C
 
     mirror_mask_D = fresnel.cached_d_mirror_mask(
-        psi_mirror.shape, dx_phys, fr.D_mirror, fr.edge_offset, fr.edge_angle,
+        psi_mirror.shape,
+        dx_phys,
+        fr.D_mirror,
+        fr.edge_offset,
+        fr.edge_angle,
     )
 
     psi_after_mirror = psi_mirror * mirror_mask_D
@@ -1832,8 +1886,12 @@ def get_frame_fresnel(
     )
 
     coldstop_mask_phys = fresnel.cached_coldstop_mask(
-        field_coldstop_plane.shape, dx_cold, dy_cold,
-        fr.D_coldstop, fr.coldstop_x_offset, fr.coldstop_y_offset,
+        field_coldstop_plane.shape,
+        dx_cold,
+        dy_cold,
+        fr.D_coldstop,
+        fr.coldstop_x_offset,
+        fr.coldstop_y_offset,
     )
 
     field_after_coldstop = field_coldstop_plane * coldstop_mask_phys
@@ -2031,14 +2089,18 @@ def get_frame_fresnel_polychromatic(
 
     # Incident complex fields are weighted once, after optical propagation.
     if incident_fields is not None:
-        if not hasattr(zwfs_ns.spectrum, 'photon_fractions'):
-            raise ValueError('incident_fields requires a photon-fraction spectrum')
+        if not hasattr(zwfs_ns.spectrum, "photon_fractions"):
+            raise ValueError("incident_fields requires a photon-fraction spectrum")
         incident_fields = np.asarray(incident_fields)
         expected = (len(wavelengths), *np.asarray(amp_input).shape)
-        if (incident_fields.shape != expected or
-                not np.iscomplexobj(incident_fields) or
-                not np.all(np.isfinite(incident_fields))):
-            raise ValueError(f'incident_fields must be finite complex with shape {expected}')
+        if (
+            incident_fields.shape != expected
+            or not np.iscomplexobj(incident_fields)
+            or not np.all(np.isfinite(incident_fields))
+        ):
+            raise ValueError(
+                f"incident_fields must be finite complex with shape {expected}"
+            )
 
     I_rate = None
     per_wavelength_outputs = []
@@ -2065,7 +2127,9 @@ def get_frame_fresnel_polychromatic(
                 opd_input + opd_internal + opd_current_dm
             )
 
-    for sample_index, (wavelength, weight_nm) in enumerate(zip(wavelengths, weights_nm)):
+    for sample_index, (wavelength, weight_nm) in enumerate(
+        zip(wavelengths, weights_nm)
+    ):
 
         theta = spec.theta_at_wavelength(
             zwfs_ns.optics,
@@ -2084,7 +2148,9 @@ def get_frame_fresnel_polychromatic(
         else:
             field = incident_fields[sample_index]
             wavelength_amp = np.abs(field)
-            wavelength_opd = opd_input + (float(wavelength)/(2*np.pi))*np.angle(field)
+            wavelength_opd = opd_input + (float(wavelength) / (2 * np.pi)) * np.angle(
+                field
+            )
 
         out = get_frame_fresnel(
             opd_input=wavelength_opd,
@@ -2286,16 +2352,22 @@ def get_frame_configured(
 
     if hasattr(getattr(zwfs_ns, "spectrum", None), "photon_fractions"):
         if force_polychromatic is False and len(zwfs_ns.spectrum.wavelengths) > 1:
-            raise ValueError("Cannot discard configured spectral samples with force_polychromatic=False")
+            raise ValueError(
+                "Cannot discard configured spectral samples with force_polychromatic=False"
+            )
         if spectral_bandwidth not in (_AUTO_SPECTRAL_BANDWIDTH, None):
-            raise ValueError("Configured sources use band-integrated photons/s; do not specify spectral_bandwidth")
+            raise ValueError(
+                "Configured sources use band-integrated photons/s; do not specify spectral_bandwidth"
+            )
         # Even for a one-node monochromatic simulation the input is already
         # band integrated and must not be multiplied by an arbitrary bandwidth.
         spectral_bandwidth = None
 
     if incident_fields is not None:
-        if not hasattr(zwfs_ns.spectrum, 'photon_fractions') or not use_polychromatic:
-            raise ValueError('incident_fields requires photon-fraction spectral integration')
+        if not hasattr(zwfs_ns.spectrum, "photon_fractions") or not use_polychromatic:
+            raise ValueError(
+                "incident_fields requires photon-fraction spectral integration"
+            )
 
     # Optional per-frame DM OPD supplied by the runtime.  In particular this
     # must NOT be cached on zwfs_ns: SHM commands can change every frame.

@@ -4,6 +4,8 @@ Run the SHM creator/server before starting this process. It uses the existing
 ImageStreamIO SHM layout and must not recreate those segments as raw Python SHM.
 """
 
+from typing import Dict, List
+
 from hcipy import make_pupil_grid
 import numpy as np
 import json
@@ -738,7 +740,7 @@ def bool_from_token(token):
     raise ValueError(f"Cannot parse boolean token: {token!r}")
 
 
-def apply_fresnel_control_to_all_beams(zwfs_ns, original_fresnel_state, sim_control):
+def apply_fresnel_control_to_all_beams(zwfs_ns: Dict[int, bldr.Zwfs], original_fresnel_state, sim_control):
     """Apply live Fresnel alignment overrides to every beam namespace."""
     for beam, zwfs in zwfs_ns.items():
         if not hasattr(zwfs, "fresnel_relay"):

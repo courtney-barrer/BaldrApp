@@ -99,7 +99,7 @@
       "use_dm_flat_from_model": false
     },
     "parabolic_scratches": {
-      "enabled": false,
+      "enabled": true,
       "list_a": [
         0.1
       ],

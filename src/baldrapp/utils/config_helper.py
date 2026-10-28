@@ -8,7 +8,6 @@ from types import SimpleNamespace
 
 import numpy as np
 
-
 # ============================================================
 # Basic JSON / namespace helpers
 # ============================================================
@@ -45,28 +44,6 @@ def namespace_to_dict_recursive(ns):
         return [namespace_to_dict_recursive(v) for v in ns]
 
     return ns
-
-
-# ============================================================
-# Optics defaults
-# ============================================================
-
-def ensure_optics_defaults(optics_ns):
-    """
-    Add backwards-compatible optional optics defaults.
-
-    Existing BaldrApp behaviour is:
-
-        theta is constant with wavelength
-        mask_diam is interpreted in the current lambda/D-like convention
-    """
-    if not hasattr(optics_ns, "theta_mode"):
-        optics_ns.theta_mode = "constant"
-
-    if not hasattr(optics_ns, "mask_diam_mode"):
-        optics_ns.mask_diam_mode = "lambda_over_D"
-
-    return optics_ns
 
 
 # ============================================================

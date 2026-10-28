@@ -20,6 +20,11 @@ from typing import Any
 LAMBDA_REF_M = 500e-9
 PLANCK_C2_M_K = 1.438776877e-2  # h*c/k_B in m K
 
+# It appears that the following keys are never written, read, or populated. I
+# believe they can be safely removed:
+#  - "meta",
+#  - "throughput"
+
 _TOP_LEVEL_KEYS = frozenset({
     "grid", "optics", "dm", "fresnel_relay", "detector",
     "internal_aberrations", "first_stage_ao", "simulator_runtime",

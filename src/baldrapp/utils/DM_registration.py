@@ -1,3 +1,5 @@
+from typing import Dict, List, Tuple
+
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy.optimize import curve_fit
@@ -464,7 +466,12 @@ def get_DM_command_in_2D(cmd, Nx_act=12):
     return np.array(cmd_in_2D).reshape(Nx_act, Nx_act)
 
 
-def generate_dm_coordinates(Nx=12, Ny=12, spacing=1.0):
+def generate_dm_coordinates(Nx=12, Ny=12, spacing=1.0) -> \
+    Tuple[
+        List[Tuple[float,float]],
+        Dict[int, Tuple[float,float]],
+        Dict[Tuple[float, float], int],
+    ]:
     """
     Generates the x, y coordinates of the actuators in a 12x12 grid DM with missing corners.
 

@@ -9,21 +9,44 @@ entrance pupil before downstream optical losses.
 from types import SimpleNamespace
 
 import numpy as np
+from numpy.typing import NDArray
 
 
-def spectrum_for_profile(resolved, name):
+class Spectrum:
+    def __init__(
+        self,
+        enabled: bool,
+        integration_mode: str,
+        wavelengths: NDArray[np.float64],
+        photon_fractions: NDArray[np.float64],
+        active_source_profile: str,
+    ):
+        self.enabled = enabled
+        self.integration_mode = integration_mode
+        self.wavelengths = wavelengths
+        self.photon_fractions = photon_fractions
+        self.active_source_profile = active_source_profile
+
+
+def spectrum_for_profile(resolved, name: str) -> Spectrum:
     """A fixed instrument wavelength grid and independent source weights."""
     derived = resolved["derived"]
     profile = derived["source_profiles"][name]
     wavelengths = np.asarray(derived["bandpass"]["wavelengths_m"], dtype=float)
     fractions = np.asarray(profile["photon_fractions"], dtype=float)
-    if wavelengths.ndim != 1 or wavelengths.size == 0 or fractions.shape != wavelengths.shape:
-        raise ValueError("Spectral wavelengths and photon fractions must be matching 1D arrays")
+    if (
+        wavelengths.ndim != 1
+        or wavelengths.size == 0
+        or fractions.shape != wavelengths.shape
+    ):
+        raise ValueError(
+            "Spectral wavelengths and photon fractions must be matching 1D arrays"
+        )
     if not np.all(np.isfinite(fractions)) or np.any(fractions < 0):
         raise ValueError("Invalid photon fractions")
     if not np.isclose(fractions.sum(), 1, rtol=0, atol=1e-12):
         raise ValueError("Photon fractions must sum to one")
-    return SimpleNamespace(
+    return Spectrum(
         enabled=True,
         integration_mode="photon_fractions",
         wavelengths=wavelengths.copy(),
@@ -42,7 +65,9 @@ def source_input_amplitude(pupil_mask, photons_per_second):
     pupil = np.asarray(pupil_mask, dtype=float)
     rate = float(photons_per_second)
     if pupil.ndim != 2 or not np.all(np.isfinite(pupil)) or np.any(pupil < 0):
-        raise ValueError("pupil_mask must be a finite, nonnegative 2D transmission array")
+        raise ValueError(
+            "pupil_mask must be a finite, nonnegative 2D transmission array"
+        )
     if not np.isfinite(rate) or rate < 0:
         raise ValueError("photons_per_second must be finite and nonnegative")
     norm = float(np.sum(pupil**2))
